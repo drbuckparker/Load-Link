@@ -1,36 +1,48 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Platform } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
-import { MOCK_EARNINGS, Earning } from '@/lib/mock-data';
+import { Earning } from '@/lib/mock-data';
 import { useState, useMemo } from 'react';
 
 type Period = 'week' | 'month' | 'all';
+
+function mapEarning(e: any): Earning {
+  return {
+    id: e.id,
+    jobId: e.job_id ?? e.jobId ?? '',
+    material: e.material ?? '',
+    contractorCompany: e.contractor_company ?? e.contractorCompany ?? '',
+    date: e.date ?? e.completed_date ?? e.completedDate ?? '',
+    billedHours: e.billed_hours ?? e.billedHours ?? 0,
+    rate: Number(e.rate) || 0,
+    rateType: e.rate_type ?? e.rateType ?? '',
+    amount: Number(e.amount) || 0,
+    status: e.status ?? e.payment_status ?? e.paymentStatus ?? 'pending',
+  };
+}
 
 export default function EarningsScreen() {
   const insets = useSafeAreaInsets();
   const [period, setPeriod] = useState<Period>('month');
 
-  const earnings = useMemo(() => {
-    const now = new Date('2026-02-13');
-    return MOCK_EARNINGS.filter(e => {
-      const d = new Date(e.date);
-      if (period === 'week') {
-        const weekAgo = new Date(now);
-        weekAgo.setDate(weekAgo.getDate() - 7);
-        return d >= weekAgo;
-      }
-      if (period === 'month') {
-        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-      }
-      return true;
-    });
-  }, [period]);
+  const { data: earningsData, isLoading } = useQuery<any>({
+    queryKey: [`/api/earnings?period=${period}`],
+  });
 
-  const totalEarnings = earnings.reduce((sum, e) => sum + e.amount, 0);
-  const pendingAmount = earnings.filter(e => e.status === 'pending').reduce((sum, e) => sum + e.amount, 0);
-  const paidAmount = earnings.filter(e => e.status === 'paid').reduce((sum, e) => sum + e.amount, 0);
-  const totalHours = earnings.reduce((sum, e) => sum + e.billedHours, 0);
+  const earnings = useMemo(() => {
+    if (!earningsData) return [];
+    const items = earningsData.earnings || earningsData;
+    if (!Array.isArray(items)) return [];
+    return items.map(mapEarning);
+  }, [earningsData]);
+
+  const stats = earningsData?.stats;
+  const totalEarnings = stats?.totalEarnings ?? stats?.total_earnings ?? earnings.reduce((sum: number, e: Earning) => sum + e.amount, 0);
+  const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? earnings.filter((e: Earning) => e.status === 'pending').reduce((sum: number, e: Earning) => sum + e.amount, 0);
+  const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? earnings.filter((e: Earning) => e.status === 'paid').reduce((sum: number, e: Earning) => sum + e.amount, 0);
+  const totalHours = earnings.reduce((sum: number, e: Earning) => sum + e.billedHours, 0);
 
   function renderHeader() {
     return (
@@ -38,7 +50,7 @@ export default function EarningsScreen() {
         <View style={styles.statsCard}>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>TOTAL EARNINGS</Text>
-            <Text style={styles.totalAmount}>${totalEarnings.toLocaleString()}</Text>
+            <Text style={styles.totalAmount}>${Number(totalEarnings).toLocaleString()}</Text>
           </View>
 
           <View style={styles.statsRow}>
@@ -46,7 +58,7 @@ export default function EarningsScreen() {
               <View style={[styles.statDot, { backgroundColor: Colors.success }]} />
               <View>
                 <Text style={styles.statLabel}>Paid</Text>
-                <Text style={styles.statValue}>${paidAmount.toLocaleString()}</Text>
+                <Text style={styles.statValue}>${Number(paidAmount).toLocaleString()}</Text>
               </View>
             </View>
             <View style={styles.statDivider} />
@@ -54,7 +66,7 @@ export default function EarningsScreen() {
               <View style={[styles.statDot, { backgroundColor: Colors.warning }]} />
               <View>
                 <Text style={styles.statLabel}>Pending</Text>
-                <Text style={styles.statValue}>${pendingAmount.toLocaleString()}</Text>
+                <Text style={styles.statValue}>${Number(pendingAmount).toLocaleString()}</Text>
               </View>
             </View>
             <View style={styles.statDivider} />
@@ -132,11 +144,17 @@ export default function EarningsScreen() {
         ListHeaderComponent={renderHeader}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="wallet-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>No Earnings Yet</Text>
-            <Text style={styles.emptyText}>Complete jobs to start earning</Text>
-          </View>
+          isLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="wallet-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No Earnings Yet</Text>
+              <Text style={styles.emptyText}>Complete jobs to start earning</Text>
+            </View>
+          )
         }
         showsVerticalScrollIndicator={false}
       />

@@ -1,40 +1,64 @@
 import { useState, useRef } from 'react';
-import { View, Text, FlatList, TextInput, Pressable, StyleSheet, Platform, KeyboardAvoidingView } from 'react-native';
+import { View, Text, FlatList, TextInput, Pressable, StyleSheet, Platform, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { MOCK_MESSAGES, MOCK_JOBS, Message } from '@/lib/mock-data';
+import { Message } from '@/lib/mock-data';
+import { apiRequest, queryClient } from '@/lib/query-client';
+
+function mapMessage(m: any): Message {
+  return {
+    id: m.id,
+    jobId: m.job_id ?? m.jobId ?? '',
+    senderId: m.sender_id ?? m.senderId ?? '',
+    senderName: m.sender_name ?? m.senderName ?? '',
+    body: m.body ?? '',
+    read: m.read ?? false,
+    createdAt: m.created_at ?? m.createdAt ?? '',
+  };
+}
 
 export default function ChatScreen() {
   const { jobId } = useLocalSearchParams<{ jobId: string }>();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [messageText, setMessageText] = useState('');
-  const [messages, setMessages] = useState<Message[]>(MOCK_MESSAGES[jobId || ''] || []);
   const flatListRef = useRef<FlatList>(null);
 
-  const job = MOCK_JOBS.find(j => j.id === jobId);
+  const { data: messagesData, isLoading: messagesLoading } = useQuery<any[]>({
+    queryKey: [`/api/messages/${jobId}`],
+    enabled: !!jobId,
+  });
+
+  const { data: jobData } = useQuery<any>({
+    queryKey: [`/api/jobs/${jobId}`],
+    enabled: !!jobId,
+  });
+
+  const messages = (messagesData || []).map(mapMessage);
   const invertedMessages = [...messages].reverse();
 
-  function handleSend() {
+  const contractorName = jobData?.contractor_name ?? jobData?.contractorName ?? 'Chat';
+  const jobMaterial = jobData?.material ?? '';
+
+  async function handleSend() {
     if (!messageText.trim() || !user) return;
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    const newMsg: Message = {
-      id: 'm_' + Date.now().toString(),
-      jobId: jobId || '',
-      senderId: user.id,
-      senderName: user.fullName,
-      body: messageText.trim(),
-      read: false,
-      createdAt: new Date().toISOString(),
-    };
-
-    setMessages(prev => [...prev, newMsg]);
+    const text = messageText.trim();
     setMessageText('');
+
+    try {
+      await apiRequest('POST', `/api/messages/${jobId}`, { body: text });
+      queryClient.invalidateQueries({ queryKey: [`/api/messages/${jobId}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/conversations'] });
+    } catch (e) {
+      console.log('Failed to send message:', e);
+    }
   }
 
   function renderMessage({ item }: { item: Message }) {
@@ -70,11 +94,11 @@ export default function ChatScreen() {
         </Pressable>
         <View style={styles.topBarInfo}>
           <Text style={styles.topBarName} numberOfLines={1}>
-            {job?.contractorName || 'Chat'}
+            {contractorName}
           </Text>
-          {job && (
-            <Text style={styles.topBarSub}>{job.material}</Text>
-          )}
+          {jobMaterial ? (
+            <Text style={styles.topBarSub}>{jobMaterial}</Text>
+          ) : null}
         </View>
         <View style={{ width: 40 }} />
       </View>
@@ -90,10 +114,16 @@ export default function ChatScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
         ListEmptyComponent={
-          <View style={styles.emptyChat}>
-            <Ionicons name="chatbubble-outline" size={32} color={Colors.textMuted} />
-            <Text style={styles.emptyChatText}>Start a conversation</Text>
-          </View>
+          messagesLoading ? (
+            <View style={styles.emptyChat}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : (
+            <View style={styles.emptyChat}>
+              <Ionicons name="chatbubble-outline" size={32} color={Colors.textMuted} />
+              <Text style={styles.emptyChatText}>Start a conversation</Text>
+            </View>
+          )
         }
       />
 

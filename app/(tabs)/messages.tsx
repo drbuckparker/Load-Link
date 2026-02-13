@@ -1,13 +1,33 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Platform } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
-import { MOCK_CONVERSATIONS, timeAgo } from '@/lib/mock-data';
+import { Conversation, timeAgo } from '@/lib/mock-data';
+
+function mapConversation(c: any): Conversation {
+  return {
+    id: c.id,
+    jobId: c.job_id ?? c.jobId ?? '',
+    jobMaterial: c.job_material ?? c.jobMaterial ?? '',
+    contractorName: c.contractor_name ?? c.contractorName ?? '',
+    contractorCompany: c.contractor_company ?? c.contractorCompany ?? '',
+    lastMessage: c.last_message ?? c.lastMessage ?? '',
+    lastMessageAt: c.last_message_at ?? c.lastMessageAt ?? '',
+    unreadCount: c.unread_count ?? c.unreadCount ?? 0,
+  };
+}
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
+
+  const { data: convsData, isLoading } = useQuery<any[]>({
+    queryKey: ['/api/conversations'],
+  });
+
+  const conversations = (convsData || []).map(mapConversation);
 
   return (
     <View style={styles.container}>
@@ -16,7 +36,7 @@ export default function MessagesScreen() {
       </View>
 
       <FlatList
-        data={MOCK_CONVERSATIONS}
+        data={conversations}
         renderItem={({ item }) => (
           <Pressable
             style={({ pressed }) => [styles.convCard, pressed && styles.convCardPressed]}
@@ -55,11 +75,17 @@ export default function MessagesScreen() {
         contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="chatbubbles-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>No Messages</Text>
-            <Text style={styles.emptyText}>Messages from active jobs will appear here</Text>
-          </View>
+          isLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="chatbubbles-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No Messages</Text>
+              <Text style={styles.emptyText}>Messages from active jobs will appear here</Text>
+            </View>
+          )
         }
         showsVerticalScrollIndicator={false}
       />

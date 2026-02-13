@@ -1,11 +1,24 @@
-import { useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, Platform } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
-import { MOCK_NOTIFICATIONS, Notification, timeAgo } from '@/lib/mock-data';
+import { Notification, timeAgo } from '@/lib/mock-data';
+import { apiRequest, queryClient } from '@/lib/query-client';
+
+function mapNotification(n: any): Notification {
+  return {
+    id: n.id,
+    type: n.type ?? '',
+    title: n.title ?? '',
+    message: n.message ?? '',
+    jobId: n.job_id ?? n.jobId,
+    isRead: n.is_read ?? n.isRead ?? false,
+    createdAt: n.created_at ?? n.createdAt ?? '',
+  };
+}
 
 function getNotifIcon(type: string): keyof typeof Ionicons.glyphMap {
   switch (type) {
@@ -34,22 +47,30 @@ function getNotifColor(type: string): string {
 
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
-  const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
 
-  function markAllRead() {
+  const { data: notifsData, isLoading } = useQuery<any[]>({
+    queryKey: ['/api/notifications'],
+  });
+
+  const notifications = (notifsData || []).map(mapNotification);
+  const unreadCount = notifications.filter(n => !n.isRead).length;
+
+  async function markAllRead() {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    try {
+      await apiRequest('POST', '/api/notifications/mark-read');
+      queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
+    } catch (e) {
+      console.log('Failed to mark notifications read:', e);
+    }
   }
 
   function handleNotifPress(notif: Notification) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
     if (notif.jobId) {
       router.push({ pathname: '/job/[id]', params: { id: notif.jobId } });
     }
   }
-
-  const unreadCount = notifications.filter(n => !n.isRead).length;
 
   return (
     <View style={styles.container}>
@@ -100,11 +121,17 @@ export default function NotificationsScreen() {
         contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 24 }]}
         ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="notifications-off-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>No Notifications</Text>
-            <Text style={styles.emptyText}>You're all caught up</Text>
-          </View>
+          isLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="notifications-off-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No Notifications</Text>
+              <Text style={styles.emptyText}>You're all caught up</Text>
+            </View>
+          )
         }
         showsVerticalScrollIndicator={false}
       />

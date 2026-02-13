@@ -1,9 +1,13 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
+import { useAuth } from '@/contexts/AuthContext';
+import { apiRequest } from '@/lib/query-client';
+import { queryClient } from '@/lib/query-client';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -20,20 +24,34 @@ interface DayData {
 
 export default function CalendarScreen() {
   const insets = useSafeAreaInsets();
-  const [currentMonth, setCurrentMonth] = useState(1);
-  const [currentYear, setCurrentYear] = useState(2026);
-  const [availability, setAvailability] = useState<Record<string, { status: AvailabilityStatus; name?: string }>>({
-    '2026-02-14': { status: 'committed', name: 'Santos Earthworks' },
-    '2026-02-10': { status: 'committed', name: 'Henderson Excavation' },
-    '2026-02-08': { status: 'committed', name: 'Santos Earthworks' },
-    '2026-02-06': { status: 'committed', name: 'Brooks Grading Co' },
-    '2026-02-15': { status: 'available' },
-    '2026-02-16': { status: 'unavailable' },
-    '2026-02-17': { status: 'available' },
-    '2026-02-18': { status: 'available' },
-    '2026-02-19': { status: 'available' },
-    '2026-02-20': { status: 'available' },
+  const { user } = useAuth();
+  const now = new Date();
+  const [currentMonth, setCurrentMonth] = useState(now.getMonth());
+  const [currentYear, setCurrentYear] = useState(now.getFullYear());
+  const [availability, setAvailability] = useState<Record<string, { status: AvailabilityStatus; name?: string }>>({});
+
+  const availQuery = useQuery<any[]>({
+    queryKey: ['/api/availability', `?month=${currentMonth + 1}&year=${currentYear}`],
+    enabled: !!user,
   });
+
+  useEffect(() => {
+    if (availQuery.data) {
+      const mapped: Record<string, { status: AvailabilityStatus; name?: string }> = {};
+      for (const item of availQuery.data) {
+        const d = new Date(item.date);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (item.job_id || item.commitment_type) {
+          mapped[key] = { status: 'committed', name: item.commitment_company_name || 'Job' };
+        } else if (item.is_available) {
+          mapped[key] = { status: 'available' };
+        } else {
+          mapped[key] = { status: 'unavailable' };
+        }
+      }
+      setAvailability(mapped);
+    }
+  }, [availQuery.data]);
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -58,18 +76,18 @@ export default function CalendarScreen() {
     return days;
   }, [currentMonth, currentYear, availability]);
 
-  function toggleAvailability(day: DayData) {
+  async function toggleAvailability(day: DayData) {
     if (day.status === 'committed') return;
     const key = `${day.year}-${String(day.month + 1).padStart(2, '0')}-${String(day.date).padStart(2, '0')}`;
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    setAvailability(prev => {
-      const current = prev[key]?.status;
-      let next: AvailabilityStatus;
-      if (!current) next = 'available';
-      else if (current === 'available') next = 'unavailable';
-      else next = null;
+    const current = availability[key]?.status;
+    let next: AvailabilityStatus;
+    if (!current) next = 'available';
+    else if (current === 'available') next = 'unavailable';
+    else next = null;
 
+    setAvailability(prev => {
       if (next === null) {
         const { [key]: _, ...rest } = prev;
         return rest;
@@ -77,6 +95,18 @@ export default function CalendarScreen() {
       return { ...prev, [key]: { status: next } };
     });
     setSelectedDate(key);
+
+    try {
+      await apiRequest('POST', '/api/availability', {
+        date: key,
+        isAvailable: next === 'available',
+        startTime: '06:00',
+        endTime: '18:00',
+      });
+      queryClient.invalidateQueries({ queryKey: ['/api/availability'] });
+    } catch (e) {
+      console.log('Failed to save availability:', e);
+    }
   }
 
   function navigateMonth(dir: number) {
@@ -118,7 +148,7 @@ export default function CalendarScreen() {
             {calendarDays.map((day, i) => {
               if (!day) return <View key={`empty-${i}`} style={styles.dayCell} />;
 
-              const isToday = day.date === 13 && day.month === 1 && day.year === 2026;
+              const isToday = day.date === now.getDate() && day.month === now.getMonth() && day.year === now.getFullYear();
               const key = `${day.year}-${String(day.month + 1).padStart(2, '0')}-${String(day.date).padStart(2, '0')}`;
               const isSelected = selectedDate === key;
 

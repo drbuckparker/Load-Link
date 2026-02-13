@@ -1,23 +1,73 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { MOCK_JOBS, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor } from '@/lib/mock-data';
+import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor } from '@/lib/mock-data';
+import { apiRequest, queryClient } from '@/lib/query-client';
+
+function mapJob(j: any): Job {
+  return {
+    id: j.id,
+    contractorId: j.contractor_id ?? j.contractorId ?? '',
+    contractorName: j.contractor_name ?? j.contractorName ?? '',
+    contractorCompany: j.contractor_company ?? j.contractorCompany ?? '',
+    driverId: j.driver_id ?? j.driverId,
+    jobType: j.job_type ?? j.jobType ?? 'single_load',
+    material: j.material ?? '',
+    originAddress: j.origin_address ?? j.originAddress ?? '',
+    originLat: j.origin_lat ?? j.originLat ?? 0,
+    originLng: j.origin_lng ?? j.originLng ?? 0,
+    destinationAddress: j.destination_address ?? j.destinationAddress ?? '',
+    destinationLat: j.destination_lat ?? j.destinationLat ?? 0,
+    destinationLng: j.destination_lng ?? j.destinationLng ?? 0,
+    distance: j.distance ?? 0,
+    rate: Number(j.rate) || 0,
+    rateType: j.rate_type ?? j.rateType ?? 'per_hour',
+    truckType: j.truck_type ?? j.truckType ?? 'end_dump',
+    trucksNeeded: j.trucks_needed ?? j.trucksNeeded ?? 1,
+    status: j.status ?? 'open',
+    urgent: j.urgent ?? false,
+    scheduledDate: j.scheduled_date ?? j.scheduledDate ?? '',
+    pickupTime: j.pickup_time ?? j.pickupTime ?? '',
+    estimatedDays: j.estimated_days ?? j.estimatedDays,
+    estimatedTrips: j.estimated_trips ?? j.estimatedTrips,
+    estimatedCost: j.estimated_cost != null ? Number(j.estimated_cost) : j.estimatedCost != null ? Number(j.estimatedCost) : undefined,
+    requiresTarp: j.requires_tarp ?? j.requiresTarp ?? false,
+    requiresWeightTickets: j.requires_weight_tickets ?? j.requiresWeightTickets ?? false,
+    capacityNeeded: j.capacity_needed ?? j.capacityNeeded,
+    totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
+    createdAt: j.created_at ?? j.createdAt ?? '',
+    projectName: j.project_name ?? j.projectName,
+  };
+}
 
 export default function JobDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const job = MOCK_JOBS.find(j => j.id === id);
 
-  const [jobStatus, setJobStatus] = useState(job?.status || 'open');
+  const { data: jobData, isLoading } = useQuery<any>({
+    queryKey: [`/api/jobs/${id}`],
+    enabled: !!id,
+  });
+
+  const job = jobData ? mapJob(jobData) : null;
+
+  const [jobStatus, setJobStatus] = useState<string>('open');
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (job) {
+      setJobStatus(job.status);
+    }
+  }, [job?.status]);
 
   useEffect(() => {
     if (isRunning) {
@@ -29,6 +79,14 @@ export default function JobDetailScreen() {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [isRunning]);
+
+  if (isLoading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+      </View>
+    );
+  }
 
   if (!job) {
     return (
@@ -59,15 +117,28 @@ export default function JobDetailScreen() {
     return 60 + Math.ceil((actualMinutes - 60) / 15) * 15;
   }
 
-  function handleAccept() {
-    if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setJobStatus('accepted');
+  async function handleAccept() {
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/accept`);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setJobStatus('accepted');
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to accept job');
+    }
   }
 
-  function handleStartJob() {
-    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    setJobStatus('in_progress');
-    setIsRunning(true);
+  async function handleStartJob() {
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/clock-in`, { lat: 0, lng: 0 });
+      if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      setJobStatus('in_progress');
+      setIsRunning(true);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to clock in');
+    }
   }
 
   function handleStopJob() {
@@ -81,10 +152,23 @@ export default function JobDetailScreen() {
     ]);
   }
 
-  function doStop() {
-    if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setIsRunning(false);
-    setJobStatus('completed');
+  async function doStop() {
+    try {
+      const runs = (jobData as any)?.runs;
+      const activeRun = runs?.find?.((r: any) => !r.clock_out_time && !r.clockOutTime);
+      if (activeRun) {
+        await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, { lat: 0, lng: 0 });
+      }
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsRunning(false);
+      setJobStatus('completed');
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+    } catch (e: any) {
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsRunning(false);
+      setJobStatus('completed');
+    }
   }
 
   const actualMinutes = Math.floor(elapsedSeconds / 60);

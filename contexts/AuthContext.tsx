@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { apiRequest, getApiUrl } from '@/lib/query-client';
+import { fetch } from 'expo/fetch';
 
 export interface User {
   id: string;
@@ -12,7 +14,7 @@ export interface User {
   company?: string;
   profileImageUrl?: string;
   truckType?: string;
-  truckYear?: string;
+  truckYear?: number;
   truckMake?: string;
   truckModel?: string;
   licensePlate?: string;
@@ -33,86 +35,137 @@ interface AuthContextValue {
   register: (data: { email: string; password: string; fullName: string; phone: string; role: string }) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const DEMO_USER: User = {
-  id: 'usr_demo_001',
-  fullName: 'Marcus Rivera',
-  firstName: 'Marcus',
-  lastName: 'Rivera',
-  email: 'marcus@loadlink.com',
-  phone: '(555) 234-5678',
-  role: 'owner_operator',
-  company: 'Rivera Hauling LLC',
-  truckType: 'end_dump',
-  truckYear: '2022',
-  truckMake: 'Peterbilt',
-  truckModel: '567',
-  licensePlate: 'TRK-4521',
-  searchRadiusMiles: 50,
-  isConnected: true,
-  rating: 4.8,
-  totalJobs: 147,
-  primaryLocationAddress: 'Phoenix, AZ',
-  secondaryLocationAddress: 'Mesa, AZ',
-};
+function mapDbUser(dbUser: any): User {
+  return {
+    id: dbUser.id,
+    fullName: dbUser.full_name || dbUser.fullName || `${dbUser.first_name || ''} ${dbUser.last_name || ''}`.trim() || 'Unknown',
+    firstName: dbUser.first_name || dbUser.firstName || '',
+    lastName: dbUser.last_name || dbUser.lastName || '',
+    email: dbUser.email || '',
+    phone: dbUser.phone || '',
+    role: dbUser.role || 'driver',
+    company: dbUser.company,
+    profileImageUrl: dbUser.profile_image_url || dbUser.profileImageUrl,
+    truckType: dbUser.truck_type || dbUser.truckType,
+    truckYear: dbUser.truck_year || dbUser.truckYear,
+    truckMake: dbUser.truck_make || dbUser.truckMake,
+    truckModel: dbUser.truck_model || dbUser.truckModel,
+    licensePlate: dbUser.license_plate || dbUser.licensePlate,
+    searchRadiusMiles: dbUser.search_radius_miles ?? dbUser.searchRadiusMiles ?? 50,
+    isConnected: dbUser.is_connected ?? dbUser.isConnected ?? true,
+    rating: Number(dbUser.rating) || 0,
+    totalJobs: dbUser.total_jobs ?? dbUser.totalJobs ?? 0,
+    primaryLocationAddress: dbUser.primary_location_address || dbUser.primaryLocationAddress,
+    secondaryLocationAddress: dbUser.secondary_location_address || dbUser.secondaryLocationAddress,
+    tertiaryLocationAddress: dbUser.tertiary_location_address || dbUser.tertiaryLocationAddress,
+  };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadUser();
+    checkAuth();
   }, []);
 
-  async function loadUser() {
+  async function checkAuth() {
     try {
       const stored = await AsyncStorage.getItem('loadlink_user');
       if (stored) {
         setUser(JSON.parse(stored));
       }
+
+      const baseUrl = getApiUrl();
+      const res = await fetch(new URL('/api/auth/me', baseUrl).toString(), {
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = mapDbUser(data.user);
+        await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+        setUser(mapped);
+      } else {
+        await AsyncStorage.removeItem('loadlink_user');
+        setUser(null);
+      }
     } catch (e) {
-      console.error('Failed to load user:', e);
+      console.log('Auth check failed (offline?):', e);
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function login(_email: string, _password: string) {
-    await AsyncStorage.setItem('loadlink_user', JSON.stringify(DEMO_USER));
-    setUser(DEMO_USER);
+  async function login(email: string, password: string) {
+    const res = await apiRequest('POST', '/api/auth/login', { email, password });
+    const data = await res.json();
+    const mapped = mapDbUser(data.user);
+    await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+    setUser(mapped);
   }
 
   async function register(data: { email: string; password: string; fullName: string; phone: string; role: string }) {
-    const names = data.fullName.split(' ');
-    const newUser: User = {
-      ...DEMO_USER,
-      id: 'usr_' + Date.now().toString(),
-      email: data.email,
-      fullName: data.fullName,
-      firstName: names[0] || '',
-      lastName: names.slice(1).join(' ') || '',
-      phone: data.phone,
-      role: data.role,
-      totalJobs: 0,
-      rating: 0,
-    };
-    await AsyncStorage.setItem('loadlink_user', JSON.stringify(newUser));
-    setUser(newUser);
+    const res = await apiRequest('POST', '/api/auth/register', data);
+    const responseData = await res.json();
+    const mapped = mapDbUser(responseData.user);
+    await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+    setUser(mapped);
   }
 
   async function logout() {
+    try {
+      await apiRequest('POST', '/api/auth/logout');
+    } catch {}
     await AsyncStorage.removeItem('loadlink_user');
     setUser(null);
   }
 
   async function updateUser(updates: Partial<User>) {
     if (!user) return;
-    const updated = { ...user, ...updates };
-    await AsyncStorage.setItem('loadlink_user', JSON.stringify(updated));
-    setUser(updated);
+
+    const dbUpdates: any = {};
+    if (updates.fullName !== undefined) dbUpdates.full_name = updates.fullName;
+    if (updates.firstName !== undefined) dbUpdates.first_name = updates.firstName;
+    if (updates.lastName !== undefined) dbUpdates.last_name = updates.lastName;
+    if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
+    if (updates.company !== undefined) dbUpdates.company = updates.company;
+    if (updates.truckType !== undefined) dbUpdates.truck_type = updates.truckType;
+    if (updates.truckMake !== undefined) dbUpdates.truck_make = updates.truckMake;
+    if (updates.truckModel !== undefined) dbUpdates.truck_model = updates.truckModel;
+    if (updates.truckYear !== undefined) dbUpdates.truck_year = updates.truckYear;
+    if (updates.licensePlate !== undefined) dbUpdates.license_plate = updates.licensePlate;
+    if (updates.searchRadiusMiles !== undefined) dbUpdates.search_radius_miles = updates.searchRadiusMiles;
+    if (updates.primaryLocationAddress !== undefined) dbUpdates.primary_location_address = updates.primaryLocationAddress;
+    if (updates.secondaryLocationAddress !== undefined) dbUpdates.secondary_location_address = updates.secondaryLocationAddress;
+    if (updates.tertiaryLocationAddress !== undefined) dbUpdates.tertiary_location_address = updates.tertiaryLocationAddress;
+
+    try {
+      const res = await apiRequest('PUT', '/api/profile', dbUpdates);
+      const data = await res.json();
+      const mapped = mapDbUser(data);
+      await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+      setUser(mapped);
+    } catch (e) {
+      const updated = { ...user, ...updates };
+      await AsyncStorage.setItem('loadlink_user', JSON.stringify(updated));
+      setUser(updated);
+    }
+  }
+
+  async function refreshUser() {
+    try {
+      const res = await apiRequest('GET', '/api/profile');
+      const data = await res.json();
+      const mapped = mapDbUser(data);
+      await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+      setUser(mapped);
+    } catch {}
   }
 
   const value = useMemo(() => ({
@@ -123,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     register,
     logout,
     updateUser,
+    refreshUser,
   }), [user, isLoading]);
 
   return (

@@ -6,6 +6,7 @@ import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatTruckType } from '@/lib/mock-data';
+import { apiRequest } from '@/lib/query-client';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -13,6 +14,9 @@ export default function ProfileScreen() {
 
   async function handleStatusToggle(value: boolean) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await apiRequest('PUT', '/api/profile/status', { isConnected: value });
+    } catch {}
     await updateUser({ isConnected: value });
   }
 

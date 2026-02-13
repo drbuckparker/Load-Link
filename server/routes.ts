@@ -106,12 +106,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .values({
           email,
           password: hashed,
-          fullName,
-          firstName: names[0] || "",
-          lastName: names.slice(1).join(" ") || "",
+          full_name: fullName,
+          first_name: names[0] || "",
+          last_name: names.slice(1).join(" ") || "",
           phone: phone || null,
           role: role || "driver",
-          loginProvider: "email_password",
+          login_provider: "email_password",
         })
         .returning();
 
@@ -162,21 +162,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { status, truck_type, search, driver_id } = req.query;
 
-      let query = db
-        .select({
-          job: jobs,
-          contractorName: users.fullName,
-          contractorCompany: users.company,
-        })
-        .from(jobs)
-        .leftJoin(users, eq(jobs.contractorId, users.id))
-        .orderBy(desc(jobs.createdAt));
-
       const conditions = [];
 
       if (status && status !== "all") {
         if (status === "my_jobs" && driver_id) {
-          conditions.push(eq(jobs.driverId, driver_id as string));
+          conditions.push(eq(jobs.driver_id, driver_id as string));
           conditions.push(
             or(
               eq(jobs.status, "accepted"),
@@ -185,7 +175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             )!
           );
         } else if (status === "completed" && driver_id) {
-          conditions.push(eq(jobs.driverId, driver_id as string));
+          conditions.push(eq(jobs.driver_id, driver_id as string));
           conditions.push(eq(jobs.status, "completed"));
         } else {
           conditions.push(eq(jobs.status, status as any));
@@ -193,7 +183,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (truck_type && truck_type !== "all") {
-        conditions.push(eq(jobs.truckType, truck_type as any));
+        conditions.push(eq(jobs.truck_type, truck_type as any));
       }
 
       if (search) {
@@ -201,23 +191,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         conditions.push(
           or(
             ilike(jobs.material, q),
-            ilike(jobs.originAddress, q),
-            ilike(jobs.destinationAddress, q)
+            ilike(jobs.origin_address, q),
+            ilike(jobs.destination_address, q)
           )!
         );
       }
 
-      let result;
-      if (conditions.length > 0) {
-        result = await query.where(and(...conditions));
-      } else {
-        result = await query;
-      }
+      const result = await db
+        .select({
+          job: jobs,
+          contractor_name: users.full_name,
+          contractor_company: users.company,
+        })
+        .from(jobs)
+        .leftJoin(users, eq(jobs.contractor_id, users.id))
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(desc(jobs.created_at));
 
       const formattedJobs = result.map((r) => ({
         ...r.job,
-        contractorName: r.contractorName || "Unknown",
-        contractorCompany: r.contractorCompany || "Unknown Company",
+        contractor_name: r.contractor_name || "Unknown",
+        contractor_company: r.contractor_company || "Unknown Company",
       }));
 
       return res.json(formattedJobs);
@@ -234,13 +228,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await db
         .select({
           job: jobs,
-          contractorName: users.fullName,
-          contractorCompany: users.company,
-          contractorPhone: users.phone,
-          contractorEmail: users.email,
+          contractor_name: users.full_name,
+          contractor_company: users.company,
+          contractor_phone: users.phone,
+          contractor_email: users.email,
         })
         .from(jobs)
-        .leftJoin(users, eq(jobs.contractorId, users.id))
+        .leftJoin(users, eq(jobs.contractor_id, users.id))
         .where(eq(jobs.id, id))
         .limit(1);
 
@@ -251,22 +245,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const r = result[0];
       const job = {
         ...r.job,
-        contractorName: r.contractorName || "Unknown",
-        contractorCompany: r.contractorCompany || "Unknown Company",
-        contractorPhone: r.contractorPhone || "",
-        contractorEmail: r.contractorEmail || "",
+        contractor_name: r.contractor_name || "Unknown",
+        contractor_company: r.contractor_company || "Unknown Company",
+        contractor_phone: r.contractor_phone || "",
+        contractor_email: r.contractor_email || "",
       };
 
       const runs = await db
         .select()
         .from(jobRuns)
-        .where(eq(jobRuns.jobId, id))
-        .orderBy(desc(jobRuns.startedAt));
+        .where(eq(jobRuns.job_id, id))
+        .orderBy(desc(jobRuns.started_at));
 
       const assignments = await db
         .select()
         .from(jobAssignments)
-        .where(eq(jobAssignments.jobId, id));
+        .where(eq(jobAssignments.job_id, id));
 
       return res.json({ ...job, runs, assignments });
     } catch (err) {
@@ -286,21 +280,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await db
         .update(jobs)
-        .set({ driverId: userId, status: "accepted", updatedAt: new Date() })
+        .set({ driver_id: userId, status: "accepted", updated_at: new Date() })
         .where(eq(jobs.id, id));
 
       await db.insert(jobAssignments).values({
-        jobId: id,
-        driverId: userId,
+        job_id: id,
+        driver_id: userId,
         status: "accepted",
       });
 
       await db.insert(notifications).values({
-        userId: job.contractorId,
+        user_id: job.contractor_id!,
         type: "load_accepted",
         title: "Job Accepted",
         message: `A driver has accepted your ${job.material} job`,
-        jobId: id,
+        job_id: id,
       });
 
       return res.json({ ok: true });
@@ -317,8 +311,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await db
         .update(jobs)
-        .set({ driverId: null, status: "open", updatedAt: new Date() })
-        .where(and(eq(jobs.id, id), eq(jobs.driverId, userId)));
+        .set({ driver_id: null, status: "open", updated_at: new Date() })
+        .where(and(eq(jobs.id, id), eq(jobs.driver_id, userId)));
 
       return res.json({ ok: true });
     } catch (err) {
@@ -338,17 +332,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [run] = await db
         .insert(jobRuns)
         .values({
-          jobId: id,
-          driverId: userId,
+          job_id: id,
+          driver_id: userId,
           status: "active",
-          startLat: lat?.toString(),
-          startLng: lng?.toString(),
+          start_lat: lat?.toString(),
+          start_lng: lng?.toString(),
         })
         .returning();
 
       await db
         .update(jobs)
-        .set({ status: "in_progress", updatedAt: new Date() })
+        .set({ status: "in_progress", updated_at: new Date() })
         .where(eq(jobs.id, id));
 
       return res.json(run);
@@ -371,7 +365,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!run) return res.status(404).json({ message: "Run not found" });
 
-      const startedAt = new Date(run.startedAt!);
+      const startedAt = new Date(run.started_at!);
       const endedAt = new Date();
       const actualMinutes = Math.round(
         (endedAt.getTime() - startedAt.getTime()) / 60000
@@ -382,11 +376,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .update(jobRuns)
         .set({
           status: "completed",
-          endedAt,
-          endLat: lat?.toString(),
-          endLng: lng?.toString(),
-          actualDurationMinutes: actualMinutes,
-          billedDurationMinutes: billedMinutes,
+          ended_at: endedAt,
+          end_lat: lat?.toString(),
+          end_lng: lng?.toString(),
+          actual_duration_minutes: actualMinutes,
+          billed_duration_minutes: billedMinutes,
         })
         .where(eq(jobRuns.id, runId))
         .returning();
@@ -405,12 +399,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req.session as any).userId;
 
       const myJobs = await db
-        .select({ id: jobs.id, material: jobs.material, contractorId: jobs.contractorId })
+        .select({ id: jobs.id, material: jobs.material, contractor_id: jobs.contractor_id })
         .from(jobs)
         .where(
           or(
-            eq(jobs.driverId, userId),
-            eq(jobs.contractorId, userId)
+            eq(jobs.driver_id, userId),
+            eq(jobs.contractor_id, userId)
           )
         );
 
@@ -421,40 +415,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const messages = await db
         .select()
         .from(jobMessages)
-        .where(inArray(jobMessages.jobId, jobIds))
-        .orderBy(desc(jobMessages.createdAt));
+        .where(inArray(jobMessages.job_id, jobIds))
+        .orderBy(desc(jobMessages.created_at));
 
       const convMap = new Map<string, any>();
       for (const msg of messages) {
-        if (!convMap.has(msg.jobId)) {
-          const job = myJobs.find((j) => j.id === msg.jobId);
+        if (!convMap.has(msg.job_id)) {
+          const job = myJobs.find((j) => j.id === msg.job_id);
           const otherUserId =
-            job?.contractorId === userId ? msg.senderId : job?.contractorId;
+            job?.contractor_id === userId ? msg.sender_id : job?.contractor_id;
 
           let otherUser = null;
           if (otherUserId) {
             const [u] = await db
-              .select({ fullName: users.fullName, company: users.company })
+              .select({ full_name: users.full_name, company: users.company })
               .from(users)
               .where(eq(users.id, otherUserId))
               .limit(1);
             otherUser = u;
           }
 
-          convMap.set(msg.jobId, {
-            id: `conv_${msg.jobId}`,
-            jobId: msg.jobId,
+          convMap.set(msg.job_id, {
+            id: `conv_${msg.job_id}`,
+            jobId: msg.job_id,
             jobMaterial: job?.material || "Unknown",
-            contractorName: otherUser?.fullName || "Unknown",
+            contractorName: otherUser?.full_name || "Unknown",
             contractorCompany: otherUser?.company || "Unknown",
             lastMessage: msg.body,
-            lastMessageAt: msg.createdAt,
+            lastMessageAt: msg.created_at,
             unreadCount: 0,
           });
         }
 
-        if (!msg.read && msg.senderId !== userId) {
-          convMap.get(msg.jobId)!.unreadCount++;
+        if (!msg.read && msg.sender_id !== userId) {
+          convMap.get(msg.job_id)!.unreadCount++;
         }
       }
 
@@ -472,16 +466,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const msgs = await db
         .select({
           message: jobMessages,
-          senderName: users.fullName,
+          sender_name: users.full_name,
         })
         .from(jobMessages)
-        .leftJoin(users, eq(jobMessages.senderId, users.id))
-        .where(eq(jobMessages.jobId, jobId))
-        .orderBy(jobMessages.createdAt);
+        .leftJoin(users, eq(jobMessages.sender_id, users.id))
+        .where(eq(jobMessages.job_id, jobId))
+        .orderBy(jobMessages.created_at);
 
       const result = msgs.map((m) => ({
         ...m.message,
-        senderName: m.senderName || "Unknown",
+        sender_name: m.sender_name || "Unknown",
       }));
 
       return res.json(result);
@@ -500,21 +494,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [msg] = await db
         .insert(jobMessages)
         .values({
-          jobId,
-          senderId: userId,
+          job_id: jobId,
+          sender_id: userId,
           body,
         })
         .returning();
 
       const [sender] = await db
-        .select({ fullName: users.fullName })
+        .select({ full_name: users.full_name })
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
 
       return res.json({
         ...msg,
-        senderName: sender?.fullName || "Unknown",
+        sender_name: sender?.full_name || "Unknown",
       });
     } catch (err) {
       console.error("Send message error:", err);
@@ -531,8 +525,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const notifs = await db
         .select()
         .from(notifications)
-        .where(eq(notifications.userId, userId))
-        .orderBy(desc(notifications.createdAt))
+        .where(eq(notifications.user_id, userId))
+        .orderBy(desc(notifications.created_at))
         .limit(50);
 
       return res.json(notifs);
@@ -548,8 +542,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await db
         .update(notifications)
-        .set({ isRead: true })
-        .where(eq(notifications.userId, userId));
+        .set({ is_read: true })
+        .where(eq(notifications.user_id, userId));
 
       return res.json({ ok: true });
     } catch (err) {
@@ -574,64 +568,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dateFilter.setMonth(dateFilter.getMonth() - 1);
       }
 
-      let conditions = [
-        eq(jobs.driverId, userId),
+      let conditions: any[] = [
+        eq(jobs.driver_id, userId),
         eq(jobs.status, "completed"),
       ];
+
+      if (dateFilter) {
+        conditions.push(gte(jobs.completed_date, dateFilter));
+      }
 
       const completedJobs = await db
         .select({
           job: jobs,
-          contractorCompany: users.company,
+          contractor_company: users.company,
         })
         .from(jobs)
-        .leftJoin(users, eq(jobs.contractorId, users.id))
-        .where(
-          dateFilter
-            ? and(...conditions, gte(jobs.completedDate, dateFilter))
-            : and(...conditions)
-        )
-        .orderBy(desc(jobs.completedDate));
+        .leftJoin(users, eq(jobs.contractor_id, users.id))
+        .where(and(...conditions))
+        .orderBy(desc(jobs.completed_date));
 
       const runs = await db
         .select()
         .from(jobRuns)
         .where(
           and(
-            eq(jobRuns.driverId, userId),
+            eq(jobRuns.driver_id, userId),
             eq(jobRuns.status, "completed")
           )
         );
 
       const earnings = completedJobs.map((r) => {
-        const jobRun = runs.find((run) => run.jobId === r.job.id);
+        const jobRun = runs.find((run) => run.job_id === r.job.id);
         const billedHours = jobRun
-          ? (jobRun.billedDurationMinutes || 0) / 60
+          ? (jobRun.billed_duration_minutes || 0) / 60
           : 0;
         const rate = Number(r.job.rate) || 0;
         let amount = 0;
 
-        if (r.job.rateType === "per_hour") {
+        if (r.job.rate_type === "per_hour") {
           amount = billedHours * rate;
-        } else if (r.job.rateType === "flat_rate") {
+        } else if (r.job.rate_type === "flat_rate") {
           amount = rate;
-        } else if (r.job.rateType === "per_load" || r.job.rateType === "per_ton") {
+        } else if (r.job.rate_type === "per_load" || r.job.rate_type === "per_ton") {
           amount = rate;
         }
 
-        if (amount === 0) amount = Number(r.job.estimatedCost) || rate;
+        if (amount === 0) amount = Number(r.job.estimated_cost) || rate;
 
         return {
           id: r.job.id,
           jobId: r.job.id,
           material: r.job.material,
-          contractorCompany: r.contractorCompany || "Unknown",
-          date: r.job.completedDate || r.job.scheduledDate,
+          contractorCompany: r.contractor_company || "Unknown",
+          date: r.job.completed_date || r.job.scheduled_date,
           billedHours,
           rate,
-          rateType: r.job.rateType,
+          rateType: r.job.rate_type,
           amount,
-          status: r.job.paymentStatus === "payment_received" ? "paid" : "pending",
+          status: r.job.payment_status === "payment_received" ? "paid" as const : "pending" as const,
         };
       });
 
@@ -663,7 +657,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req.session as any).userId;
       const { month, year } = req.query;
 
-      let conditions = [eq(driverAvailability.driverId, userId)];
+      let conditions: any[] = [eq(driverAvailability.driver_id, userId)];
 
       if (month && year) {
         const startDate = new Date(Number(year), Number(month) - 1, 1);
@@ -696,7 +690,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(driverAvailability)
         .where(
           and(
-            eq(driverAvailability.driverId, userId),
+            eq(driverAvailability.driver_id, userId),
             eq(driverAvailability.date, dateObj)
           )
         )
@@ -706,11 +700,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const [updated] = await db
           .update(driverAvailability)
           .set({
-            isAvailable: isAvailable ?? true,
-            startTime: startTime || "06:00",
-            endTime: endTime || "18:00",
+            is_available: isAvailable ?? true,
+            start_time: startTime || "06:00",
+            end_time: endTime || "18:00",
             notes,
-            updatedAt: new Date(),
+            updated_at: new Date(),
           })
           .where(eq(driverAvailability.id, existing[0].id))
           .returning();
@@ -719,11 +713,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const [created] = await db
           .insert(driverAvailability)
           .values({
-            driverId: userId,
+            driver_id: userId,
             date: dateObj,
-            isAvailable: isAvailable ?? true,
-            startTime: startTime || "06:00",
-            endTime: endTime || "18:00",
+            is_available: isAvailable ?? true,
+            start_time: startTime || "06:00",
+            end_time: endTime || "18:00",
             notes,
           })
           .returning();
@@ -752,7 +746,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const vehicles = await db
         .select()
         .from(driverVehicles)
-        .where(eq(driverVehicles.driverId, userId));
+        .where(eq(driverVehicles.driver_id, userId));
 
       const { password: _, ...safeUser } = user;
       return res.json({ ...safeUser, vehicles });
@@ -771,9 +765,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       delete updates.password;
       delete updates.email;
 
+      updates.updated_at = new Date();
+
       const [updated] = await db
         .update(users)
-        .set({ ...updates, updatedAt: new Date() })
+        .set(updates)
         .where(eq(users.id, userId))
         .returning();
 
@@ -793,9 +789,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await db
         .update(users)
         .set({
-          isConnected,
-          lastSeenAt: new Date(),
-          updatedAt: new Date(),
+          is_connected: isConnected,
+          last_seen_at: new Date(),
+          updated_at: new Date(),
         })
         .where(eq(users.id, userId));
 
@@ -814,7 +810,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const vehicles = await db
         .select()
         .from(driverVehicles)
-        .where(eq(driverVehicles.driverId, userId));
+        .where(eq(driverVehicles.driver_id, userId));
       return res.json(vehicles);
     } catch (err) {
       console.error("Vehicles error:", err);

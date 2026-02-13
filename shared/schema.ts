@@ -96,8 +96,8 @@ export const users = pgTable("users", {
   id: varchar("id")
     .primaryKey()
     .default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+  username: text("username").unique(),
+  password: text("password"),
   role: userRoleEnum("role"),
   full_name: text("full_name"),
   phone: text("phone"),

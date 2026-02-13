@@ -1,15 +1,64 @@
 import { useState, useMemo } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, TextInput } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, TextInput, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { MOCK_JOBS, Job, MOCK_NOTIFICATIONS } from '@/lib/mock-data';
+import { Job, Notification } from '@/lib/mock-data';
 import JobCard from '@/components/JobCard';
 
 const TRUCK_FILTERS = ['All', 'End Dump', 'Side Dump', 'Belly Dump'] as const;
 const STATUS_FILTERS = ['Open', 'My Jobs', 'Completed'] as const;
+
+function mapJob(j: any): Job {
+  return {
+    id: j.id,
+    contractorId: j.contractor_id ?? j.contractorId ?? '',
+    contractorName: j.contractor_name ?? j.contractorName ?? '',
+    contractorCompany: j.contractor_company ?? j.contractorCompany ?? '',
+    driverId: j.driver_id ?? j.driverId,
+    jobType: j.job_type ?? j.jobType ?? 'single_load',
+    material: j.material ?? '',
+    originAddress: j.origin_address ?? j.originAddress ?? '',
+    originLat: j.origin_lat ?? j.originLat ?? 0,
+    originLng: j.origin_lng ?? j.originLng ?? 0,
+    destinationAddress: j.destination_address ?? j.destinationAddress ?? '',
+    destinationLat: j.destination_lat ?? j.destinationLat ?? 0,
+    destinationLng: j.destination_lng ?? j.destinationLng ?? 0,
+    distance: j.distance ?? 0,
+    rate: Number(j.rate) || 0,
+    rateType: j.rate_type ?? j.rateType ?? 'per_hour',
+    truckType: j.truck_type ?? j.truckType ?? 'end_dump',
+    trucksNeeded: j.trucks_needed ?? j.trucksNeeded ?? 1,
+    status: j.status ?? 'open',
+    urgent: j.urgent ?? false,
+    scheduledDate: j.scheduled_date ?? j.scheduledDate ?? '',
+    pickupTime: j.pickup_time ?? j.pickupTime ?? '',
+    estimatedDays: j.estimated_days ?? j.estimatedDays,
+    estimatedTrips: j.estimated_trips ?? j.estimatedTrips,
+    estimatedCost: j.estimated_cost != null ? Number(j.estimated_cost) : j.estimatedCost != null ? Number(j.estimatedCost) : undefined,
+    requiresTarp: j.requires_tarp ?? j.requiresTarp ?? false,
+    requiresWeightTickets: j.requires_weight_tickets ?? j.requiresWeightTickets ?? false,
+    capacityNeeded: j.capacity_needed ?? j.capacityNeeded,
+    totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
+    createdAt: j.created_at ?? j.createdAt ?? '',
+    projectName: j.project_name ?? j.projectName,
+  };
+}
+
+function mapNotification(n: any): Notification {
+  return {
+    id: n.id,
+    type: n.type ?? '',
+    title: n.title ?? '',
+    message: n.message ?? '',
+    jobId: n.job_id ?? n.jobId,
+    isRead: n.is_read ?? n.isRead ?? false,
+    createdAt: n.created_at ?? n.createdAt ?? '',
+  };
+}
 
 export default function JobsScreen() {
   const insets = useSafeAreaInsets();
@@ -19,35 +68,43 @@ export default function JobsScreen() {
   const [statusFilter, setStatusFilter] = useState<string>('Open');
   const [showFilters, setShowFilters] = useState(false);
 
-  const unreadCount = MOCK_NOTIFICATIONS.filter(n => !n.isRead).length;
+  const jobsQueryParams = useMemo(() => {
+    const params = new URLSearchParams();
+    if (statusFilter === 'Open') {
+      params.set('status', 'open');
+    } else if (statusFilter === 'My Jobs') {
+      params.set('status', 'my_jobs');
+      if (user?.id) params.set('driver_id', user.id);
+    } else if (statusFilter === 'Completed') {
+      params.set('status', 'completed');
+      if (user?.id) params.set('driver_id', user.id);
+    }
+    if (truckFilter !== 'All') {
+      params.set('truck_type', truckFilter.toLowerCase().replace(' ', '_'));
+    }
+    if (search) {
+      params.set('search', search);
+    }
+    return params.toString();
+  }, [statusFilter, truckFilter, search, user?.id]);
+
+  const { data: jobsData, isLoading: jobsLoading } = useQuery<any[]>({
+    queryKey: [jobsQueryParams ? `/api/jobs?${jobsQueryParams}` : '/api/jobs'],
+  });
+
+  const { data: notifsData } = useQuery<any[]>({
+    queryKey: ['/api/notifications'],
+  });
 
   const filteredJobs = useMemo(() => {
-    let jobs = [...MOCK_JOBS];
+    if (!jobsData || !Array.isArray(jobsData)) return [];
+    return jobsData.map(mapJob);
+  }, [jobsData]);
 
-    if (statusFilter === 'Open') {
-      jobs = jobs.filter(j => j.status === 'open');
-    } else if (statusFilter === 'My Jobs') {
-      jobs = jobs.filter(j => j.driverId === user?.id && ['accepted', 'in_progress'].includes(j.status));
-    } else if (statusFilter === 'Completed') {
-      jobs = jobs.filter(j => j.driverId === user?.id && j.status === 'completed');
-    }
-
-    if (truckFilter !== 'All') {
-      const type = truckFilter.toLowerCase().replace(' ', '_');
-      jobs = jobs.filter(j => j.truckType === type);
-    }
-
-    if (search) {
-      const q = search.toLowerCase();
-      jobs = jobs.filter(j =>
-        j.material.toLowerCase().includes(q) ||
-        j.originAddress.toLowerCase().includes(q) ||
-        j.contractorCompany.toLowerCase().includes(q)
-      );
-    }
-
-    return jobs;
-  }, [statusFilter, truckFilter, search, user?.id]);
+  const unreadCount = useMemo(() => {
+    if (!notifsData || !Array.isArray(notifsData)) return 0;
+    return notifsData.filter((n: any) => !(n.is_read ?? n.isRead)).length;
+  }, [notifsData]);
 
   function renderHeader() {
     return (
@@ -144,11 +201,17 @@ export default function JobsScreen() {
         ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>No Jobs Found</Text>
-            <Text style={styles.emptyText}>Try adjusting your filters or search terms</Text>
-          </View>
+          jobsLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No Jobs Found</Text>
+              <Text style={styles.emptyText}>Try adjusting your filters or search terms</Text>
+            </View>
+          )
         }
         showsVerticalScrollIndicator={false}
       />
