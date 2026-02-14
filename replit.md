@@ -1,13 +1,14 @@
 # LoadLink Mobile Companion App
 
 ## Overview
-Mobile companion app for LoadLink, an existing logistics web platform for short-haul trucking and construction. The app targets truck drivers (owner-operators) and contractors.
+Mobile companion app for LoadLink, an existing logistics web platform for short-haul trucking and construction. The app supports all user roles: truck drivers (owner-operators), contractors, trucking companies, and foremen.
 
 ## Current State
 - Connected to existing LoadLink web app database (Neon PostgreSQL) via `EXTERNAL_DATABASE_URL`
 - Real API routes built with Express + Drizzle ORM querying 28 tables
 - Authentication via email/password with bcrypt + express-session (sessions stored in DB)
 - All screens fetch from real API instead of mock data
+- Role-aware UI: contractors see job management/invoices, drivers see job browsing/earnings
 
 ## Tech Stack
 - **Frontend**: Expo Router (file-based routing), React Native, TypeScript
@@ -22,6 +23,13 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - **Touch targets**: 44pt minimum for gloved hands
 - **Tab bar**: Liquid glass on iOS 26+, BlurView fallback
 
+## User Roles
+- **driver**: Browse jobs, accept/clock-in/out, track earnings, manage vehicles
+- **contractor**: Post jobs, manage driver assignments (approve/reject), view invoices
+- **trucking_company**, **trucking_company_contractor**, **driver_contractor**, **foreman**, **driver_trucking_company**: Compound roles
+- Role detection: `isContractorRole(role)` checks if role includes 'contractor'
+- Tab layout changes based on role (contractors see "My Jobs"/"Invoices" tabs, drivers see "Jobs"/"Earnings")
+
 ## Database
 - External Neon PostgreSQL (shared with LoadLink web app)
 - 28 tables: users, jobs, job_runs, notifications, job_messages, driver_availability, monthly_invoices, driver_vehicles, job_assignments, etc.
@@ -29,19 +37,48 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - DB connection in `server/db.ts` using `EXTERNAL_DATABASE_URL`
 
 ## API Routes (server/routes.ts)
+
+### Auth
 - `POST /api/auth/login` - Email/password login
 - `POST /api/auth/register` - New account registration
 - `POST /api/auth/logout` - Logout
 - `GET /api/auth/me` - Check session
+- `POST /api/auth/forgot-password` - Sends 6-char reset code via Resend email
+- `POST /api/auth/reset-password` - Verifies code and updates password
+- `POST /api/auth/set-password` - Sets password for accounts that used Replit auth on web
+
+### Jobs (Driver)
 - `GET /api/jobs` - List jobs (query params: status, truck_type, search, driver_id)
 - `GET /api/jobs/:id` - Job detail with contractor info, runs, assignments
 - `POST /api/jobs/:id/accept` - Accept a job
 - `POST /api/jobs/:id/withdraw` - Withdraw from a job
 - `POST /api/jobs/:id/clock-in` - Start a job run
 - `POST /api/job-runs/:runId/clock-out` - End a job run (1hr min, 15min increments)
+
+### Jobs (Contractor)
+- `GET /api/contractor/jobs` - List contractor's posted jobs with application counts
+- `POST /api/contractor/jobs` - Create a new job posting
+- `DELETE /api/jobs/:id` - Cancel/delete a job
+- `GET /api/jobs/:id/assignments` - Get driver applications for a job
+- `POST /api/jobs/:id/assignments/:assignmentId/approve` - Approve a driver
+- `POST /api/jobs/:id/assignments/:assignmentId/reject` - Reject a driver
+
+### Vehicles
+- `GET /api/vehicles` - List user's vehicles
+- `POST /api/vehicles` - Add a vehicle
+- `PUT /api/vehicles/:id` - Update a vehicle
+- `DELETE /api/vehicles/:id` - Delete a vehicle
+
+### Invoices
+- `GET /api/invoices` - List invoices (query params: status)
+- `GET /api/invoices/stats` - Invoice stats (outstanding, paid totals)
+
+### Messages
 - `GET /api/conversations` - List message conversations
 - `GET /api/messages/:jobId` - Get messages for a job
 - `POST /api/messages/:jobId` - Send a message
+
+### Other
 - `GET /api/notifications` - Get user notifications
 - `POST /api/notifications/mark-read` - Mark all notifications read
 - `GET /api/earnings` - Earnings with period filter (week/month/all)
@@ -53,10 +90,12 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 
 ## App Screens
 - **(auth)**: login, register, forgot-password
-- **(tabs)**: jobs (index), calendar, messages, earnings, profile
-- **job/[id]**: Job detail with timer, accept/withdraw
+- **(tabs)**: jobs (index), calendar, messages, earnings/invoices, profile
+- **job/[id]**: Job detail with timer (drivers), driver assignments (contractors)
 - **chat/[jobId]**: Chat messages for a job
 - **notifications**: Notification center
+- **create-job**: Contractor job creation form
+- **vehicles**: Vehicle management (add/edit/delete)
 
 ## Key Files
 - `shared/schema.ts` - Drizzle ORM schema (snake_case field names matching DB)
@@ -64,19 +103,21 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `server/db.ts` - Database connection
 - `contexts/AuthContext.tsx` - Auth state with API login/register
 - `lib/query-client.ts` - React Query setup with default fetcher
-- `lib/mock-data.ts` - TypeScript interfaces and utility functions (mock data removed)
+- `lib/mock-data.ts` - TypeScript interfaces, role helpers, utility functions
 - `constants/colors.ts` - Color system
-
-## API Routes (continued)
-- `POST /api/auth/forgot-password` - Sends 6-char reset code via Resend email
-- `POST /api/auth/reset-password` - Verifies code and updates password
-- `POST /api/auth/set-password` - Sets password for accounts that used Replit auth on web
 
 ## Email
 - Uses Resend (RESEND_API_KEY secret) with loadlinklive.com domain
 - Sends password reset codes styled in LoadLink dark theme branding
 
 ## Recent Changes (Feb 2026)
+- Made app role-aware: contractors and drivers see different tab layouts
+- Added contractor job creation screen with full form (material, locations, rates, schedule)
+- Built contractor job management: view posted jobs with application counts
+- Added driver assignment management in job detail (approve/reject with haptic feedback)
+- Built vehicle management screen with add/edit/delete and primary vehicle support
+- Created invoicing tab with Outstanding/Paid stats and filter chips
+- Added cancel job functionality for contractors
 - Connected to real LoadLink database via EXTERNAL_DATABASE_URL
 - Built complete Drizzle schema matching all 28 DB tables
 - Created API routes for auth, jobs, messages, earnings, calendar, profile
@@ -84,4 +125,3 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Removed all mock data arrays, kept interfaces and utility functions
 - Added password reset flow via Resend email (6-char code, 30min expiry)
 - Added set-password flow for web accounts using Replit auth
-- Fixed error message display to show clean messages instead of raw JSON
