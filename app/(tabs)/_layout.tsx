@@ -19,8 +19,8 @@ function NativeTabLayout({ role }: { role: string }) {
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
-        <Icon sf={{ default: "briefcase", selected: "briefcase.fill" }} />
-        <Label>{contractor ? 'My Jobs' : 'Jobs'}</Label>
+        <Icon sf={{ default: "house", selected: "house.fill" }} />
+        <Label>Home</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="calendar">
         <Icon sf={{ default: "calendar", selected: "calendar" }} />
@@ -87,9 +87,9 @@ function ClassicTabLayout({ role }: { role: string }) {
       <Tabs.Screen
         name="index"
         options={{
-          title: contractor ? "My Jobs" : "Jobs",
+          title: "Home",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="briefcase" size={size} color={color} />
+            <Ionicons name="home" size={size} color={color} />
           ),
         }}
       />

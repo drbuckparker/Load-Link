@@ -708,6 +708,268 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============ DASHBOARD ============
+
+  app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const user = await db.select().from(users).where(eq(users.id, userId)).then(r => r[0]);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const now = new Date();
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const completedJobs = await db
+        .select({ job: jobs })
+        .from(jobs)
+        .where(and(eq(jobs.driver_id, userId), eq(jobs.status, "completed")));
+
+      const runs = await db
+        .select()
+        .from(jobRuns)
+        .where(and(eq(jobRuns.driver_id, userId), eq(jobRuns.status, "completed")));
+
+      function calcEarning(j: any) {
+        const jobRun = runs.find(r => r.job_id === j.id);
+        const billedHours = jobRun ? (jobRun.billed_duration_minutes || 0) / 60 : 0;
+        const rate = Number(j.rate) || 0;
+        if (j.rate_type === "per_hour") return billedHours * rate;
+        if (j.rate_type === "flat_rate") return rate;
+        return Number(j.estimated_cost) || rate;
+      }
+
+      const totalEarnings = completedJobs.reduce((sum, r) => sum + calcEarning(r.job), 0);
+      const pendingJobs = completedJobs.filter(r => r.job.payment_status !== "payment_received");
+      const awaitingPayment = pendingJobs.reduce((sum, r) => sum + calcEarning(r.job), 0);
+      const monthJobs = completedJobs.filter(r => {
+        const d = r.job.completed_date || r.job.scheduled_date;
+        return d && new Date(d) >= monthStart;
+      });
+      const thisMonthEarnings = monthJobs.reduce((sum, r) => sum + calcEarning(r.job), 0);
+      const weekJobs = completedJobs.filter(r => {
+        const d = r.job.completed_date || r.job.scheduled_date;
+        return d && new Date(d) >= weekAgo;
+      });
+      const thisWeekEarnings = weekJobs.reduce((sum, r) => sum + calcEarning(r.job), 0);
+
+      const activeJobsCount = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(jobs)
+        .where(and(eq(jobs.driver_id, userId), or(eq(jobs.status, "accepted"), eq(jobs.status, "in_progress"))))
+        .then(r => Number(r[0]?.count) || 0);
+
+      const nearbyOpenJobs = await db
+        .select()
+        .from(jobs)
+        .where(eq(jobs.status, "open"))
+        .limit(1);
+
+      const upcoming5Days: any[] = [];
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(now);
+        d.setDate(d.getDate() + i);
+        const dateStr = d.toISOString().split('T')[0];
+        const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+        const avail = await db
+          .select()
+          .from(driverAvailability)
+          .where(and(
+            eq(driverAvailability.driver_id, userId),
+            eq(driverAvailability.date, d)
+          ))
+          .then(r => r[0]);
+
+        upcoming5Days.push({
+          date: dateStr,
+          dayName: dayNames[d.getDay()],
+          dayNum: d.getDate(),
+          status: avail?.status || 'available',
+        });
+      }
+
+      const recentActivity = await db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.user_id, userId))
+        .orderBy(desc(notifications.created_at))
+        .limit(5);
+
+      return res.json({
+        userName: user.full_name,
+        role: user.role,
+        activeJobs: activeJobsCount,
+        isConnected: user.is_connected,
+        quickJob: nearbyOpenJobs.length > 0 ? {
+          material: nearbyOpenJobs[0].material,
+          address: nearbyOpenJobs[0].origin_address,
+        } : null,
+        earnings: {
+          total: totalEarnings,
+          awaiting: awaitingPayment,
+          thisMonth: thisMonthEarnings,
+          thisWeek: thisWeekEarnings,
+        },
+        location: {
+          lat: user.primary_location_lat ? Number(user.primary_location_lat) : null,
+          lng: user.primary_location_lng ? Number(user.primary_location_lng) : null,
+          address: user.primary_location_address,
+        },
+        upcomingDays: upcoming5Days,
+        recentActivity: recentActivity.map(n => ({
+          id: n.id,
+          type: n.type,
+          title: n.title,
+          message: n.message,
+          createdAt: n.created_at,
+          isRead: n.is_read,
+        })),
+      });
+    } catch (err) {
+      console.error("Dashboard error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // ============ EARNINGS ============
+
+  // ============ DASHBOARD ============
+
+  app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+
+      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const activeJobsList = await db
+        .select()
+        .from(jobs)
+        .where(
+          and(
+            or(eq(jobs.driver_id, userId), eq(jobs.contractor_id, userId)),
+            or(eq(jobs.status, "accepted"), eq(jobs.status, "in_progress"))
+          )
+        );
+
+      const quickJobResult = await db
+        .select()
+        .from(jobs)
+        .where(eq(jobs.status, "open"))
+        .orderBy(desc(jobs.created_at))
+        .limit(1);
+      const quickJob = quickJobResult.length > 0
+        ? { material: quickJobResult[0].material || "General", address: quickJobResult[0].delivery_address || quickJobResult[0].pickup_address || "See details" }
+        : null;
+
+      const completedJobs = await db
+        .select()
+        .from(jobs)
+        .where(and(eq(jobs.driver_id, userId), eq(jobs.status, "completed")));
+
+      const completedRuns = await db
+        .select()
+        .from(jobRuns)
+        .where(and(eq(jobRuns.driver_id, userId), eq(jobRuns.status, "completed")));
+
+      let totalEarnings = 0;
+      let awaitingPayment = 0;
+      let thisMonthEarnings = 0;
+      let thisWeekEarnings = 0;
+      const now = new Date();
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      for (const j of completedJobs) {
+        const run = completedRuns.find(r => r.job_id === j.id);
+        const billedHours = run ? (run.billed_duration_minutes || 0) / 60 : 0;
+        const rate = Number(j.rate) || 0;
+        let amount = 0;
+        if (j.rate_type === "per_hour") amount = billedHours * rate;
+        else if (j.rate_type === "flat_rate") amount = rate;
+        else amount = rate;
+        if (amount === 0) amount = Number(j.estimated_cost) || rate;
+        totalEarnings += amount;
+
+        const completedDate = j.completed_date ? new Date(j.completed_date) : null;
+        if (completedDate) {
+          if (completedDate >= monthStart) thisMonthEarnings += amount;
+          if (completedDate >= weekAgo) thisWeekEarnings += amount;
+        }
+      }
+
+      const pendingInvoices = await db
+        .select()
+        .from(monthlyInvoices)
+        .where(and(eq(monthlyInvoices.driver_id, userId), eq(monthlyInvoices.status, "pending")));
+      for (const inv of pendingInvoices) {
+        awaitingPayment += Number(inv.total_amount) || 0;
+      }
+
+      const upcomingDays: { date: string; dayName: string; dayNum: number; status: string }[] = [];
+      const dayNames = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(now);
+        d.setDate(d.getDate() + i);
+        const dateStr = d.toISOString().split("T")[0];
+        const avail = await db
+          .select()
+          .from(driverAvailability)
+          .where(and(eq(driverAvailability.driver_id, userId), eq(driverAvailability.date, dateStr)))
+          .limit(1);
+        upcomingDays.push({
+          date: dateStr,
+          dayName: dayNames[d.getDay()],
+          dayNum: d.getDate(),
+          status: avail.length > 0 ? avail[0].status : "available",
+        });
+      }
+
+      const recentNotifs = await db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.user_id, userId))
+        .orderBy(desc(notifications.created_at))
+        .limit(5);
+
+      const recentActivity = recentNotifs.map(n => ({
+        id: String(n.id),
+        type: n.type,
+        title: n.title,
+        message: n.message || "",
+        createdAt: n.created_at ? n.created_at.toISOString() : new Date().toISOString(),
+        isRead: n.is_read,
+      }));
+
+      res.json({
+        userName: `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.email,
+        role: user.role,
+        activeJobs: activeJobsList.length,
+        isConnected: user.is_connected,
+        quickJob,
+        earnings: {
+          total: totalEarnings,
+          awaiting: awaitingPayment,
+          thisMonth: thisMonthEarnings,
+          thisWeek: thisWeekEarnings,
+        },
+        location: {
+          lat: user.last_latitude ? Number(user.last_latitude) : null,
+          lng: user.last_longitude ? Number(user.last_longitude) : null,
+          address: user.address || null,
+        },
+        upcomingDays,
+        recentActivity,
+      });
+    } catch (error: any) {
+      console.error("Dashboard error:", error);
+      res.status(500).json({ message: "Failed to load dashboard" });
+    }
+  });
+
   // ============ EARNINGS ============
 
   app.get("/api/earnings", requireAuth, async (req: Request, res: Response) => {

@@ -1,277 +1,113 @@
-import { useState, useMemo } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
+import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { Job, Notification } from '@/lib/mock-data';
-import JobCard from '@/components/JobCard';
+import { apiRequest, queryClient } from '@/lib/query-client';
+import { timeAgo } from '@/lib/mock-data';
+import MapSection from '@/components/MapSection';
 
 function isContractorRole(role: string): boolean {
   return role.includes('contractor');
 }
 
-const TRUCK_FILTERS = ['All', 'End Dump', 'Side Dump', 'Belly Dump'] as const;
-const DRIVER_STATUS_FILTERS = ['Open', 'My Jobs', 'Completed'] as const;
-const CONTRACTOR_STATUS_FILTERS = ['Open', 'In Progress', 'Completed', 'All'] as const;
-
-function mapJob(j: any): Job {
-  return {
-    id: j.id,
-    contractorId: j.contractor_id ?? j.contractorId ?? '',
-    contractorName: j.contractor_name ?? j.contractorName ?? '',
-    contractorCompany: j.contractor_company ?? j.contractorCompany ?? '',
-    driverId: j.driver_id ?? j.driverId,
-    jobType: j.job_type ?? j.jobType ?? 'single_load',
-    material: j.material ?? '',
-    originAddress: j.origin_address ?? j.originAddress ?? '',
-    originLat: j.origin_lat ?? j.originLat ?? 0,
-    originLng: j.origin_lng ?? j.originLng ?? 0,
-    destinationAddress: j.destination_address ?? j.destinationAddress ?? '',
-    destinationLat: j.destination_lat ?? j.destinationLat ?? 0,
-    destinationLng: j.destination_lng ?? j.destinationLng ?? 0,
-    distance: j.distance ?? 0,
-    rate: Number(j.rate) || 0,
-    rateType: j.rate_type ?? j.rateType ?? 'per_hour',
-    truckType: j.truck_type ?? j.truckType ?? 'end_dump',
-    trucksNeeded: j.trucks_needed ?? j.trucksNeeded ?? 1,
-    status: j.status ?? 'open',
-    urgent: j.urgent ?? false,
-    scheduledDate: j.scheduled_date ?? j.scheduledDate ?? '',
-    pickupTime: j.pickup_time ?? j.pickupTime ?? '',
-    estimatedDays: j.estimated_days ?? j.estimatedDays,
-    estimatedTrips: j.estimated_trips ?? j.estimatedTrips,
-    estimatedCost: j.estimated_cost != null ? Number(j.estimated_cost) : j.estimatedCost != null ? Number(j.estimatedCost) : undefined,
-    requiresTarp: j.requires_tarp ?? j.requiresTarp ?? false,
-    requiresWeightTickets: j.requires_weight_tickets ?? j.requiresWeightTickets ?? false,
-    capacityNeeded: j.capacity_needed ?? j.capacityNeeded,
-    totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
-    createdAt: j.created_at ?? j.createdAt ?? '',
-    projectName: j.project_name ?? j.projectName,
-  };
+interface DashboardData {
+  userName: string;
+  role: string;
+  activeJobs: number;
+  isConnected: boolean;
+  quickJob: { material: string; address: string } | null;
+  earnings: { total: number; awaiting: number; thisMonth: number; thisWeek: number };
+  location: { lat: number | null; lng: number | null; address: string | null };
+  upcomingDays: { date: string; dayName: string; dayNum: number; status: string }[];
+  recentActivity: { id: string; type: string; title: string; message: string; createdAt: string; isRead: boolean }[];
 }
 
-function mapNotification(n: any): Notification {
-  return {
-    id: n.id,
-    type: n.type ?? '',
-    title: n.title ?? '',
-    message: n.message ?? '',
-    jobId: n.job_id ?? n.jobId,
-    isRead: n.is_read ?? n.isRead ?? false,
-    createdAt: n.created_at ?? n.createdAt ?? '',
-  };
-}
-
-export default function JobsScreen() {
+export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const role = user?.role || 'driver';
   const contractor = isContractorRole(role);
-
-  const [search, setSearch] = useState('');
-  const [truckFilter, setTruckFilter] = useState<string>('All');
-  const [statusFilter, setStatusFilter] = useState<string>('Open');
-  const [showFilters, setShowFilters] = useState(false);
-
-  const STATUS_FILTERS = contractor ? CONTRACTOR_STATUS_FILTERS : DRIVER_STATUS_FILTERS;
-
-  const jobsQueryParams = useMemo(() => {
-    if (contractor) {
-      const params = new URLSearchParams();
-      if (statusFilter !== 'All') {
-        params.set('status', statusFilter.toLowerCase().replace(' ', '_'));
-      }
-      if (truckFilter !== 'All') {
-        params.set('truck_type', truckFilter.toLowerCase().replace(' ', '_'));
-      }
-      if (search) {
-        params.set('search', search);
-      }
-      return params.toString();
-    }
-
-    const params = new URLSearchParams();
-    if (statusFilter === 'Open') {
-      params.set('status', 'open');
-    } else if (statusFilter === 'My Jobs') {
-      params.set('status', 'my_jobs');
-      if (user?.id) params.set('driver_id', user.id);
-    } else if (statusFilter === 'Completed') {
-      params.set('status', 'completed');
-      if (user?.id) params.set('driver_id', user.id);
-    }
-    if (truckFilter !== 'All') {
-      params.set('truck_type', truckFilter.toLowerCase().replace(' ', '_'));
-    }
-    if (search) {
-      params.set('search', search);
-    }
-    return params.toString();
-  }, [statusFilter, truckFilter, search, user?.id, contractor]);
-
-  const apiPath = contractor ? '/api/contractor/jobs' : '/api/jobs';
-  const queryString = jobsQueryParams ? `${apiPath}?${jobsQueryParams}` : apiPath;
-
-  const { data: jobsData, isLoading: jobsLoading } = useQuery<any[]>({
-    queryKey: [queryString],
-  });
-
   const { data: notifsData } = useQuery<any[]>({
     queryKey: ['/api/notifications'],
   });
 
-  const filteredJobs = useMemo(() => {
-    if (!jobsData || !Array.isArray(jobsData)) return [];
-    return jobsData.map(mapJob);
-  }, [jobsData]);
+  const { data: dashboard, isLoading } = useQuery<DashboardData>({
+    queryKey: ['/api/dashboard'],
+    enabled: !contractor,
+  });
 
-  const unreadCount = useMemo(() => {
-    if (!notifsData || !Array.isArray(notifsData)) return 0;
-    return notifsData.filter((n: any) => !(n.is_read ?? n.isRead)).length;
-  }, [notifsData]);
+  const { data: contractorJobs } = useQuery<any[]>({
+    queryKey: ['/api/contractor/jobs'],
+    enabled: contractor,
+  });
 
-  function renderHeader() {
+  const unreadCount = (notifsData || []).filter((n: any) => !(n.is_read ?? n.isRead)).length;
+
+  async function handleStatusToggle(value: boolean) {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await apiRequest('PUT', '/api/profile/status', { isConnected: value });
+    } catch {}
+    await updateUser({ isConnected: value });
+    queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+  }
+
+  if (!user) return null;
+
+  function renderEarningsStats() {
+    const stats = dashboard?.earnings || { total: 0, awaiting: 0, thisMonth: 0, thisWeek: 0 };
+    const items = [
+      { label: 'TOTAL EARNINGS', value: stats.total, sub: 'Total Earnings' },
+      { label: 'AWAITING PAYMENT', value: stats.awaiting, sub: 'Pending Jobs' },
+      { label: 'THIS MONTH', value: stats.thisMonth, sub: 'Earnings' },
+      { label: 'THIS WEEK', value: stats.thisWeek, sub: 'Earnings' },
+    ];
     return (
-      <View>
-        <View style={styles.searchRow}>
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={18} color={Colors.textMuted} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder={contractor ? "Search posted jobs..." : "Search jobs, materials..."}
-              placeholderTextColor={Colors.textMuted}
-              value={search}
-              onChangeText={setSearch}
-            />
-            {search ? (
-              <Pressable onPress={() => setSearch('')}>
-                <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
-              </Pressable>
-            ) : null}
-          </View>
-          <Pressable
-            style={[styles.filterBtn, showFilters && styles.filterBtnActive]}
-            onPress={() => setShowFilters(!showFilters)}
-          >
-            <Ionicons name="options" size={20} color={showFilters ? Colors.primary : Colors.textSecondary} />
-          </Pressable>
-        </View>
-
-        <View style={styles.statusFilters}>
-          {STATUS_FILTERS.map(s => (
-            <Pressable
-              key={s}
-              style={[styles.statusChip, statusFilter === s && styles.statusChipActive]}
-              onPress={() => setStatusFilter(s)}
-            >
-              <Text style={[styles.statusChipText, statusFilter === s && styles.statusChipTextActive]}>{s}</Text>
-            </Pressable>
-          ))}
-        </View>
-
-        {showFilters && (
-          <View style={styles.filterSection}>
-            <Text style={styles.filterLabel}>TRUCK TYPE</Text>
-            <View style={styles.truckFilters}>
-              {TRUCK_FILTERS.map(t => (
-                <Pressable
-                  key={t}
-                  style={[styles.truckChip, truckFilter === t && styles.truckChipActive]}
-                  onPress={() => setTruckFilter(t)}
-                >
-                  {t !== 'All' && <MaterialCommunityIcons name="dump-truck" size={14} color={truckFilter === t ? Colors.primary : Colors.textMuted} />}
-                  <Text style={[styles.truckChipText, truckFilter === t && styles.truckChipTextActive]}>{t}</Text>
-                </Pressable>
-              ))}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
+        {items.map((item, i) => (
+          <View key={i} style={styles.statCard}>
+            <Text style={styles.statLabel}>{item.label}</Text>
+            <View style={styles.statValueRow}>
+              <Text style={styles.statValue}>${item.value.toFixed(2)}</Text>
+              <Ionicons name="cash-outline" size={18} color={Colors.primary} />
             </View>
+            <Text style={styles.statSub}>{item.sub}</Text>
           </View>
-        )}
-
-        <Text style={styles.resultCount}>{filteredJobs.length} job{filteredJobs.length !== 1 ? 's' : ''} found</Text>
-      </View>
+        ))}
+      </ScrollView>
     );
   }
 
-  function renderContractorJobCard({ item }: { item: Job }) {
+  function renderContractorStats() {
+    const jobs = contractorJobs || [];
+    const openJobs = jobs.filter((j: any) => j.status === 'open').length;
+    const inProgress = jobs.filter((j: any) => j.status === 'in_progress' || j.status === 'accepted').length;
+    const completed = jobs.filter((j: any) => j.status === 'completed').length;
+    const totalApps = jobs.reduce((sum: number, j: any) => sum + (Number(j.application_count) || 0), 0);
+
+    const items = [
+      { label: 'OPEN JOBS', value: openJobs.toString(), sub: 'Active Postings', icon: 'briefcase-outline' as const },
+      { label: 'IN PROGRESS', value: inProgress.toString(), sub: 'Being Worked', icon: 'play-circle-outline' as const },
+      { label: 'APPLICATIONS', value: totalApps.toString(), sub: 'Total Received', icon: 'people-outline' as const },
+      { label: 'COMPLETED', value: completed.toString(), sub: 'Total Jobs', icon: 'checkmark-circle-outline' as const },
+    ];
     return (
-      <Pressable
-        style={({ pressed }) => [styles.contractorCard, pressed && styles.contractorCardPressed]}
-        onPress={() => router.push({ pathname: '/job/[id]', params: { id: item.id } })}
-      >
-        <View style={styles.contractorCardHeader}>
-          <View style={styles.contractorCardHeaderLeft}>
-            <Text style={styles.contractorCardMaterial} numberOfLines={1}>{item.material}</Text>
-            {item.urgent && (
-              <View style={styles.urgentBadge}>
-                <Ionicons name="flash" size={10} color={Colors.primary} />
-                <Text style={styles.urgentText}>URGENT</Text>
-              </View>
-            )}
-          </View>
-          <Text style={styles.contractorCardRate}>
-            ${item.rate}/{item.rateType === 'per_hour' ? 'hr' : item.rateType === 'per_ton' ? 'ton' : item.rateType === 'per_load' ? 'load' : 'flat'}
-          </Text>
-        </View>
-
-        <View style={styles.contractorCardBadges}>
-          <View style={[styles.contractorBadge, { backgroundColor: getStatusBg(item.status) }]}>
-            <Text style={[styles.contractorBadgeText, { color: getStatusTextColor(item.status) }]}>
-              {item.status.replace('_', ' ').toUpperCase()}
-            </Text>
-          </View>
-          <View style={styles.contractorBadge}>
-            <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textSecondary} />
-            <Text style={styles.contractorBadgeText}>
-              {item.truckType.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
-            </Text>
-          </View>
-          {item.trucksNeeded > 1 && (
-            <View style={styles.contractorBadge}>
-              <Text style={styles.contractorBadgeText}>{item.trucksNeeded} trucks</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
+        {items.map((item, i) => (
+          <View key={i} style={styles.statCard}>
+            <Text style={styles.statLabel}>{item.label}</Text>
+            <View style={styles.statValueRow}>
+              <Text style={styles.statValue}>{item.value}</Text>
+              <Ionicons name={item.icon} size={18} color={Colors.primary} />
             </View>
-          )}
-        </View>
-
-        <View style={styles.contractorCardLocation}>
-          <View style={styles.locationDots}>
-            <View style={styles.dotGreen} />
-            <View style={styles.dotLine} />
-            <View style={styles.dotOrange} />
+            <Text style={styles.statSub}>{item.sub}</Text>
           </View>
-          <View style={styles.locationTexts}>
-            <Text style={styles.locationText} numberOfLines={1}>{item.originAddress}</Text>
-            <Text style={styles.locationText} numberOfLines={1}>{item.destinationAddress}</Text>
-          </View>
-        </View>
-
-        <View style={styles.contractorCardFooter}>
-          <View style={styles.footerItem}>
-            <Ionicons name="calendar-outline" size={13} color={Colors.textMuted} />
-            <Text style={styles.footerText}>
-              {new Date(item.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-            </Text>
-          </View>
-          <View style={styles.footerItem}>
-            <Ionicons name="time-outline" size={13} color={Colors.textMuted} />
-            <Text style={styles.footerText}>{item.pickupTime}</Text>
-          </View>
-          {(item as any).driver_name && (
-            <View style={styles.footerItem}>
-              <Ionicons name="person-outline" size={13} color={Colors.success} />
-              <Text style={[styles.footerText, { color: Colors.success }]}>{(item as any).driver_name}</Text>
-            </View>
-          )}
-          {(item as any).application_count != null && Number((item as any).application_count) > 0 && (
-            <View style={styles.applicationsBadge}>
-              <Ionicons name="people" size={12} color={Colors.info} />
-              <Text style={styles.applicationsText}>{(item as any).application_count}</Text>
-            </View>
-          )}
-        </View>
-      </Pressable>
+        ))}
+      </ScrollView>
     );
   }
 
@@ -282,95 +118,184 @@ export default function JobsScreen() {
           <View style={styles.logoMark}>
             <Ionicons name="cube" size={20} color={Colors.primary} />
           </View>
-          <Text style={styles.headerTitle}>{contractor ? 'MY JOBS' : 'LOADLINK'}</Text>
+          <View>
+            <Text style={styles.headerTitle}>DASHBOARD</Text>
+            <Text style={styles.headerSubtitle}>Welcome Back, {user.firstName}</Text>
+          </View>
         </View>
-        <Pressable style={styles.notifBtn} onPress={() => router.push('/notifications')}>
-          <Ionicons name="notifications-outline" size={22} color={Colors.text} />
-          {unreadCount > 0 && (
-            <View style={styles.notifBadge}>
-              <Text style={styles.notifBadgeText}>{unreadCount}</Text>
-            </View>
-          )}
-        </Pressable>
+        <View style={styles.headerRight}>
+          <Pressable
+            style={styles.findLoadsBtn}
+            onPress={() => router.push('/jobs-browse' as any)}
+          >
+            <Text style={styles.findLoadsBtnText}>{contractor ? 'MY JOBS' : 'FIND LOADS'}</Text>
+          </Pressable>
+          <Pressable style={styles.notifBtn} onPress={() => router.push('/notifications')}>
+            <Ionicons name="notifications-outline" size={22} color={Colors.text} />
+            {unreadCount > 0 && (
+              <View style={styles.notifBadge}>
+                <Text style={styles.notifBadgeText}>{unreadCount}</Text>
+              </View>
+            )}
+          </Pressable>
+        </View>
       </View>
 
-      <FlatList
-        data={filteredJobs}
-        renderItem={contractor ? renderContractorJobCard : ({ item }) => (
-          <JobCard
-            job={item}
-            onPress={() => router.push({ pathname: '/job/[id]', params: { id: item.id } })}
-            showStatus={statusFilter !== 'Open'}
-          />
-        )}
-        keyExtractor={item => item.id}
-        contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
-        ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
-        ListHeaderComponent={renderHeader}
-        ListEmptyComponent={
-          jobsLoading ? (
-            <View style={styles.emptyState}>
-              <ActivityIndicator size="large" color={Colors.primary} />
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 + 100 : 100 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {!contractor && dashboard?.quickJob ? (
+          <Pressable
+            style={styles.quickJobCard}
+            onPress={() => router.push('/jobs-browse' as any)}
+          >
+            <View style={styles.quickJobIcon}>
+              <Ionicons name="flash" size={22} color={Colors.primary} />
             </View>
-          ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
-              <Text style={styles.emptyTitle}>{contractor ? 'No Posted Jobs' : 'No Jobs Found'}</Text>
-              <Text style={styles.emptyText}>
-                {contractor ? 'Tap + to create your first job posting' : 'Try adjusting your filters or search terms'}
+            <View style={styles.quickJobContent}>
+              <Text style={styles.quickJobTitle}>QUICK JOB</Text>
+              <Text style={styles.quickJobText} numberOfLines={1}>
+                {dashboard.quickJob.material} - {dashboard.quickJob.address}
               </Text>
             </View>
-          )
-        }
-        showsVerticalScrollIndicator={false}
-      />
+            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+          </Pressable>
+        ) : !contractor ? (
+          <View style={styles.quickJobCard}>
+            <View style={styles.quickJobIcon}>
+              <Ionicons name="flash" size={22} color={Colors.primary} />
+            </View>
+            <View style={styles.quickJobContent}>
+              <Text style={styles.quickJobTitle}>QUICK JOB</Text>
+              <Text style={styles.quickJobText}>No open jobs nearby right now</Text>
+            </View>
+          </View>
+        ) : null}
 
-      {contractor && (
-        <Pressable
-          style={styles.fab}
-          onPress={() => router.push('/create-job' as any)}
-        >
-          <Ionicons name="add" size={28} color={Colors.primaryForeground} />
-        </Pressable>
-      )}
+        {!contractor && (
+          <Text style={styles.sectionHint}>Check back later or expand your search radius in Settings</Text>
+        )}
+
+        {contractor ? renderContractorStats() : renderEarningsStats()}
+
+        <View style={styles.mapStatusRow}>
+          <View style={styles.mapContainer}>
+            <View style={styles.mapSectionHeader}>
+              <Ionicons name="location" size={14} color={Colors.text} />
+              <Text style={styles.mapSectionTitle}>CURRENT LOCATION</Text>
+            </View>
+            <MapSection
+              address={dashboard?.location?.address}
+              defaultLat={dashboard?.location?.lat || undefined}
+              defaultLng={dashboard?.location?.lng || undefined}
+            />
+          </View>
+
+          <View style={styles.statusCard}>
+            <Text style={styles.statusSectionTitle}>STATUS</Text>
+            <Text style={styles.statusLabel}>CURRENT STATUS</Text>
+            <Text style={styles.statusValue}>{user.isConnected ? 'AVAILABLE' : 'OFFLINE'}</Text>
+            <View style={styles.statusDivider} />
+            <Text style={styles.statusLabel}>CONNECTION</Text>
+            <View style={styles.statusConnRow}>
+              <View style={[styles.connDot, { backgroundColor: user.isConnected ? Colors.success : Colors.destructive }]} />
+              <Text style={styles.connText}>{user.isConnected ? 'Online' : 'Offline'}</Text>
+            </View>
+            <View style={{ marginTop: 10 }}>
+              <Switch
+                value={user.isConnected}
+                onValueChange={handleStatusToggle}
+                trackColor={{ false: Colors.border, true: Colors.success }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.upcomingSection}>
+          <View style={styles.upcomingHeader}>
+            <View style={styles.upcomingHeaderLeft}>
+              <Ionicons name="calendar-outline" size={16} color={Colors.text} />
+              <Text style={styles.upcomingSectionTitle}>UPCOMING JOBS</Text>
+            </View>
+            <Pressable onPress={() => router.push('/(tabs)/calendar')}>
+              <Text style={styles.scheduleLink}>Schedule</Text>
+            </Pressable>
+          </View>
+
+          {(dashboard?.upcomingDays || getDefaultDays()).map((day, i) => (
+            <View key={i} style={styles.upcomingRow}>
+              <View style={styles.dateBox}>
+                <Text style={styles.dateDay}>{day.dayName}</Text>
+                <Text style={styles.dateNum}>{day.dayNum}</Text>
+              </View>
+              <Text style={styles.upcomingStatus}>
+                {day.status === 'available' ? 'Available' : day.status === 'unavailable' ? 'Unavailable' : day.status}
+              </Text>
+              <Pressable
+                style={styles.openBadge}
+                onPress={() => router.push('/jobs-browse' as any)}
+              >
+                <Text style={styles.openBadgeText}>OPEN</Text>
+              </Pressable>
+            </View>
+          ))}
+        </View>
+
+        {(dashboard?.recentActivity || []).length > 0 && (
+          <View style={styles.activitySection}>
+            <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
+            {(dashboard?.recentActivity || []).map(a => (
+              <View key={a.id} style={styles.activityRow}>
+                <View style={[styles.activityDot, { backgroundColor: a.isRead ? Colors.textMuted : Colors.primary }]} />
+                <View style={styles.activityContent}>
+                  <Text style={styles.activityText}>{a.title}</Text>
+                  <Text style={styles.activityTime}>{timeAgo(a.createdAt)}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {contractor && (
+          <Pressable
+            style={styles.createJobBtn}
+            onPress={() => router.push('/create-job' as any)}
+          >
+            <Ionicons name="add-circle" size={20} color={Colors.primaryForeground} />
+            <Text style={styles.createJobBtnText}>POST NEW JOB</Text>
+          </Pressable>
+        )}
+      </ScrollView>
     </View>
   );
 }
 
-function getStatusBg(status: string): string {
-  switch (status) {
-    case 'open': return 'rgba(255, 153, 0, 0.2)';
-    case 'pending': return 'rgba(245, 158, 11, 0.2)';
-    case 'accepted': return 'rgba(34, 197, 94, 0.2)';
-    case 'in_progress': return 'rgba(59, 130, 246, 0.2)';
-    case 'completed': return 'rgba(34, 197, 94, 0.2)';
-    case 'cancelled': return 'rgba(239, 68, 68, 0.2)';
-    default: return 'rgba(107, 112, 128, 0.2)';
+function getDefaultDays() {
+  const days = [];
+  const now = new Date();
+  const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + i);
+    days.push({
+      date: d.toISOString().split('T')[0],
+      dayName: dayNames[d.getDay()],
+      dayNum: d.getDate(),
+      status: 'available',
+    });
   }
-}
-
-function getStatusTextColor(status: string): string {
-  switch (status) {
-    case 'open': return '#FF9900';
-    case 'pending': return '#f59e0b';
-    case 'accepted': return '#22c55e';
-    case 'in_progress': return '#3b82f6';
-    case 'completed': return '#22c55e';
-    case 'cancelled': return '#ef4444';
-    default: return '#6b7080';
-  }
+  return days;
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
@@ -378,12 +303,13 @@ const styles = StyleSheet.create({
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    flex: 1,
   },
   logoMark: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
@@ -393,6 +319,28 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: Colors.text,
     letterSpacing: 2,
+  },
+  headerSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  findLoadsBtn: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  findLoadsBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    color: Colors.primaryForeground,
+    letterSpacing: 1,
   },
   notifBtn: {
     width: 40,
@@ -416,283 +364,272 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#fff',
   },
-  listContent: {
-    padding: 16,
-  },
-  searchRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
-  },
-  searchBar: {
-    flex: 1,
+  scrollContent: { padding: 16 },
+  quickJobCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Colors.card,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    height: 44,
-    gap: 8,
+    borderRadius: 12,
+    padding: 14,
     borderWidth: 1,
     borderColor: Colors.border,
+    gap: 12,
+    marginBottom: 6,
   },
-  searchInput: {
-    flex: 1,
-    fontFamily: 'Inter_400Regular',
-    fontSize: 14,
-    color: Colors.text,
-    height: '100%',
-  },
-  filterBtn: {
-    width: 44,
-    height: 44,
+  quickJobIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.card,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
   },
-  filterBtnActive: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primaryLight,
-  },
-  statusFilters: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  statusChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: Colors.card,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  statusChipActive: {
-    backgroundColor: Colors.primaryLight,
-    borderColor: Colors.primary,
-  },
-  statusChipText: {
-    fontFamily: 'Inter_500Medium',
+  quickJobContent: { flex: 1 },
+  quickJobTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
     fontSize: 13,
-    color: Colors.textSecondary,
+    color: Colors.text,
+    letterSpacing: 0.5,
   },
-  statusChipTextActive: {
-    color: Colors.primary,
-  },
-  filterSection: {
-    backgroundColor: Colors.card,
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  filterLabel: {
-    fontFamily: 'ChakraPetch_600SemiBold',
-    fontSize: 11,
-    color: Colors.textSecondary,
-    letterSpacing: 1,
-    marginBottom: 10,
-  },
-  truckFilters: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  truckChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: Colors.muted,
-  },
-  truckChipActive: {
-    backgroundColor: Colors.primaryLight,
-  },
-  truckChipText: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 12,
-    color: Colors.textSecondary,
-  },
-  truckChipTextActive: {
-    color: Colors.primary,
-  },
-  resultCount: {
+  quickJobText: {
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
     color: Colors.textMuted,
-    marginBottom: 12,
+    marginTop: 2,
   },
-  contractorCard: {
+  sectionHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  statsScroll: {
+    gap: 10,
+    paddingBottom: 4,
+    marginBottom: 16,
+  },
+  statCard: {
     backgroundColor: Colors.card,
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
+    width: 150,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  contractorCardPressed: {
-    backgroundColor: Colors.cardHover,
-    transform: [{ scale: 0.99 }],
+  statLabel: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 10,
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+    marginBottom: 6,
   },
-  contractorCardHeader: {
+  statValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  statValue: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 20,
+    color: Colors.text,
+  },
+  statSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 4,
+  },
+  mapStatusRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  mapContainer: {
+    flex: 1,
+  },
+  mapSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  mapSectionTitle: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 12,
+    color: Colors.text,
+    letterSpacing: 0.5,
+  },
+  statusCard: {
+    flex: 1,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    padding: 14,
+  },
+  statusSectionTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.primaryForeground,
+    letterSpacing: 1,
+    marginBottom: 10,
+  },
+  statusLabel: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 9,
+    color: 'rgba(22, 26, 34, 0.6)',
+    letterSpacing: 0.5,
+  },
+  statusValue: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.primaryForeground,
+    marginBottom: 6,
+  },
+  statusDivider: {
+    height: 1,
+    backgroundColor: 'rgba(22, 26, 34, 0.15)',
+    marginVertical: 8,
+  },
+  statusConnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  connDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  connText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.primaryForeground,
+  },
+  upcomingSection: {
+    marginBottom: 16,
+  },
+  upcomingHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 10,
   },
-  contractorCardHeaderLeft: {
+  upcomingHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    flex: 1,
+    gap: 6,
   },
-  contractorCardMaterial: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 16,
+  upcomingSectionTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
     color: Colors.text,
-  },
-  urgentBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.primaryLight,
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    gap: 3,
-  },
-  urgentText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 9,
-    color: Colors.primary,
     letterSpacing: 0.5,
   },
-  contractorCardRate: {
-    fontFamily: 'ChakraPetch_700Bold',
-    fontSize: 18,
+  scheduleLink: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
     color: Colors.primary,
   },
-  contractorCardBadges: {
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: 12,
-    flexWrap: 'wrap',
-  },
-  contractorBadge: {
+  upcomingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.muted,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    gap: 4,
-  },
-  contractorBadgeText: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 11,
-    color: Colors.textSecondary,
-  },
-  contractorCardLocation: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
-  },
-  locationDots: {
-    alignItems: 'center',
-    width: 12,
-    paddingTop: 4,
-  },
-  dotGreen: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Colors.success,
-  },
-  dotLine: {
-    width: 1,
-    height: 14,
-    backgroundColor: Colors.border,
-  },
-  dotOrange: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Colors.primary,
-  },
-  locationTexts: {
-    flex: 1,
-    gap: 8,
-  },
-  locationText: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 13,
-    color: Colors.textSecondary,
-  },
-  contractorCardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    flexWrap: 'wrap',
-  },
-  footerItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  footerText: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 12,
-    color: Colors.textMuted,
-  },
-  applicationsBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: Colors.infoBg,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    backgroundColor: Colors.card,
     borderRadius: 10,
-    marginLeft: 'auto',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 6,
+    gap: 14,
   },
-  applicationsText: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 11,
-    color: Colors.info,
-  },
-  fab: {
-    position: 'absolute',
-    bottom: Platform.OS === 'web' ? 100 : 90,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.primary,
+  dateBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: Colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 8,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
   },
-  emptyState: {
+  dateDay: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 9,
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+  },
+  dateNum: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+  },
+  upcomingStatus: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.textSecondary,
+    flex: 1,
+  },
+  openBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  openBadgeText: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 10,
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+  },
+  activitySection: {
+    marginBottom: 16,
+  },
+  activityTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.text,
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  activityRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  activityDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 5,
+  },
+  activityContent: { flex: 1 },
+  activityText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.text,
+  },
+  activityTime: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  createJobBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 60,
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    height: 50,
     gap: 8,
   },
-  emptyTitle: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 16,
-    color: Colors.text,
-    marginTop: 8,
-  },
-  emptyText: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 13,
-    color: Colors.textMuted,
+  createJobBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.primaryForeground,
+    letterSpacing: 1,
   },
 });

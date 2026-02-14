@@ -54,6 +54,7 @@ function RootLayoutNav() {
           headerShown: false,
         }}
       />
+      <Stack.Screen name="jobs-browse" options={{ headerShown: false }} />
     </Stack>
   );
 }
