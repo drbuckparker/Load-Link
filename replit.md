@@ -67,9 +67,21 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `lib/mock-data.ts` - TypeScript interfaces and utility functions (mock data removed)
 - `constants/colors.ts` - Color system
 
+## API Routes (continued)
+- `POST /api/auth/forgot-password` - Sends 6-char reset code via Resend email
+- `POST /api/auth/reset-password` - Verifies code and updates password
+- `POST /api/auth/set-password` - Sets password for accounts that used Replit auth on web
+
+## Email
+- Uses Resend (RESEND_API_KEY secret) with loadlinklive.com domain
+- Sends password reset codes styled in LoadLink dark theme branding
+
 ## Recent Changes (Feb 2026)
 - Connected to real LoadLink database via EXTERNAL_DATABASE_URL
 - Built complete Drizzle schema matching all 28 DB tables
 - Created API routes for auth, jobs, messages, earnings, calendar, profile
 - Updated all frontend screens to use React Query + real API
 - Removed all mock data arrays, kept interfaces and utility functions
+- Added password reset flow via Resend email (6-char code, 30min expiry)
+- Added set-password flow for web accounts using Replit auth
+- Fixed error message display to show clean messages instead of raw JSON
