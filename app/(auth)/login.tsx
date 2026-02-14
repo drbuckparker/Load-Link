@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiRequest } from '@/lib/query-client';
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -16,6 +17,9 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
   async function handleLogin() {
     if (!email || !password) {
@@ -30,7 +34,44 @@ export default function LoginScreen() {
       router.dismissAll();
       router.replace('/(tabs)');
     } catch (e: any) {
-      setError(e.message || 'Login failed');
+      const msg = e.message || 'Login failed';
+      if (msg.includes('different login method')) {
+        setNeedsPassword(true);
+        setPassword('');
+        setError('');
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSetPassword() {
+    if (!email || !password) {
+      setError('Please enter your email and a new password');
+      return;
+    }
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      const res = await apiRequest('POST', '/api/auth/set-password', { email, password });
+      const data = await res.json();
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setNeedsPassword(false);
+      setPassword('');
+      setConfirmPassword('');
+      setSuccessMsg('Password created! You can now sign in.');
+    } catch (e: any) {
+      setError(e.message || 'Failed to set password');
     } finally {
       setLoading(false);
     }
@@ -61,13 +102,24 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.formCard}>
-          <Text style={styles.formTitle}>WELCOME BACK</Text>
-          <Text style={styles.formSubtitle}>Sign in to continue to LoadLink</Text>
+          <Text style={styles.formTitle}>{needsPassword ? 'SET MOBILE PASSWORD' : 'WELCOME BACK'}</Text>
+          <Text style={styles.formSubtitle}>
+            {needsPassword
+              ? 'Your web account uses a different login. Create a password for mobile access.'
+              : 'Sign in to continue to LoadLink'}
+          </Text>
 
           {error ? (
             <View style={styles.errorBanner}>
               <Ionicons name="alert-circle" size={16} color={Colors.destructive} />
               <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
+
+          {successMsg ? (
+            <View style={styles.successBanner}>
+              <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+              <Text style={styles.successText}>{successMsg}</Text>
             </View>
           ) : null}
 
@@ -80,28 +132,31 @@ export default function LoginScreen() {
                 placeholder="you@example.com"
                 placeholderTextColor={Colors.textMuted}
                 value={email}
-                onChangeText={setEmail}
+                onChangeText={(t) => { setEmail(t); setSuccessMsg(''); }}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
+                editable={!needsPassword}
               />
             </View>
           </View>
 
           <View style={styles.inputGroup}>
             <View style={styles.labelRow}>
-              <Text style={styles.inputLabel}>Password</Text>
-              <Link href="/(auth)/forgot-password" asChild>
-                <Pressable>
-                  <Text style={styles.forgotLink}>Forgot password?</Text>
-                </Pressable>
-              </Link>
+              <Text style={styles.inputLabel}>{needsPassword ? 'New Password' : 'Password'}</Text>
+              {!needsPassword && (
+                <Link href="/(auth)/forgot-password" asChild>
+                  <Pressable>
+                    <Text style={styles.forgotLink}>Forgot password?</Text>
+                  </Pressable>
+                </Link>
+              )}
             </View>
             <View style={styles.inputWrapper}>
               <Ionicons name="lock-closed-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
-                placeholder="Enter your password"
+                placeholder={needsPassword ? 'Create a password (min 6 chars)' : 'Enter your password'}
                 placeholderTextColor={Colors.textMuted}
                 value={password}
                 onChangeText={setPassword}
@@ -113,20 +168,43 @@ export default function LoginScreen() {
             </View>
           </View>
 
+          {needsPassword && (
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Confirm Password</Text>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="lock-closed-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Confirm your password"
+                  placeholderTextColor={Colors.textMuted}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  secureTextEntry={!showPassword}
+                />
+              </View>
+            </View>
+          )}
+
           <Pressable
             style={({ pressed }) => [styles.loginBtn, pressed && styles.loginBtnPressed, loading && styles.loginBtnDisabled]}
-            onPress={handleLogin}
+            onPress={needsPassword ? handleSetPassword : handleLogin}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator size="small" color={Colors.primaryForeground} />
             ) : (
               <>
-                <Text style={styles.loginBtnText}>SIGN IN</Text>
+                <Text style={styles.loginBtnText}>{needsPassword ? 'CREATE PASSWORD' : 'SIGN IN'}</Text>
                 <Ionicons name="arrow-forward" size={18} color={Colors.primaryForeground} />
               </>
             )}
           </Pressable>
+
+          {needsPassword && (
+            <Pressable onPress={() => { setNeedsPassword(false); setPassword(''); setConfirmPassword(''); setError(''); }} style={styles.backBtn}>
+              <Text style={styles.backBtnText}>Back to Sign In</Text>
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.footer}>
@@ -233,6 +311,31 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.destructive,
     flex: 1,
+  },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.successBg,
+    borderRadius: 8,
+    padding: 10,
+    gap: 8,
+    marginBottom: 16,
+  },
+  successText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.success,
+    flex: 1,
+  },
+  backBtn: {
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 8,
+  },
+  backBtnText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.textSecondary,
   },
   inputGroup: {
     marginBottom: 16,

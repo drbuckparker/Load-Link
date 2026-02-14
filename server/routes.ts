@@ -62,12 +62,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(eq(users.email, email))
         .limit(1);
 
-      if (!user || !user.password) {
+      if (!user) {
+        console.log("Login: No user found for email:", email);
         return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      console.log("Login: Found user:", user.email, "login_provider:", user.login_provider, "has_password:", !!user.password);
+
+      if (!user.password) {
+        return res.status(401).json({ message: "This account uses a different login method. Please set a password on the web app first." });
       }
 
       const valid = await bcrypt.compare(password, user.password);
       if (!valid) {
+        console.log("Login: Password mismatch for:", email);
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
@@ -77,6 +85,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ user: safeUser });
     } catch (err) {
       console.error("Login error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/auth/set-password", async (req: Request, res: Response) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ message: "Email and password required" });
+      }
+      if (password.length < 6) {
+        return res.status(400).json({ message: "Password must be at least 6 characters" });
+      }
+
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
+
+      if (!user) {
+        return res.status(404).json({ message: "No account found with that email" });
+      }
+
+      if (user.password) {
+        return res.status(409).json({ message: "Account already has a password. Use login instead." });
+      }
+
+      const hashed = await bcrypt.hash(password, 10);
+      await db
+        .update(users)
+        .set({ password: hashed })
+        .where(eq(users.id, user.id));
+
+      (req.session as any).userId = user.id;
+      const { password: _, ...safeUser } = { ...user, password: hashed };
+      return res.json({ user: safeUser, message: "Password set successfully" });
+    } catch (err) {
+      console.error("Set password error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });
