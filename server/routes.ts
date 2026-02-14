@@ -12,6 +12,7 @@ import {
   monthlyInvoices,
   driverVehicles,
   jobAssignments,
+  contractorProjects,
 } from "@shared/schema";
 import bcrypt from "bcrypt";
 import session from "express-session";
@@ -969,6 +970,556 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json(vehicles);
     } catch (err) {
       console.error("Vehicles error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // ============ CONTRACTOR JOB MANAGEMENT ============
+
+  app.post("/api/jobs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const {
+        material, origin_address, destination_address, origin_lat, origin_lng,
+        destination_lat, destination_lng, distance, rate, rate_type, truck_type,
+        scheduled_date, pickup_time, urgent, capacity_needed, total_tons_needed,
+        trucks_needed, job_type, estimated_duration_minutes, load_time_minutes,
+        unload_time_minutes, requires_tarp, requires_weight_tickets,
+        total_amount_unit, estimated_cost, estimated_trips, estimated_days,
+        includes_weekends, project_id,
+      } = req.body;
+
+      const [job] = await db
+        .insert(jobs)
+        .values({
+          contractor_id: userId,
+          material,
+          origin_address,
+          destination_address,
+          origin_lat,
+          origin_lng,
+          destination_lat,
+          destination_lng,
+          distance,
+          rate,
+          rate_type,
+          truck_type,
+          scheduled_date: scheduled_date ? new Date(scheduled_date) : null,
+          pickup_time,
+          urgent: urgent ?? false,
+          capacity_needed,
+          total_tons_needed,
+          trucks_needed,
+          job_type,
+          estimated_duration_minutes,
+          load_time_minutes,
+          unload_time_minutes,
+          requires_tarp: requires_tarp ?? false,
+          requires_weight_tickets: requires_weight_tickets ?? false,
+          total_amount_unit,
+          estimated_cost,
+          estimated_trips,
+          estimated_days,
+          includes_weekends: includes_weekends ?? false,
+          project_id,
+          status: "open",
+        })
+        .returning();
+
+      return res.json(job);
+    } catch (err) {
+      console.error("Create job error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.put("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (job.contractor_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      const updates = { ...req.body };
+      delete updates.id;
+      delete updates.contractor_id;
+      updates.updated_at = new Date();
+      if (updates.scheduled_date) updates.scheduled_date = new Date(updates.scheduled_date);
+
+      const [updated] = await db
+        .update(jobs)
+        .set(updates)
+        .where(eq(jobs.id, id))
+        .returning();
+
+      return res.json(updated);
+    } catch (err) {
+      console.error("Update job error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (job.contractor_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      await db
+        .update(jobs)
+        .set({ status: "cancelled", cancelled_at: new Date(), updated_at: new Date() })
+        .where(eq(jobs.id, id));
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("Cancel job error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+
+      const result = await db
+        .select({
+          job: jobs,
+          driver_name: users.full_name,
+          driver_company: users.company,
+          driver_phone: users.phone,
+        })
+        .from(jobs)
+        .leftJoin(users, eq(jobs.driver_id, users.id))
+        .where(eq(jobs.contractor_id, userId))
+        .orderBy(desc(jobs.created_at));
+
+      const formattedJobs = result.map((r) => ({
+        ...r.job,
+        driver_name: r.driver_name || null,
+        driver_company: r.driver_company || null,
+        driver_phone: r.driver_phone || null,
+      }));
+
+      return res.json(formattedJobs);
+    } catch (err) {
+      console.error("Contractor jobs error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (job.contractor_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      const result = await db
+        .select({
+          assignment: jobAssignments,
+          driver_name: users.full_name,
+          driver_phone: users.phone,
+          driver_truck_type: users.truck_type,
+          driver_rating: users.rating,
+        })
+        .from(jobAssignments)
+        .leftJoin(users, eq(jobAssignments.driver_id, users.id))
+        .where(eq(jobAssignments.job_id, id));
+
+      const formatted = result.map((r) => ({
+        ...r.assignment,
+        driver_name: r.driver_name || "Unknown",
+        driver_phone: r.driver_phone || "",
+        driver_truck_type: r.driver_truck_type || null,
+        driver_rating: r.driver_rating || null,
+      }));
+
+      return res.json(formatted);
+    } catch (err) {
+      console.error("Job assignments error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/jobs/:id/assignments/:assignmentId/approve", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id, assignmentId } = req.params;
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (job.contractor_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      const [assignment] = await db
+        .update(jobAssignments)
+        .set({ status: "approved", approved_at: new Date() })
+        .where(eq(jobAssignments.id, assignmentId))
+        .returning();
+
+      if (!assignment) return res.status(404).json({ message: "Assignment not found" });
+
+      await db
+        .update(jobs)
+        .set({ status: "in_progress", updated_at: new Date() })
+        .where(eq(jobs.id, id));
+
+      await db.insert(notifications).values({
+        user_id: assignment.driver_id!,
+        type: "load_approved",
+        title: "Assignment Approved",
+        message: `Your assignment for the ${job.material} job has been approved`,
+        job_id: id,
+      });
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("Approve assignment error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/jobs/:id/assignments/:assignmentId/reject", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id, assignmentId } = req.params;
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (job.contractor_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      const [assignment] = await db
+        .update(jobAssignments)
+        .set({ status: "rejected" })
+        .where(eq(jobAssignments.id, assignmentId))
+        .returning();
+
+      if (!assignment) return res.status(404).json({ message: "Assignment not found" });
+
+      await db
+        .update(jobs)
+        .set({ driver_id: null, status: "open", updated_at: new Date() })
+        .where(eq(jobs.id, id));
+
+      await db.insert(notifications).values({
+        user_id: assignment.driver_id!,
+        type: "load_rejected",
+        title: "Assignment Rejected",
+        message: `Your assignment for the ${job.material} job has been rejected`,
+        job_id: id,
+      });
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("Reject assignment error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // ============ VEHICLE MANAGEMENT ============
+
+  app.post("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { truck_type, make, model, year, license_plate, vin_number, max_capacity_tons, truck_number, is_primary } = req.body;
+
+      if (is_primary) {
+        await db
+          .update(driverVehicles)
+          .set({ is_primary: false })
+          .where(eq(driverVehicles.driver_id, userId));
+      }
+
+      const [vehicle] = await db
+        .insert(driverVehicles)
+        .values({
+          driver_id: userId,
+          truck_type,
+          make,
+          model,
+          year,
+          license_plate,
+          vin_number,
+          max_capacity_tons,
+          truck_number,
+          is_primary: is_primary ?? false,
+        })
+        .returning();
+
+      return res.json(vehicle);
+    } catch (err) {
+      console.error("Add vehicle error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.put("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+
+      const [vehicle] = await db.select().from(driverVehicles).where(eq(driverVehicles.id, id)).limit(1);
+      if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
+      if (vehicle.driver_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      const updates = { ...req.body };
+      delete updates.id;
+      delete updates.driver_id;
+      updates.updated_at = new Date();
+
+      if (updates.is_primary) {
+        await db
+          .update(driverVehicles)
+          .set({ is_primary: false })
+          .where(eq(driverVehicles.driver_id, userId));
+      }
+
+      const [updated] = await db
+        .update(driverVehicles)
+        .set(updates)
+        .where(eq(driverVehicles.id, id))
+        .returning();
+
+      return res.json(updated);
+    } catch (err) {
+      console.error("Update vehicle error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+
+      const [vehicle] = await db.select().from(driverVehicles).where(eq(driverVehicles.id, id)).limit(1);
+      if (!vehicle) return res.status(404).json({ message: "Vehicle not found" });
+      if (vehicle.driver_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      await db
+        .update(driverVehicles)
+        .set({ is_active: false, updated_at: new Date() })
+        .where(eq(driverVehicles.id, id));
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("Delete vehicle error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // ============ INVOICES ============
+
+  app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { status } = req.query;
+
+      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const conditions: any[] = [];
+      const role = user.role || "";
+
+      if (role.includes("contractor")) {
+        conditions.push(eq(monthlyInvoices.contractor_id, userId));
+      } else if (role.includes("driver")) {
+        conditions.push(eq(monthlyInvoices.driver_id, userId));
+      } else {
+        conditions.push(
+          or(
+            eq(monthlyInvoices.contractor_id, userId),
+            eq(monthlyInvoices.driver_id, userId)
+          )!
+        );
+      }
+
+      if (status && status !== "all") {
+        conditions.push(eq(monthlyInvoices.status, status as any));
+      }
+
+      const contractorUsers = db
+        .select({ id: users.id, full_name: users.full_name, company: users.company })
+        .from(users)
+        .as("contractor_users");
+
+      const driverUsers = db
+        .select({ id: users.id, full_name: users.full_name, company: users.company })
+        .from(users)
+        .as("driver_users");
+
+      const invoices = await db
+        .select()
+        .from(monthlyInvoices)
+        .where(and(...conditions))
+        .orderBy(desc(monthlyInvoices.period_month));
+
+      const invoiceIds = invoices.map((inv) => inv.contractor_id).concat(invoices.map((inv) => inv.driver_id)).filter(Boolean) as string[];
+      const uniqueUserIds = [...new Set(invoiceIds)];
+
+      let userMap = new Map<string, { full_name: string | null; company: string | null }>();
+      if (uniqueUserIds.length > 0) {
+        const relatedUsers = await db
+          .select({ id: users.id, full_name: users.full_name, company: users.company })
+          .from(users)
+          .where(inArray(users.id, uniqueUserIds));
+        for (const u of relatedUsers) {
+          userMap.set(u.id, { full_name: u.full_name, company: u.company });
+        }
+      }
+
+      const result = invoices.map((inv) => ({
+        ...inv,
+        contractor_name: userMap.get(inv.contractor_id!)?.full_name || "Unknown",
+        contractor_company: userMap.get(inv.contractor_id!)?.company || "Unknown",
+        driver_name: userMap.get(inv.driver_id!)?.full_name || "Unknown",
+        driver_company: userMap.get(inv.driver_id!)?.company || null,
+      }));
+
+      return res.json(result);
+    } catch (err) {
+      console.error("Invoices error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/invoices/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const [invoice] = await db
+        .select()
+        .from(monthlyInvoices)
+        .where(eq(monthlyInvoices.id, id))
+        .limit(1);
+
+      if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+      const invoiceJobs = await db
+        .select()
+        .from(jobs)
+        .where(eq(jobs.invoice_id, id));
+
+      return res.json({
+        ...invoice,
+        jobs: invoiceJobs,
+      });
+    } catch (err) {
+      console.error("Invoice detail error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.put("/api/invoices/:id/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+      const { status: newStatus } = req.body;
+
+      const validStatuses = ["open", "issued", "payment_sent", "payment_received", "void"];
+      if (!validStatuses.includes(newStatus)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+
+      const [invoice] = await db
+        .select()
+        .from(monthlyInvoices)
+        .where(eq(monthlyInvoices.id, id))
+        .limit(1);
+
+      if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+      const updateData: any = { status: newStatus, updated_at: new Date() };
+      if (newStatus === "issued") updateData.issued_at = new Date();
+      if (newStatus === "payment_received") updateData.paid_at = new Date();
+
+      await db
+        .update(monthlyInvoices)
+        .set(updateData)
+        .where(eq(monthlyInvoices.id, id));
+
+      const notifyUserId = invoice.contractor_id === userId ? invoice.driver_id : invoice.contractor_id;
+      if (notifyUserId) {
+        await db.insert(notifications).values({
+          user_id: notifyUserId,
+          type: "general",
+          title: "Invoice Updated",
+          message: `Invoice ${invoice.invoice_number} status changed to ${newStatus}`,
+        });
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("Update invoice status error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // ============ CONTRACTOR PROJECTS ============
+
+  app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+
+      const projects = await db
+        .select()
+        .from(contractorProjects)
+        .where(eq(contractorProjects.contractor_id, userId))
+        .orderBy(desc(contractorProjects.created_at));
+
+      const projectIds = projects.map((p) => p.id);
+
+      let jobCounts = new Map<string, number>();
+      if (projectIds.length > 0) {
+        const counts = await db
+          .select({
+            project_id: jobs.project_id,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(jobs)
+          .where(inArray(jobs.project_id, projectIds))
+          .groupBy(jobs.project_id);
+
+        for (const c of counts) {
+          if (c.project_id) jobCounts.set(c.project_id, c.count);
+        }
+      }
+
+      const result = projects.map((p) => ({
+        ...p,
+        job_count: jobCounts.get(p.id) || 0,
+      }));
+
+      return res.json(result);
+    } catch (err) {
+      console.error("Projects error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { name, description } = req.body;
+
+      const [project] = await db
+        .insert(contractorProjects)
+        .values({
+          contractor_id: userId,
+          name,
+          description,
+        })
+        .returning();
+
+      return res.json(project);
+    } catch (err) {
+      console.error("Create project error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });
