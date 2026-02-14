@@ -1,16 +1,45 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert, Linking } from 'react-native';
+import { useState, useRef } from 'react';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatTruckType } from '@/lib/mock-data';
 import { apiRequest } from '@/lib/query-client';
+import { queryClient } from '@/lib/query-client';
+
+function isContractorRole(role: string): boolean {
+  return role.includes('contractor');
+}
+
+type SettingsTab = 'profile' | 'role' | 'help' | 'account' | 'billing';
+
+const TABS: { key: SettingsTab; label: string; icon: string }[] = [
+  { key: 'profile', label: 'Profile', icon: 'person-outline' },
+  { key: 'role', label: 'Role', icon: 'swap-horizontal' },
+  { key: 'help', label: 'Help', icon: 'help-circle-outline' },
+  { key: 'account', label: 'Account', icon: 'shield-outline' },
+  { key: 'billing', label: 'Billing', icon: 'card-outline' },
+];
+
+const ROLES = [
+  { key: 'trucking_company_contractor', label: 'TRUCKING COMPANY + CONTRACTOR', desc: 'Manage fleet and post loads', icon: 'business', color: '#8b5cf6' },
+  { key: 'trucking_company', label: 'TRUCKING COMPANY', desc: 'Manage fleet and assign loads', icon: 'people', color: '#f97316' },
+  { key: 'contractor', label: 'CONTRACTOR', desc: 'Post loads and manage drivers', icon: 'construct', color: '#eab308' },
+  { key: 'driver', label: 'DRIVER', desc: 'Haul loads and earn money', icon: 'car', color: '#22c55e' },
+  { key: 'driver_contractor', label: 'DRIVER + CONTRACTOR', desc: 'Haul loads and post jobs', icon: 'git-merge', color: '#3b82f6' },
+  { key: 'foreman', label: 'FOREMAN', desc: 'Manage loads for a company', icon: 'clipboard', color: '#f59e0b' },
+  { key: 'driver_trucking_company', label: 'DRIVER + TRUCKING CO.', desc: 'Drive and manage fleet', icon: 'git-network', color: '#06b6d4' },
+];
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
-  const { user, logout, updateUser } = useAuth();
+  const { user, logout, updateUser, refreshUser } = useAuth();
+  const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
+  const [switchingRole, setSwitchingRole] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
 
   async function handleStatusToggle(value: boolean) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -18,6 +47,35 @@ export default function ProfileScreen() {
       await apiRequest('PUT', '/api/profile/status', { isConnected: value });
     } catch {}
     await updateUser({ isConnected: value });
+  }
+
+  async function handleRoleSwitch(role: string) {
+    if (role === user?.role) return;
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+    const doSwitch = async () => {
+      setSwitchingRole(true);
+      try {
+        const res = await apiRequest('PUT', '/api/profile/role', { role });
+        const data = await res.json();
+        await refreshUser();
+        queryClient.invalidateQueries();
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch (e: any) {
+        Alert.alert('Error', e.message || 'Failed to switch role');
+      } finally {
+        setSwitchingRole(false);
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      doSwitch();
+      return;
+    }
+    Alert.alert('Switch Role', `Switch your role to ${role.replace(/_/g, ' ')}? The app will adjust to show features for this role.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Switch', onPress: doSwitch },
+    ]);
   }
 
   async function handleLogout() {
@@ -43,19 +101,17 @@ export default function ProfileScreen() {
 
   const radiusOptions = [50, 100, 250];
 
-  return (
-    <View style={styles.container}>
-      <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-        <Text style={styles.headerTitle}>PROFILE</Text>
-      </View>
-
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 + 100 : 100 }]} showsVerticalScrollIndicator={false}>
+  function renderProfileTab() {
+    return (
+      <>
         <View style={styles.profileCard}>
           <View style={styles.avatarLarge}>
             <Text style={styles.avatarLargeText}>{user.firstName.charAt(0)}{user.lastName.charAt(0)}</Text>
           </View>
           <Text style={styles.profileName}>{user.fullName}</Text>
-          <Text style={styles.profileRole}>{user.role.replace(/_/g, ' ').toUpperCase()}</Text>
+          <View style={styles.roleBadge}>
+            <Text style={styles.roleBadgeText}>{user.role.replace(/_/g, ' ').toUpperCase()}</Text>
+          </View>
 
           <View style={styles.statsRow}>
             <View style={styles.statBlock}>
@@ -83,7 +139,7 @@ export default function ProfileScreen() {
             <View style={[styles.statusDot, { backgroundColor: user.isConnected ? Colors.success : Colors.destructive }]} />
             <View>
               <Text style={styles.statusTitle}>{user.isConnected ? 'Online' : 'Unavailable'}</Text>
-              <Text style={styles.statusSubtitle}>Toggle your driver status</Text>
+              <Text style={styles.statusSubtitle}>Toggle your availability</Text>
             </View>
           </View>
           <Switch
@@ -94,33 +150,60 @@ export default function ProfileScreen() {
           />
         </View>
 
-        <Text style={styles.sectionTitle}>VEHICLE</Text>
+        <Text style={styles.sectionTitle}>CONTACT</Text>
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
-            <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.textMuted} />
-            <Text style={styles.infoLabel}>Type</Text>
-            <Text style={styles.infoValue}>{user.truckType ? formatTruckType(user.truckType) : 'Not set'}</Text>
+            <Ionicons name="mail-outline" size={18} color={Colors.textMuted} />
+            <Text style={styles.infoLabel}>Email</Text>
+            <Text style={styles.infoValue}>{user.email}</Text>
           </View>
           <View style={styles.infoRow}>
-            <Ionicons name="car" size={18} color={Colors.textMuted} />
-            <Text style={styles.infoLabel}>Truck</Text>
-            <Text style={styles.infoValue}>
-              {user.truckYear && user.truckMake ? `${user.truckYear} ${user.truckMake} ${user.truckModel || ''}`.trim() : 'Not set'}
-            </Text>
+            <Ionicons name="call-outline" size={18} color={Colors.textMuted} />
+            <Text style={styles.infoLabel}>Phone</Text>
+            <Text style={styles.infoValue}>{user.phone || 'Not set'}</Text>
           </View>
-          <View style={styles.infoRow}>
-            <Ionicons name="card-outline" size={18} color={Colors.textMuted} />
-            <Text style={styles.infoLabel}>Plate</Text>
-            <Text style={styles.infoValue}>{user.licensePlate || 'Not set'}</Text>
-          </View>
+          {user.company ? (
+            <View style={styles.infoRow}>
+              <Ionicons name="business-outline" size={18} color={Colors.textMuted} />
+              <Text style={styles.infoLabel}>Company</Text>
+              <Text style={styles.infoValue}>{user.company}</Text>
+            </View>
+          ) : null}
         </View>
-        <Pressable style={styles.manageVehiclesBtn} onPress={() => router.push('/vehicles')}>
-          <View style={styles.manageVehiclesLeft}>
-            <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
-            <Text style={styles.manageVehiclesText}>Manage Vehicles</Text>
-          </View>
-          <Ionicons name="arrow-forward" size={18} color={Colors.textMuted} />
-        </Pressable>
+
+        {!isContractorRole(user.role) && (
+          <>
+            <Text style={styles.sectionTitle}>VEHICLE</Text>
+            <View style={styles.infoCard}>
+              <View style={styles.infoRow}>
+                <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.textMuted} />
+                <Text style={styles.infoLabel}>Type</Text>
+                <Text style={styles.infoValue}>{user.truckType ? formatTruckType(user.truckType) : 'Not set'}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Ionicons name="car" size={18} color={Colors.textMuted} />
+                <Text style={styles.infoLabel}>Truck</Text>
+                <Text style={styles.infoValue}>
+                  {user.truckYear && user.truckMake ? `${user.truckYear} ${user.truckMake} ${user.truckModel || ''}`.trim() : 'Not set'}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Ionicons name="card-outline" size={18} color={Colors.textMuted} />
+                <Text style={styles.infoLabel}>Plate</Text>
+                <Text style={styles.infoValue}>{user.licensePlate || 'Not set'}</Text>
+              </View>
+            </View>
+            <Pressable style={styles.navCard} onPress={() => router.push('/vehicles')}>
+              <View style={styles.navCardLeft}>
+                <View style={[styles.navIconBox, { backgroundColor: Colors.primaryLight }]}>
+                  <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
+                </View>
+                <Text style={styles.navCardText}>Manage Vehicles</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+            </Pressable>
+          </>
+        )}
 
         <Text style={styles.sectionTitle}>WORK LOCATIONS</Text>
         <View style={styles.infoCard}>
@@ -145,6 +228,7 @@ export default function ProfileScreen() {
               onPress={() => {
                 if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 updateUser({ searchRadiusMiles: r });
+                apiRequest('PUT', '/api/profile', { search_radius_miles: r }).catch(() => {});
               }}
             >
               <Text style={[styles.radiusText, user.searchRadiusMiles === r && styles.radiusTextActive]}>
@@ -154,31 +238,206 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        <Text style={styles.sectionTitle}>CONTACT</Text>
-        <View style={styles.infoCard}>
-          <View style={styles.infoRow}>
-            <Ionicons name="mail-outline" size={18} color={Colors.textMuted} />
-            <Text style={styles.infoLabel}>Email</Text>
-            <Text style={styles.infoValue}>{user.email}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Ionicons name="call-outline" size={18} color={Colors.textMuted} />
-            <Text style={styles.infoLabel}>Phone</Text>
-            <Text style={styles.infoValue}>{user.phone}</Text>
-          </View>
-          {user.company && (
-            <View style={styles.infoRow}>
-              <Ionicons name="business-outline" size={18} color={Colors.textMuted} />
-              <Text style={styles.infoLabel}>Company</Text>
-              <Text style={styles.infoValue}>{user.company}</Text>
-            </View>
-          )}
-        </View>
-
         <Pressable style={styles.logoutBtn} onPress={handleLogout}>
           <Ionicons name="log-out-outline" size={20} color={Colors.destructive} />
           <Text style={styles.logoutText}>Sign Out</Text>
         </Pressable>
+      </>
+    );
+  }
+
+  function renderRoleTab() {
+    return (
+      <>
+        <View style={styles.roleHeader}>
+          <Text style={styles.roleHeaderTitle}>SWITCH ROLE</Text>
+          <Text style={styles.roleHeaderDesc}>Change how you use LoadLink. Your current role is highlighted.</Text>
+        </View>
+
+        <View style={styles.roleGrid}>
+          {ROLES.map(r => {
+            const isActive = user.role === r.key;
+            return (
+              <Pressable
+                key={r.key}
+                style={[
+                  styles.roleCard,
+                  isActive && styles.roleCardActive,
+                ]}
+                onPress={() => handleRoleSwitch(r.key)}
+                disabled={switchingRole}
+              >
+                <View style={[styles.roleIcon, { backgroundColor: `${r.color}20` }]}>
+                  <Ionicons name={r.icon as any} size={20} color={r.color} />
+                </View>
+                <Text style={[styles.roleLabel, isActive && { color: Colors.primary }]}>{r.label}</Text>
+                <Text style={styles.roleDesc}>{r.desc}</Text>
+                {isActive && (
+                  <View style={styles.activeRoleBadge}>
+                    <Ionicons name="checkmark-circle" size={14} color={Colors.primary} />
+                    <Text style={styles.activeRoleText}>CURRENT</Text>
+                  </View>
+                )}
+              </Pressable>
+            );
+          })}
+        </View>
+      </>
+    );
+  }
+
+  function renderHelpTab() {
+    return (
+      <>
+        <Pressable style={styles.helpCard} onPress={() => Linking.openURL('mailto:support@loadlinklive.com')}>
+          <View style={[styles.helpIconBox, { backgroundColor: Colors.primaryLight }]}>
+            <Ionicons name="chatbubble-outline" size={22} color={Colors.primary} />
+          </View>
+          <View style={styles.helpCardContent}>
+            <Text style={styles.helpCardTitle}>CONTACT LOADLINK</Text>
+            <Text style={styles.helpCardDesc}>Get help or ask a question</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+        </Pressable>
+
+        <Pressable style={styles.helpCard} onPress={() => Linking.openURL('https://loadlinklive.com')}>
+          <View style={[styles.helpIconBox, { backgroundColor: Colors.warningBg }]}>
+            <Ionicons name="bulb-outline" size={22} color={Colors.warning} />
+          </View>
+          <View style={styles.helpCardContent}>
+            <Text style={styles.helpCardTitle}>TUTORIALS</Text>
+            <Text style={styles.helpCardDesc}>Learn how to use LoadLink</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+        </Pressable>
+
+        <Pressable style={styles.helpCard} onPress={() => Linking.openURL('mailto:feedback@loadlinklive.com?subject=App%20Suggestion')}>
+          <View style={[styles.helpIconBox, { backgroundColor: Colors.successBg }]}>
+            <Ionicons name="sparkles-outline" size={22} color={Colors.success} />
+          </View>
+          <View style={styles.helpCardContent}>
+            <Text style={styles.helpCardTitle}>APP SUGGESTIONS</Text>
+            <Text style={styles.helpCardDesc}>Share ideas for new features</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+        </Pressable>
+
+        <View style={styles.appVersion}>
+          <Text style={styles.appVersionText}>LoadLink Mobile v1.0.0</Text>
+        </View>
+      </>
+    );
+  }
+
+  function renderAccountTab() {
+    return (
+      <>
+        <View style={styles.comingSoonCard}>
+          <View style={styles.comingSoonIcon}>
+            <Ionicons name="shield-outline" size={40} color={Colors.textMuted} />
+          </View>
+          <Text style={styles.comingSoonTitle}>ACCOUNT MANAGEMENT</Text>
+          <Text style={styles.comingSoonDesc}>Manage your security settings, connected accounts, and login methods.</Text>
+          <View style={styles.comingSoonBadge}>
+            <Text style={styles.comingSoonBadgeText}>Coming Soon</Text>
+          </View>
+        </View>
+
+        <View style={styles.accountCard}>
+          <View style={styles.accountCardIcon}>
+            <Ionicons name="lock-closed-outline" size={20} color={Colors.textMuted} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.accountCardTitle}>SECURITY SETTINGS</Text>
+            <Text style={styles.accountCardDesc}>Password, 2FA, and login history</Text>
+          </View>
+        </View>
+
+        <View style={styles.accountCard}>
+          <View style={styles.accountCardIcon}>
+            <Ionicons name="people-outline" size={20} color={Colors.textMuted} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.accountCardTitle}>CONNECTED ACCOUNTS</Text>
+            <Text style={styles.accountCardDesc}>Google, Apple, GitHub sign-in</Text>
+          </View>
+        </View>
+      </>
+    );
+  }
+
+  function renderBillingTab() {
+    return (
+      <>
+        <View style={styles.comingSoonCard}>
+          <View style={styles.comingSoonIcon}>
+            <Ionicons name="card-outline" size={40} color={Colors.textMuted} />
+          </View>
+          <Text style={styles.comingSoonTitle}>BILLING & SUBSCRIPTIONS</Text>
+          <Text style={styles.comingSoonDesc}>Manage your subscription plan, payment methods, and view invoices.</Text>
+          <View style={styles.comingSoonBadge}>
+            <Text style={styles.comingSoonBadgeText}>Coming Soon</Text>
+          </View>
+        </View>
+
+        <View style={styles.accountCard}>
+          <View style={styles.accountCardIcon}>
+            <Ionicons name="card-outline" size={20} color={Colors.textMuted} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.accountCardTitle}>CURRENT PLAN</Text>
+            <Text style={styles.accountCardDesc}>Free tier - Upgrade for more features</Text>
+          </View>
+        </View>
+
+        <View style={styles.accountCard}>
+          <View style={styles.accountCardIcon}>
+            <Ionicons name="wallet-outline" size={20} color={Colors.textMuted} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.accountCardTitle}>PAYMENT METHODS</Text>
+            <Text style={styles.accountCardDesc}>Add or update payment methods</Text>
+          </View>
+        </View>
+      </>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
+        <Text style={styles.headerTitle}>SETTINGS</Text>
+        <Text style={styles.headerSubtitle}>Manage your account and preferences</Text>
+      </View>
+
+      <View style={styles.tabBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabBarContent}>
+          {TABS.map(tab => (
+            <Pressable
+              key={tab.key}
+              style={[styles.tabItem, activeTab === tab.key && styles.tabItemActive]}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setActiveTab(tab.key);
+              }}
+            >
+              <Ionicons name={tab.icon as any} size={16} color={activeTab === tab.key ? Colors.text : Colors.textMuted} />
+              <Text style={[styles.tabLabel, activeTab === tab.key && styles.tabLabelActive]}>{tab.label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 + 100 : 100 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {activeTab === 'profile' && renderProfileTab()}
+        {activeTab === 'role' && renderRoleTab()}
+        {activeTab === 'help' && renderHelpTab()}
+        {activeTab === 'account' && renderAccountTab()}
+        {activeTab === 'billing' && renderBillingTab()}
       </ScrollView>
     </View>
   );
@@ -189,14 +448,47 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
   },
   headerTitle: {
     fontFamily: 'ChakraPetch_700Bold',
-    fontSize: 18,
+    fontSize: 22,
     color: Colors.text,
     letterSpacing: 2,
+  },
+  headerSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  tabBar: {
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  tabBarContent: {
+    paddingHorizontal: 16,
+    gap: 4,
+  },
+  tabItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+  },
+  tabItemActive: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  tabLabel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  tabLabelActive: {
+    color: Colors.text,
   },
   scrollContent: { padding: 16 },
   profileCard: {
@@ -229,12 +521,18 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: Colors.text,
   },
-  profileRole: {
+  roleBadge: {
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginTop: 6,
+  },
+  roleBadgeText: {
     fontFamily: 'ChakraPetch_600SemiBold',
     fontSize: 11,
     color: Colors.primary,
     letterSpacing: 1,
-    marginTop: 4,
   },
   statsRow: {
     flexDirection: 'row',
@@ -315,6 +613,34 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
   },
+  navCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 20,
+  },
+  navCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  navIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navCardText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.primary,
+  },
   radiusRow: {
     flexDirection: 'row',
     gap: 10,
@@ -341,28 +667,6 @@ const styles = StyleSheet.create({
   radiusTextActive: {
     color: Colors.primary,
   },
-  manageVehiclesBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: Colors.card,
-    borderRadius: 10,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 20,
-    marginTop: 10,
-  },
-  manageVehiclesLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  manageVehiclesText: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 14,
-    color: Colors.primary,
-  },
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -379,5 +683,182 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 15,
     color: Colors.destructive,
+  },
+  roleHeader: {
+    marginBottom: 20,
+  },
+  roleHeaderTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    letterSpacing: 1,
+  },
+  roleHeaderDesc: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginTop: 4,
+  },
+  roleGrid: {
+    gap: 10,
+  },
+  roleCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  roleCardActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
+  },
+  roleIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  roleLabel: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.text,
+    letterSpacing: 0.5,
+  },
+  roleDesc: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  activeRoleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+  },
+  activeRoleText: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 10,
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
+  helpCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 10,
+    gap: 14,
+  },
+  helpIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpCardContent: {
+    flex: 1,
+  },
+  helpCardTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.text,
+    letterSpacing: 0.5,
+  },
+  helpCardDesc: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  appVersion: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  appVersionText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  comingSoonCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 14,
+    padding: 28,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 16,
+  },
+  comingSoonIcon: {
+    marginBottom: 14,
+  },
+  comingSoonTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    letterSpacing: 1,
+    textAlign: 'center',
+  },
+  comingSoonDesc: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  comingSoonBadge: {
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  comingSoonBadgeText: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 12,
+    color: Colors.primary,
+    letterSpacing: 0.5,
+  },
+  accountCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 10,
+    gap: 14,
+    opacity: 0.5,
+  },
+  accountCardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accountCardTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.text,
+    letterSpacing: 0.5,
+  },
+  accountCardDesc: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
   },
 });

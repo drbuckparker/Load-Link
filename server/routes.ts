@@ -958,6 +958,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============ ROLE SWITCHING ============
+
+  app.put("/api/profile/role", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { role } = req.body;
+
+      const validRoles = ["driver", "contractor", "trucking_company", "trucking_company_contractor", "driver_contractor", "foreman", "driver_trucking_company"];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({ message: "Invalid role" });
+      }
+
+      const [updated] = await db
+        .update(users)
+        .set({ role, updated_at: new Date() })
+        .where(eq(users.id, userId))
+        .returning();
+
+      const { password: _, ...safeUser } = updated;
+      return res.json(safeUser);
+    } catch (err) {
+      console.error("Role switch error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   // ============ VEHICLES ============
 
   app.get("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
