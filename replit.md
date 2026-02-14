@@ -87,6 +87,7 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `GET /api/profile` - User profile with vehicles
 - `PUT /api/profile` - Update profile
 - `PUT /api/profile/status` - Toggle online/offline
+- `PUT /api/profile/role` - Switch user role
 
 ## App Screens
 - **(auth)**: login, register, forgot-password
@@ -111,6 +112,11 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Sends password reset codes styled in LoadLink dark theme branding
 
 ## Recent Changes (Feb 2026)
+- Rebuilt profile screen as full Settings page matching web app with 5 tabs: Profile, Role, Help, Account, Billing
+- Added role-switching: users can change between driver, contractor, trucking company, foreman roles
+- Help tab: Contact LoadLink, Tutorials, App Suggestions
+- Account tab: Security Settings, Connected Accounts (Coming Soon)
+- Billing tab: Current Plan, Payment Methods (Coming Soon)
 - Made app role-aware: contractors and drivers see different tab layouts
 - Added contractor job creation screen with full form (material, locations, rates, schedule)
 - Built contractor job management: view posted jobs with application counts
