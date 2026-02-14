@@ -65,7 +65,7 @@ export default function CalendarScreen() {
       const mapped: Record<string, { status: AvailabilityStatus; name?: string; shift?: string; notes?: string; startTime?: string; endTime?: string }> = {};
       for (const item of availQuery.data) {
         const d = new Date(item.date);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
         if (item.job_id || item.commitment_type) {
           mapped[key] = { status: 'committed', name: item.commitment_company_name || 'Job' };
         } else if (item.is_available) {
