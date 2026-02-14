@@ -241,7 +241,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const userName = user.full_name || user.first_name || "there";
 
-      await resend.emails.send({
+      const emailResult = await resend.emails.send({
         from: "LoadLink <noreply@loadlinklive.com>",
         to: email,
         subject: "Reset Your LoadLink Password",
@@ -265,6 +265,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           </div>
         `,
       });
+
+      console.log("Resend API response:", JSON.stringify(emailResult));
+      
+      if (emailResult.error) {
+        console.error("Resend email error:", emailResult.error);
+        return res.status(500).json({ message: "Failed to send reset email. Please try again." });
+      }
 
       console.log("Password reset email sent to:", email, "code:", resetCode);
       return res.json({ message: "If an account exists with that email, a reset link has been sent." });
