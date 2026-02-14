@@ -17,6 +17,19 @@ import bcrypt from "bcrypt";
 import session from "express-session";
 import pgSession from "connect-pg-simple";
 import { pool } from "./db";
+import { Resend } from "resend";
+import crypto from "crypto";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const resetTokens = new Map<string, { email: string; expiresAt: number }>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, data] of resetTokens) {
+    if (data.expiresAt < now) resetTokens.delete(token);
+  }
+}, 60000);
 
 const PgStore = pgSession(session);
 
@@ -199,6 +212,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ user: safeUser });
     } catch (err) {
       console.error("Auth check error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+      }
+
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
+
+      if (!user) {
+        return res.json({ message: "If an account exists with that email, a reset link has been sent." });
+      }
+
+      const token = crypto.randomBytes(32).toString("hex");
+      resetTokens.set(token, { email, expiresAt: Date.now() + 30 * 60 * 1000 });
+
+      const resetCode = token.substring(0, 6).toUpperCase();
+      resetTokens.set(resetCode, { email, expiresAt: Date.now() + 30 * 60 * 1000 });
+
+      const userName = user.full_name || user.first_name || "there";
+
+      await resend.emails.send({
+        from: "LoadLink <noreply@loadlinklive.com>",
+        to: email,
+        subject: "Reset Your LoadLink Password",
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #161a22; color: #ffffff; padding: 32px; border-radius: 12px;">
+            <div style="text-align: center; margin-bottom: 24px;">
+              <h1 style="color: #FF9900; font-size: 24px; margin: 0; letter-spacing: 2px;">LOADLINK</h1>
+              <p style="color: #9ca3af; font-size: 13px; margin-top: 4px;">Built for Heavy Hauls</p>
+            </div>
+            <p style="color: #e5e7eb; font-size: 15px;">Hi ${userName},</p>
+            <p style="color: #9ca3af; font-size: 14px; line-height: 1.6;">
+              You requested a password reset for your LoadLink account. Use the code below in the app to set a new password:
+            </p>
+            <div style="background: #1e2330; border: 1px solid #2d3548; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
+              <p style="color: #9ca3af; font-size: 12px; margin: 0 0 8px 0; letter-spacing: 1px;">YOUR RESET CODE</p>
+              <p style="color: #FF9900; font-size: 32px; font-weight: bold; letter-spacing: 6px; margin: 0;">${resetCode}</p>
+            </div>
+            <p style="color: #6b7280; font-size: 12px; line-height: 1.5;">
+              This code expires in 30 minutes. If you didn't request this, you can safely ignore this email.
+            </p>
+          </div>
+        `,
+      });
+
+      console.log("Password reset email sent to:", email, "code:", resetCode);
+      return res.json({ message: "If an account exists with that email, a reset link has been sent." });
+    } catch (err) {
+      console.error("Forgot password error:", err);
+      return res.status(500).json({ message: "Failed to send reset email. Please try again." });
+    }
+  });
+
+  app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
+    try {
+      const { code, email, newPassword } = req.body;
+      if (!code || !email || !newPassword) {
+        return res.status(400).json({ message: "Code, email, and new password are required" });
+      }
+      if (newPassword.length < 6) {
+        return res.status(400).json({ message: "Password must be at least 6 characters" });
+      }
+
+      const tokenData = resetTokens.get(code.toUpperCase());
+      if (!tokenData || tokenData.email !== email || tokenData.expiresAt < Date.now()) {
+        return res.status(400).json({ message: "Invalid or expired reset code" });
+      }
+
+      const hashed = await bcrypt.hash(newPassword, 10);
+      await db
+        .update(users)
+        .set({ password: hashed })
+        .where(eq(users.email, email));
+
+      resetTokens.delete(code.toUpperCase());
+
+      return res.json({ message: "Password reset successfully. You can now sign in." });
+    } catch (err) {
+      console.error("Reset password error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });
