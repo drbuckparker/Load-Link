@@ -9,12 +9,18 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { Redirect } from "expo-router";
 
-function NativeTabLayout() {
+function isContractorRole(role: string): boolean {
+  return role.includes('contractor');
+}
+
+function NativeTabLayout({ role }: { role: string }) {
+  const contractor = isContractorRole(role);
+
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
         <Icon sf={{ default: "briefcase", selected: "briefcase.fill" }} />
-        <Label>Jobs</Label>
+        <Label>{contractor ? 'My Jobs' : 'Jobs'}</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="calendar">
         <Icon sf={{ default: "calendar", selected: "calendar" }} />
@@ -24,10 +30,17 @@ function NativeTabLayout() {
         <Icon sf={{ default: "message", selected: "message.fill" }} />
         <Label>Messages</Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="earnings">
-        <Icon sf={{ default: "dollarsign.circle", selected: "dollarsign.circle.fill" }} />
-        <Label>Earnings</Label>
-      </NativeTabs.Trigger>
+      {contractor ? (
+        <NativeTabs.Trigger name="invoices">
+          <Icon sf={{ default: "doc.text", selected: "doc.text.fill" }} />
+          <Label>Invoices</Label>
+        </NativeTabs.Trigger>
+      ) : (
+        <NativeTabs.Trigger name="earnings">
+          <Icon sf={{ default: "dollarsign.circle", selected: "dollarsign.circle.fill" }} />
+          <Label>Earnings</Label>
+        </NativeTabs.Trigger>
+      )}
       <NativeTabs.Trigger name="profile">
         <Icon sf={{ default: "person", selected: "person.fill" }} />
         <Label>Profile</Label>
@@ -36,9 +49,10 @@ function NativeTabLayout() {
   );
 }
 
-function ClassicTabLayout() {
+function ClassicTabLayout({ role }: { role: string }) {
   const isWeb = Platform.OS === "web";
   const isIOS = Platform.OS === "ios";
+  const contractor = isContractorRole(role);
 
   return (
     <Tabs
@@ -73,7 +87,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Jobs",
+          title: contractor ? "My Jobs" : "Jobs",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="briefcase" size={size} color={color} />
           ),
@@ -104,6 +118,17 @@ function ClassicTabLayout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="wallet" size={size} color={color} />
           ),
+          href: contractor ? null : undefined,
+        }}
+      />
+      <Tabs.Screen
+        name="invoices"
+        options={{
+          title: "Invoices",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="document-text" size={size} color={color} />
+          ),
+          href: contractor ? undefined : null,
         }}
       />
       <Tabs.Screen
@@ -120,7 +145,7 @@ function ClassicTabLayout() {
 }
 
 export default function TabLayout() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) return null;
 
@@ -128,8 +153,10 @@ export default function TabLayout() {
     return <Redirect href="/(auth)/login" />;
   }
 
+  const role = user?.role || 'driver';
+
   if (isLiquidGlassAvailable()) {
-    return <NativeTabLayout />;
+    return <NativeTabLayout role={role} />;
   }
-  return <ClassicTabLayout />;
+  return <ClassicTabLayout role={role} />;
 }

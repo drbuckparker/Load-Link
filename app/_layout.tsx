@@ -42,6 +42,12 @@ function RootLayoutNav() {
           headerShown: false,
         }}
       />
+      <Stack.Screen
+        name="create-job"
+        options={{
+          headerShown: false,
+        }}
+      />
     </Stack>
   );
 }
