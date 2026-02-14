@@ -34,9 +34,11 @@ const SHIFTS = [
 
 const AVAILABILITY_TYPES = [
   { key: 'available_day', label: 'Available - This Day Only' },
-  { key: 'available_recurring', label: 'Available - Recurring Weekly' },
+  { key: 'available_weekdays', label: 'Available - All Month Weekdays' },
+  { key: 'available_weekends', label: 'Available - All Month Weekends' },
   { key: 'unavailable_day', label: 'Unavailable - This Day Only' },
-  { key: 'unavailable_recurring', label: 'Unavailable - Recurring Weekly' },
+  { key: 'unavailable_weekdays', label: 'Unavailable - All Month Weekdays' },
+  { key: 'unavailable_weekends', label: 'Unavailable - All Month Weekends' },
 ];
 
 export default function CalendarScreen() {
@@ -149,6 +151,31 @@ export default function CalendarScreen() {
     setModalVisible(true);
   }
 
+  function getDatesToSave(): string[] {
+    if (modalType.endsWith('_day')) {
+      return modalDate ? [modalDate] : [];
+    }
+
+    const isWeekdays = modalType.includes('weekdays');
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const dates: string[] = [];
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateObj = new Date(currentYear, currentMonth, d);
+      const dayOfWeek = dateObj.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+      if ((isWeekdays && !isWeekend) || (!isWeekdays && isWeekend)) {
+        const key = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const existing = availability[key];
+        if (!existing || existing.status !== 'committed') {
+          dates.push(key);
+        }
+      }
+    }
+    return dates;
+  }
+
   async function handleSave() {
     if (!modalDate) return;
     setSaving(true);
@@ -156,28 +183,35 @@ export default function CalendarScreen() {
 
     const shiftData = SHIFTS.find(s => s.key === modalShift) || SHIFTS[0];
     const isAvailable = modalType.startsWith('available');
+    const datesToSave = getDatesToSave();
 
     try {
-      await apiRequest('POST', '/api/availability', {
-        date: modalDate,
-        isAvailable,
-        startTime: shiftData.start,
-        endTime: shiftData.end,
-        notes: modalNotes.trim() || undefined,
-        shift: modalShift,
-        recurrence: modalType.includes('recurring') ? 'weekly' : 'none',
-      });
-
-      setAvailability(prev => ({
-        ...prev,
-        [modalDate]: {
-          status: isAvailable ? 'available' : 'unavailable',
-          shift: modalShift,
-          notes: modalNotes.trim(),
+      const promises = datesToSave.map(date =>
+        apiRequest('POST', '/api/availability', {
+          date,
+          isAvailable,
           startTime: shiftData.start,
           endTime: shiftData.end,
-        },
-      }));
+          notes: modalNotes.trim() || undefined,
+          shift: modalShift,
+          recurrence: 'none',
+        })
+      );
+      await Promise.all(promises);
+
+      setAvailability(prev => {
+        const updated = { ...prev };
+        for (const date of datesToSave) {
+          updated[date] = {
+            status: isAvailable ? 'available' : 'unavailable',
+            shift: modalShift,
+            notes: modalNotes.trim(),
+            startTime: shiftData.start,
+            endTime: shiftData.end,
+          };
+        }
+        return updated;
+      });
 
       queryClient.invalidateQueries({ queryKey: ['/api/availability'] });
       setModalVisible(false);
