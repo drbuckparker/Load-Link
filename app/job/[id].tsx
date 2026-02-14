@@ -10,6 +10,32 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor } from '@/lib/mock-data';
 import { apiRequest, queryClient } from '@/lib/query-client';
 
+function isContractorRole(role: string): boolean {
+  return role.includes('contractor');
+}
+
+interface Assignment {
+  id: string;
+  driverName: string;
+  driverPhone: string;
+  driverTruckType: string;
+  driverRating: number;
+  status: string;
+  appliedAt: string;
+}
+
+function mapAssignment(a: any): Assignment {
+  return {
+    id: a.id,
+    driverName: a.driver_name ?? a.driverName ?? 'Unknown',
+    driverPhone: a.driver_phone ?? a.driverPhone ?? '',
+    driverTruckType: a.driver_truck_type ?? a.driverTruckType ?? '',
+    driverRating: Number(a.driver_rating ?? a.driverRating ?? 0),
+    status: a.status ?? 'pending',
+    appliedAt: a.applied_at ?? a.appliedAt ?? a.created_at ?? '',
+  };
+}
+
 function mapJob(j: any): Job {
   return {
     id: j.id,
@@ -51,12 +77,24 @@ export default function JobDetailScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
 
+  const isContractor = isContractorRole(user?.role || '');
+
   const { data: jobData, isLoading } = useQuery<any>({
     queryKey: [`/api/jobs/${id}`],
     enabled: !!id,
   });
 
   const job = jobData ? mapJob(jobData) : null;
+  const isMyPostedJob = isContractor && job?.contractorId === user?.id;
+
+  const { data: assignmentsData } = useQuery<any[]>({
+    queryKey: [`/api/jobs/${id}/assignments`],
+    enabled: !!id && isMyPostedJob,
+  });
+
+  const assignments: Assignment[] = (assignmentsData || []).map(mapAssignment);
+  const pendingAssignments = assignments.filter(a => a.status === 'pending');
+  const approvedAssignments = assignments.filter(a => a.status === 'approved');
 
   const [jobStatus, setJobStatus] = useState<string>('open');
   const [isRunning, setIsRunning] = useState(false);
@@ -115,6 +153,60 @@ export default function JobDetailScreen() {
   function getBilledMinutes(actualMinutes: number) {
     if (actualMinutes <= 60) return 60;
     return 60 + Math.ceil((actualMinutes - 60) / 15) * 15;
+  }
+
+  async function handleApproveAssignment(assignmentId: string) {
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/assignments/${assignmentId}/approve`);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/assignments`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/contractor/jobs'] });
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to approve driver');
+    }
+  }
+
+  async function handleRejectAssignment(assignmentId: string) {
+    const doReject = async () => {
+      try {
+        await apiRequest('POST', `/api/jobs/${id}/assignments/${assignmentId}/reject`);
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/assignments`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      } catch (e: any) {
+        Alert.alert('Error', e.message || 'Failed to reject driver');
+      }
+    };
+    if (Platform.OS === 'web') {
+      doReject();
+      return;
+    }
+    Alert.alert('Reject Driver', 'Are you sure you want to reject this driver?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Reject', style: 'destructive', onPress: doReject },
+    ]);
+  }
+
+  async function handleCancelJob() {
+    const doCancel = async () => {
+      try {
+        await apiRequest('DELETE', `/api/jobs/${id}`);
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        queryClient.invalidateQueries({ queryKey: ['/api/contractor/jobs'] });
+        router.back();
+      } catch (e: any) {
+        Alert.alert('Error', e.message || 'Failed to cancel job');
+      }
+    };
+    if (Platform.OS === 'web') {
+      doCancel();
+      return;
+    }
+    Alert.alert('Cancel Job', 'Are you sure you want to cancel this job? This cannot be undone.', [
+      { text: 'Keep Job', style: 'cancel' },
+      { text: 'Cancel Job', style: 'destructive', onPress: doCancel },
+    ]);
   }
 
   async function handleAccept() {
@@ -341,6 +433,87 @@ export default function JobDetailScreen() {
             </View>
           </View>
         </View>
+
+        {isMyPostedJob && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>DRIVER APPLICATIONS ({assignments.length})</Text>
+            {pendingAssignments.length > 0 ? (
+              pendingAssignments.map(a => (
+                <View key={a.id} style={styles.assignmentCard}>
+                  <View style={styles.assignmentInfo}>
+                    <View style={styles.driverAvatar}>
+                      <Text style={styles.driverAvatarText}>{a.driverName.charAt(0)}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.driverNameText}>{a.driverName}</Text>
+                      <View style={styles.driverMeta}>
+                        {a.driverTruckType ? (
+                          <View style={styles.driverMetaItem}>
+                            <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textMuted} />
+                            <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
+                          </View>
+                        ) : null}
+                        {a.driverRating > 0 && (
+                          <View style={styles.driverMetaItem}>
+                            <Ionicons name="star" size={12} color={Colors.warning} />
+                            <Text style={styles.driverMetaText}>{a.driverRating.toFixed(1)}</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                  <View style={styles.assignmentActions}>
+                    <Pressable
+                      style={styles.approveBtn}
+                      onPress={() => handleApproveAssignment(a.id)}
+                    >
+                      <Ionicons name="checkmark" size={20} color="#fff" />
+                    </Pressable>
+                    <Pressable
+                      style={styles.rejectBtn}
+                      onPress={() => handleRejectAssignment(a.id)}
+                    >
+                      <Ionicons name="close" size={20} color="#fff" />
+                    </Pressable>
+                  </View>
+                </View>
+              ))
+            ) : approvedAssignments.length > 0 ? (
+              approvedAssignments.map(a => (
+                <View key={a.id} style={[styles.assignmentCard, { borderColor: 'rgba(34, 197, 94, 0.3)' }]}>
+                  <View style={styles.assignmentInfo}>
+                    <View style={[styles.driverAvatar, { borderColor: Colors.success }]}>
+                      <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{a.driverName.charAt(0)}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.driverNameText}>{a.driverName}</Text>
+                      <Text style={[styles.driverMetaText, { color: Colors.success }]}>Approved</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.badge, { backgroundColor: Colors.successBg }]}>
+                    <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
+                    <Text style={[styles.badgeText, { color: Colors.success }]}>APPROVED</Text>
+                  </View>
+                </View>
+              ))
+            ) : (
+              <View style={styles.noAssignments}>
+                <Ionicons name="person-outline" size={24} color={Colors.textMuted} />
+                <Text style={styles.noAssignmentsText}>No driver applications yet</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {isMyPostedJob && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
+          <Pressable
+            style={({ pressed }) => [styles.cancelJobBtn, pressed && { opacity: 0.85 }]}
+            onPress={handleCancelJob}
+          >
+            <Ionicons name="close-circle" size={20} color={Colors.destructive} />
+            <Text style={styles.cancelJobBtnText}>CANCEL JOB</Text>
+          </Pressable>
+        )}
 
         {canAccept && (
           <Pressable
@@ -714,6 +887,107 @@ const styles = StyleSheet.create({
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 16,
     color: '#fff',
+    letterSpacing: 1,
+  },
+  assignmentCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 8,
+  },
+  assignmentInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  driverAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+  },
+  driverAvatarText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 16,
+    color: Colors.primary,
+  },
+  driverNameText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  driverMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 2,
+  },
+  driverMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  driverMetaText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
+  assignmentActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  approveBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rejectBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.destructive,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noAssignments: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    gap: 6,
+  },
+  noAssignmentsText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  cancelJobBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.destructiveBg,
+    borderRadius: 12,
+    height: 48,
+    gap: 8,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  cancelJobBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.destructive,
     letterSpacing: 1,
   },
 });

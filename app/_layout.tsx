@@ -48,6 +48,12 @@ function RootLayoutNav() {
           headerShown: false,
         }}
       />
+      <Stack.Screen
+        name="vehicles"
+        options={{
+          headerShown: false,
+        }}
+      />
     </Stack>
   );
 }

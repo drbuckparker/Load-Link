@@ -114,6 +114,13 @@ export default function ProfileScreen() {
             <Text style={styles.infoValue}>{user.licensePlate || 'Not set'}</Text>
           </View>
         </View>
+        <Pressable style={styles.manageVehiclesBtn} onPress={() => router.push('/vehicles')}>
+          <View style={styles.manageVehiclesLeft}>
+            <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
+            <Text style={styles.manageVehiclesText}>Manage Vehicles</Text>
+          </View>
+          <Ionicons name="arrow-forward" size={18} color={Colors.textMuted} />
+        </Pressable>
 
         <Text style={styles.sectionTitle}>WORK LOCATIONS</Text>
         <View style={styles.infoCard}>
@@ -332,6 +339,28 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   radiusTextActive: {
+    color: Colors.primary,
+  },
+  manageVehiclesBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 20,
+    marginTop: 10,
+  },
+  manageVehiclesLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  manageVehiclesText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
     color: Colors.primary,
   },
   logoutBtn: {
