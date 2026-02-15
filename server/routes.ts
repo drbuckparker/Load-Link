@@ -397,9 +397,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           contractor_company: users.company,
           contractor_phone: users.phone,
           contractor_email: users.email,
+          project_name: contractorProjects.name,
         })
         .from(jobs)
         .leftJoin(users, eq(jobs.contractor_id, users.id))
+        .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
         .where(eq(jobs.id, id))
         .limit(1);
 
@@ -414,6 +416,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         contractor_company: r.contractor_company || "Unknown Company",
         contractor_phone: r.contractor_phone || "",
         contractor_email: r.contractor_email || "",
+        project_name: r.project_name || null,
       };
 
       const runs = await db

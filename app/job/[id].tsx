@@ -320,7 +320,9 @@ export default function JobDetailScreen() {
         )}
 
         <View style={styles.headerSection}>
-          <Text style={styles.jobNameLabel}>JOB NAME</Text>
+          {job.projectName && (
+            <Text style={styles.projectName}>{job.projectName}</Text>
+          )}
           <View style={styles.titleRow}>
             <Text style={styles.material}>{job.material}</Text>
             {job.urgent && (
@@ -660,12 +662,13 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 4,
   },
-  jobNameLabel: {
+  projectName: {
     fontFamily: 'ChakraPetch_700Bold',
-    fontSize: 11,
-    color: Colors.textMuted,
-    letterSpacing: 1.5,
-    marginBottom: 2,
+    fontSize: 14,
+    color: Colors.primary,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 4,
   },
   material: {
     fontFamily: 'Inter_700Bold',
