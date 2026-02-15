@@ -1,13 +1,14 @@
 import { useState, useMemo, useEffect } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/lib/query-client';
-import { queryClient } from '@/lib/query-client';
+import { queryClient, getApiUrl } from '@/lib/query-client';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -44,6 +45,7 @@ const AVAILABILITY_TYPES = [
 export default function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const router = useRouter();
   const now = new Date();
   const [currentMonth, setCurrentMonth] = useState(now.getMonth());
   const [currentYear, setCurrentYear] = useState(now.getFullYear());
@@ -93,6 +95,11 @@ export default function CalendarScreen() {
   }, [availQuery.data]);
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  const dateJobsQuery = useQuery<any[]>({
+    queryKey: ['/api/jobs', `?date=${selectedDate}&status=open`],
+    enabled: !!user && !!selectedDate,
+  });
 
   const calendarDays = useMemo(() => {
     const firstDay = new Date(currentYear, currentMonth, 1).getDay();
@@ -361,6 +368,22 @@ export default function CalendarScreen() {
             {selectedAvail.notes ? (
               <Text style={styles.detailNotes}>{selectedAvail.notes}</Text>
             ) : null}
+
+            <Pressable
+              style={styles.detailJobsBtn}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push({ pathname: '/jobs-browse', params: { date: selectedDate || '' } } as any);
+              }}
+            >
+              <Ionicons name="search-outline" size={16} color={Colors.primary} />
+              <Text style={styles.detailJobsBtnText}>
+                {dateJobsQuery.isLoading ? 'Checking jobs...' :
+                  dateJobsQuery.data?.length ? `${dateJobsQuery.data.length} open job${dateJobsQuery.data.length !== 1 ? 's' : ''} on this date` :
+                  'Check for jobs on this date'}
+              </Text>
+              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+            </Pressable>
           </View>
         )}
 
@@ -460,6 +483,19 @@ export default function CalendarScreen() {
               onChangeText={setModalNotes}
               multiline
             />
+
+            <Pressable
+              style={styles.checkJobsBtn}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setModalVisible(false);
+                router.push({ pathname: '/jobs-browse', params: { date: modalDate || '' } } as any);
+              }}
+            >
+              <Ionicons name="search-outline" size={18} color={Colors.primary} />
+              <Text style={styles.checkJobsBtnText}>Check for Jobs on This Date</Text>
+              <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+            </Pressable>
 
             <View style={styles.modalFooter}>
               {selectedDate && availability[selectedDate] && availability[selectedDate].status !== 'committed' && (
@@ -643,6 +679,22 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontStyle: 'italic',
   },
+  detailJobsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.primaryLight,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  detailJobsBtnText: {
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: Colors.primary,
+  },
   helpText: {
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
@@ -783,6 +835,22 @@ const styles = StyleSheet.create({
   typeOptionTextActive: {
     color: Colors.primary,
     fontFamily: 'Inter_600SemiBold',
+  },
+  checkJobsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Colors.primaryLight,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  checkJobsBtnText: {
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.primary,
   },
   notesInput: {
     backgroundColor: Colors.surface,

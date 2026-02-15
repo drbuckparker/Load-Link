@@ -57,15 +57,19 @@ export default function JobsBrowseScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isContractor = isContractorRole(user?.role);
-  const params = useLocalSearchParams<{ filter?: string }>();
+  const params = useLocalSearchParams<{ filter?: string; date?: string }>();
 
   const [activeFilter, setActiveFilter] = useState<string>(params.filter || 'Open');
+  const [dateFilter, setDateFilter] = useState<string | undefined>(params.date || undefined);
 
   useEffect(() => {
     if (params.filter) {
       setActiveFilter(params.filter);
     }
-  }, [params.filter]);
+    if (params.date) {
+      setDateFilter(params.date);
+    }
+  }, [params.filter, params.date]);
   const [search, setSearch] = useState('');
   const [showTruckFilter, setShowTruckFilter] = useState(false);
   const [selectedTruckType, setSelectedTruckType] = useState<string | null>(null);
@@ -80,15 +84,16 @@ export default function JobsBrowseScreen() {
   }, [activeFilter]);
 
   const queryParams = useMemo(() => {
-    const params = new URLSearchParams();
-    if (statusParam) params.set('status', statusParam);
-    if (selectedTruckType) params.set('truck_type', selectedTruckType);
-    if (search.trim()) params.set('search', search.trim());
+    const p = new URLSearchParams();
+    if (statusParam) p.set('status', statusParam);
+    if (selectedTruckType) p.set('truck_type', selectedTruckType);
+    if (search.trim()) p.set('search', search.trim());
     if (!isContractor && user?.id && activeFilter === 'My Jobs') {
-      params.set('driver_id', user.id);
+      p.set('driver_id', user.id);
     }
-    return params.toString();
-  }, [statusParam, selectedTruckType, search, isContractor, user?.id, activeFilter]);
+    if (dateFilter) p.set('date', dateFilter);
+    return p.toString();
+  }, [statusParam, selectedTruckType, search, isContractor, user?.id, activeFilter, dateFilter]);
 
   const endpoint = isContractor ? '/api/contractor/jobs' : '/api/jobs';
   const queryUrl = queryParams ? `${endpoint}?${queryParams}` : endpoint;
@@ -244,6 +249,21 @@ export default function JobsBrowseScreen() {
           );
         })}
       </View>
+
+      {dateFilter && (
+        <View style={styles.dateBanner}>
+          <Ionicons name="calendar-outline" size={16} color={Colors.primary} />
+          <Text style={styles.dateBannerText}>
+            Showing jobs for {new Date(dateFilter + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
+          </Text>
+          <Pressable
+            onPress={() => setDateFilter(undefined)}
+            hitSlop={8}
+          >
+            <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+          </Pressable>
+        </View>
+      )}
 
       {showTruckFilter && (
         <View style={styles.truckFilterSection}>
@@ -402,6 +422,23 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: Colors.primary,
     fontFamily: 'Inter_600SemiBold',
+  },
+  dateBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.primaryLight,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  dateBannerText: {
+    flex: 1,
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.primary,
   },
   truckFilterSection: {
     paddingHorizontal: 16,

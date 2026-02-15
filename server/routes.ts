@@ -316,7 +316,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/jobs", async (req: Request, res: Response) => {
     try {
-      const { status, truck_type, search, driver_id } = req.query;
+      const { status, truck_type, search, driver_id, date } = req.query;
 
       const conditions = [];
 
@@ -351,6 +351,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ilike(jobs.destination_address, q)
           )!
         );
+      }
+
+      if (date) {
+        const dayStart = new Date(date as string);
+        dayStart.setUTCHours(0, 0, 0, 0);
+        const dayEnd = new Date(date as string);
+        dayEnd.setUTCHours(23, 59, 59, 999);
+        conditions.push(gte(jobs.scheduled_date, dayStart));
+        conditions.push(lte(jobs.scheduled_date, dayEnd));
       }
 
       const result = await db
