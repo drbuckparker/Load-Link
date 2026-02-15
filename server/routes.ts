@@ -367,9 +367,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           job: jobs,
           contractor_name: users.full_name,
           contractor_company: users.company,
+          project_name: contractorProjects.name,
         })
         .from(jobs)
         .leftJoin(users, eq(jobs.contractor_id, users.id))
+        .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(jobs.created_at));
 
@@ -377,6 +379,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...r.job,
         contractor_name: r.contractor_name || "Unknown",
         contractor_company: r.contractor_company || "Unknown Company",
+        project_name: r.project_name || null,
       }));
 
       return res.json(formattedJobs);
@@ -1405,9 +1408,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           driver_name: users.full_name,
           driver_company: users.company,
           driver_phone: users.phone,
+          project_name: contractorProjects.name,
         })
         .from(jobs)
         .leftJoin(users, eq(jobs.driver_id, users.id))
+        .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
         .where(eq(jobs.contractor_id, userId))
         .orderBy(desc(jobs.created_at));
 
@@ -1416,6 +1421,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         driver_name: r.driver_name || null,
         driver_company: r.driver_company || null,
         driver_phone: r.driver_phone || null,
+        project_name: r.project_name || null,
       }));
 
       return res.json(formattedJobs);

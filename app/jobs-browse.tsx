@@ -121,6 +121,9 @@ export default function JobsBrowseScreen() {
         style={({ pressed }) => [styles.cardContainer, pressed && styles.cardPressed]}
         onPress={() => router.push(`/job/${item.id}`)}
       >
+        {item.projectName && (
+          <Text style={styles.cardProjectName} numberOfLines={1}>{item.projectName}</Text>
+        )}
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <Text style={styles.cardMaterial} numberOfLines={1}>{item.material}</Text>
@@ -534,6 +537,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     flex: 1,
+  },
+  cardProjectName: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    color: Colors.primary,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 2,
   },
   cardMaterial: {
     fontFamily: 'Inter_600SemiBold',
