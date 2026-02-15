@@ -74,6 +74,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuth();
   }, []);
 
+  async function safeStore(user: User) {
+    try {
+      await AsyncStorage.setItem('loadlink_user', JSON.stringify(user));
+    } catch (e) {
+      try {
+        await AsyncStorage.clear();
+        await AsyncStorage.setItem('loadlink_user', JSON.stringify(user));
+      } catch {}
+    }
+  }
+
   async function checkAuth() {
     try {
       const stored = await AsyncStorage.getItem('loadlink_user');
@@ -89,10 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         const mapped = mapDbUser(data.user);
-        await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+        await safeStore(mapped);
         setUser(mapped);
       } else {
-        await AsyncStorage.removeItem('loadlink_user');
+        await AsyncStorage.removeItem('loadlink_user').catch(() => {});
         setUser(null);
       }
     } catch (e) {
@@ -106,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await apiRequest('POST', '/api/auth/login', { email, password });
     const data = await res.json();
     const mapped = mapDbUser(data.user);
-    await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+    await safeStore(mapped);
     setUser(mapped);
   }
 
@@ -114,7 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const res = await apiRequest('POST', '/api/auth/register', data);
     const responseData = await res.json();
     const mapped = mapDbUser(responseData.user);
-    await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+    await safeStore(mapped);
     setUser(mapped);
   }
 
@@ -149,11 +160,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiRequest('PUT', '/api/profile', dbUpdates);
       const data = await res.json();
       const mapped = mapDbUser(data);
-      await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+      await safeStore(mapped);
       setUser(mapped);
     } catch (e) {
       const updated = { ...user, ...updates };
-      await AsyncStorage.setItem('loadlink_user', JSON.stringify(updated));
+      await safeStore(updated);
       setUser(updated);
     }
   }
@@ -163,7 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiRequest('GET', '/api/profile');
       const data = await res.json();
       const mapped = mapDbUser(data);
-      await AsyncStorage.setItem('loadlink_user', JSON.stringify(mapped));
+      await safeStore(mapped);
       setUser(mapped);
     } catch {}
   }
