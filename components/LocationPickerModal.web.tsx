@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, Modal, ActivityIndicator, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +21,75 @@ interface LocationPickerModalProps {
   initialAddress?: string;
 }
 
+function getLeafletHTML(lat: number, lng: number, hasMarker: boolean): string {
+  return `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+html,body,#map{margin:0;padding:0;width:100%;height:100%;background:#161a22;}
+.leaflet-control-attribution{display:none!important;}
+.leaflet-control-zoom a{background:#1e2430!important;color:#e8e6e3!important;border-color:#2a3040!important;}
+.leaflet-control-zoom a:hover{background:#FF9900!important;color:#161a22!important;}
+.hint-overlay{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,0.75);color:#e8e6e3;padding:8px 16px;border-radius:20px;
+  font-family:Inter,sans-serif;font-size:13px;z-index:1000;pointer-events:none;
+  display:flex;align-items:center;gap:6px;white-space:nowrap;}
+.hint-dot{width:8px;height:8px;background:#FF9900;border-radius:50%;}
+</style>
+</head><body>
+<div id="map"></div>
+<div id="hint" class="hint-overlay" style="display:${hasMarker ? 'none' : 'flex'}">
+  <span class="hint-dot"></span> Tap the map to drop a pin
+</div>
+<script>
+var map=L.map('map',{attributionControl:false}).setView([${lat},${lng}],13);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
+
+var orangeIcon=L.divIcon({
+  html:'<div style="width:24px;height:24px;background:#FF9900;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.5);"></div>',
+  iconSize:[24,24],iconAnchor:[12,12],className:''
+});
+
+var marker=${hasMarker ? `L.marker([${lat},${lng}],{icon:orangeIcon,draggable:true}).addTo(map)` : 'null'};
+
+${hasMarker ? `marker.on('dragend',function(e){
+  var ll=e.target.getLatLng();
+  window.parent.postMessage(JSON.stringify({type:'markerMoved',lat:ll.lat,lng:ll.lng}),'*');
+});` : ''}
+
+map.on('click',function(e){
+  document.getElementById('hint').style.display='none';
+  if(marker){marker.setLatLng(e.latlng);}
+  else{marker=L.marker(e.latlng,{icon:orangeIcon,draggable:true}).addTo(map);
+    marker.on('dragend',function(ev){
+      var ll=ev.target.getLatLng();
+      window.parent.postMessage(JSON.stringify({type:'markerMoved',lat:ll.lat,lng:ll.lng}),'*');
+    });
+  }
+  window.parent.postMessage(JSON.stringify({type:'mapClick',lat:e.latlng.lat,lng:e.latlng.lng}),'*');
+});
+
+window.addEventListener('message',function(e){
+  try{var d=JSON.parse(e.data);
+    if(d.type==='flyTo'){
+      map.flyTo([d.lat,d.lng],14,{duration:0.8});
+      document.getElementById('hint').style.display='none';
+      if(marker){marker.setLatLng([d.lat,d.lng]);}
+      else{marker=L.marker([d.lat,d.lng],{icon:orangeIcon,draggable:true}).addTo(map);
+        marker.on('dragend',function(ev){
+          var ll=ev.target.getLatLng();
+          window.parent.postMessage(JSON.stringify({type:'markerMoved',lat:ll.lat,lng:ll.lng}),'*');
+        });
+      }
+    }
+  }catch(ex){}
+});
+</script>
+</body></html>`;
+}
+
 export default function LocationPickerModal({
   visible,
   onClose,
@@ -31,12 +100,15 @@ export default function LocationPickerModal({
   initialAddress,
 }: LocationPickerModalProps) {
   const insets = useSafeAreaInsets();
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const [searchText, setSearchText] = useState('');
   const [searching, setSearching] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<LocationResult | null>(
     initialLat && initialLng ? { lat: initialLat, lng: initialLng, address: initialAddress || '' } : null
   );
   const [searchResults, setSearchResults] = useState<LocationResult[]>([]);
+  const [showResults, setShowResults] = useState(false);
+  const [mapKey, setMapKey] = useState(0);
 
   useEffect(() => {
     if (visible) {
@@ -45,8 +117,26 @@ export default function LocationPickerModal({
       );
       setSearchText('');
       setSearchResults([]);
+      setShowResults(false);
+      setMapKey(prev => prev + 1);
     }
   }, [visible, initialLat, initialLng, initialAddress]);
+
+  useEffect(() => {
+    function handleMessage(e: MessageEvent) {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.type === 'mapClick' || d.type === 'markerMoved') {
+          setShowResults(false);
+          reverseGeocode(d.lat, d.lng).then(addr => {
+            setSelectedLocation({ lat: d.lat, lng: d.lng, address: addr });
+          });
+        }
+      } catch {}
+    }
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   async function reverseGeocode(lat: number, lng: number): Promise<string> {
     try {
@@ -63,6 +153,7 @@ export default function LocationPickerModal({
   async function handleSearch() {
     if (!searchText.trim()) return;
     setSearching(true);
+    setShowResults(true);
     try {
       const results = await Location.geocodeAsync(searchText.trim());
       const mapped: LocationResult[] = [];
@@ -72,7 +163,9 @@ export default function LocationPickerModal({
       }
       setSearchResults(mapped);
       if (mapped.length > 0) {
-        setSelectedLocation(mapped[0]);
+        const first = mapped[0];
+        setSelectedLocation(first);
+        sendToMap('flyTo', first.lat, first.lng);
       }
     } catch {
       setSearchResults([]);
@@ -81,12 +174,31 @@ export default function LocationPickerModal({
     }
   }
 
+  function sendToMap(type: string, lat: number, lng: number) {
+    try {
+      const iframe = iframeRef.current;
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage(JSON.stringify({ type, lat, lng }), '*');
+      }
+    } catch {}
+  }
+
+  function handleSelectResult(result: LocationResult) {
+    setSelectedLocation(result);
+    setShowResults(false);
+    sendToMap('flyTo', result.lat, result.lng);
+  }
+
   function handleConfirm() {
     if (selectedLocation) {
       onSelect(selectedLocation);
     }
     onClose();
   }
+
+  const mapLat = initialLat || 43.4799;
+  const mapLng = initialLng || -110.7624;
+  const hasMarker = !!(initialLat && initialLng);
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
@@ -121,7 +233,7 @@ export default function LocationPickerModal({
                 autoCorrect={false}
               />
               {searchText.length > 0 && (
-                <Pressable onPress={() => { setSearchText(''); setSearchResults([]); }}>
+                <Pressable onPress={() => { setSearchText(''); setSearchResults([]); setShowResults(false); }}>
                   <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
                 </Pressable>
               )}
@@ -135,39 +247,34 @@ export default function LocationPickerModal({
             </Pressable>
           </View>
 
-          <View style={styles.resultsArea}>
-            {searchResults.length > 0 ? (
-              searchResults.map((item, index) => (
+          {showResults && searchResults.length > 0 && (
+            <View style={styles.resultsContainer}>
+              {searchResults.map((item, index) => (
                 <Pressable
                   key={`${item.lat}-${item.lng}-${index}`}
-                  style={({ pressed }) => [
-                    styles.resultItem,
-                    pressed && styles.resultItemPressed,
-                    selectedLocation?.lat === item.lat && selectedLocation?.lng === item.lng && styles.resultItemSelected,
-                  ]}
-                  onPress={() => setSelectedLocation(item)}
+                  style={({ pressed }) => [styles.resultItem, pressed && styles.resultItemPressed]}
+                  onPress={() => handleSelectResult(item)}
                 >
-                  <Ionicons name="location" size={18} color={
-                    selectedLocation?.lat === item.lat && selectedLocation?.lng === item.lng ? Colors.primary : Colors.textMuted
-                  } />
-                  <View style={styles.resultTextContainer}>
-                    <Text style={styles.resultText} numberOfLines={2}>{item.address}</Text>
-                    <Text style={styles.resultCoords}>
-                      {item.lat.toFixed(4)}, {item.lng.toFixed(4)}
-                    </Text>
-                  </View>
-                  {selectedLocation?.lat === item.lat && selectedLocation?.lng === item.lng && (
-                    <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />
-                  )}
+                  <Ionicons name="location" size={16} color={Colors.primary} />
+                  <Text style={styles.resultText} numberOfLines={2}>{item.address}</Text>
                 </Pressable>
-              ))
-            ) : (
-              <View style={styles.emptyState}>
-                <Ionicons name="search-outline" size={48} color={Colors.textMuted} />
-                <Text style={styles.emptyTitle}>Search for a location</Text>
-                <Text style={styles.emptyDesc}>Type an address above and tap search</Text>
-              </View>
-            )}
+              ))}
+            </View>
+          )}
+
+          <View style={styles.mapContainer}>
+            <iframe
+              key={mapKey}
+              ref={iframeRef}
+              srcDoc={getLeafletHTML(mapLat, mapLng, hasMarker)}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                borderRadius: 12,
+              }}
+              title="Pick location"
+            />
           </View>
 
           {selectedLocation && (
@@ -254,59 +361,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  resultsArea: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 8,
+  resultsContainer: {
+    marginHorizontal: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: 'hidden',
+    maxHeight: 200,
+    zIndex: 10,
   },
   resultItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    gap: 12,
-    borderRadius: 10,
-    backgroundColor: Colors.surface,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
   resultItemPressed: {
     backgroundColor: Colors.primaryLight,
   },
-  resultItemSelected: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.primaryLight,
-  },
-  resultTextContainer: {
-    flex: 1,
-  },
   resultText: {
-    fontFamily: 'Inter_500Medium',
+    flex: 1,
+    fontFamily: 'Inter_400Regular',
     fontSize: 14,
     color: Colors.text,
   },
-  resultCoords: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginTop: 2,
-  },
-  emptyState: {
+  mapContainer: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  emptyTitle: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 16,
-    color: Colors.textSecondary,
-  },
-  emptyDesc: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 14,
-    color: Colors.textMuted,
+    margin: 16,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   selectedBar: {
     paddingHorizontal: 16,
