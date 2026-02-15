@@ -61,22 +61,30 @@ export default function DashboardScreen() {
   function renderEarningsStats() {
     const stats = dashboard?.earnings || { total: 0, awaiting: 0, thisMonth: 0, thisWeek: 0 };
     const items = [
-      { label: 'TOTAL EARNINGS', value: stats.total, sub: 'Total Earnings' },
-      { label: 'AWAITING PAYMENT', value: stats.awaiting, sub: 'Pending Jobs' },
-      { label: 'THIS MONTH', value: stats.thisMonth, sub: 'Earnings' },
-      { label: 'THIS WEEK', value: stats.thisWeek, sub: 'Earnings' },
+      { label: 'TOTAL EARNINGS', value: stats.total, sub: 'Total Earnings', tab: 'earnings' },
+      { label: 'AWAITING PAYMENT', value: stats.awaiting, sub: 'Pending Jobs', tab: 'earnings' },
+      { label: 'THIS MONTH', value: stats.thisMonth, sub: 'Earnings', tab: 'earnings' },
+      { label: 'THIS WEEK', value: stats.thisWeek, sub: 'Earnings', tab: 'earnings' },
     ];
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
         {items.map((item, i) => (
-          <View key={i} style={styles.statCard}>
+          <Pressable
+            key={i}
+            style={styles.statCard}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/(tabs)/earnings' as any);
+            }}
+          >
             <Text style={styles.statLabel}>{item.label}</Text>
             <View style={styles.statValueRow}>
               <Text style={styles.statValue}>${item.value.toFixed(2)}</Text>
               <Ionicons name="cash-outline" size={18} color={Colors.primary} />
             </View>
             <Text style={styles.statSub}>{item.sub}</Text>
-          </View>
+            <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={styles.statChevron} />
+          </Pressable>
         ))}
       </ScrollView>
     );
@@ -90,22 +98,30 @@ export default function DashboardScreen() {
     const totalApps = jobs.reduce((sum: number, j: any) => sum + (Number(j.application_count) || 0), 0);
 
     const items = [
-      { label: 'OPEN JOBS', value: openJobs.toString(), sub: 'Active Postings', icon: 'briefcase-outline' as const },
-      { label: 'IN PROGRESS', value: inProgress.toString(), sub: 'Being Worked', icon: 'play-circle-outline' as const },
-      { label: 'APPLICATIONS', value: totalApps.toString(), sub: 'Total Received', icon: 'people-outline' as const },
-      { label: 'COMPLETED', value: completed.toString(), sub: 'Total Jobs', icon: 'checkmark-circle-outline' as const },
+      { label: 'OPEN JOBS', value: openJobs.toString(), sub: 'Active Postings', icon: 'briefcase-outline' as const, filter: 'Open' },
+      { label: 'IN PROGRESS', value: inProgress.toString(), sub: 'Being Worked', icon: 'play-circle-outline' as const, filter: 'In Progress' },
+      { label: 'APPLICATIONS', value: totalApps.toString(), sub: 'Total Received', icon: 'people-outline' as const, filter: 'All' },
+      { label: 'COMPLETED', value: completed.toString(), sub: 'Total Jobs', icon: 'checkmark-circle-outline' as const, filter: 'Completed' },
     ];
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
         {items.map((item, i) => (
-          <View key={i} style={styles.statCard}>
+          <Pressable
+            key={i}
+            style={styles.statCard}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push({ pathname: '/jobs-browse', params: { filter: item.filter } } as any);
+            }}
+          >
             <Text style={styles.statLabel}>{item.label}</Text>
             <View style={styles.statValueRow}>
               <Text style={styles.statValue}>{item.value}</Text>
               <Ionicons name={item.icon} size={18} color={Colors.primary} />
             </View>
             <Text style={styles.statSub}>{item.sub}</Text>
-          </View>
+            <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={styles.statChevron} />
+          </Pressable>
         ))}
       </ScrollView>
     );
@@ -225,7 +241,18 @@ export default function DashboardScreen() {
           </View>
 
           {(dashboard?.upcomingDays || getDefaultDays()).map((day, i) => (
-            <View key={i} style={styles.upcomingRow}>
+            <Pressable
+              key={i}
+              style={styles.upcomingRow}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                if (day.status === 'available' || day.status === 'unavailable') {
+                  router.push('/(tabs)/calendar');
+                } else {
+                  router.push('/jobs-browse' as any);
+                }
+              }}
+            >
               <View style={styles.dateBox}>
                 <Text style={styles.dateDay}>{day.dayName}</Text>
                 <Text style={styles.dateNum}>{day.dayNum}</Text>
@@ -233,27 +260,40 @@ export default function DashboardScreen() {
               <Text style={styles.upcomingStatus}>
                 {day.status === 'available' ? 'Available' : day.status === 'unavailable' ? 'Unavailable' : day.status}
               </Text>
-              <Pressable
-                style={styles.openBadge}
-                onPress={() => router.push('/jobs-browse' as any)}
-              >
-                <Text style={styles.openBadgeText}>OPEN</Text>
-              </Pressable>
-            </View>
+              <View style={styles.openBadge}>
+                <Text style={styles.openBadgeText}>
+                  {day.status === 'available' || day.status === 'unavailable' ? 'OPEN' : 'VIEW'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+            </Pressable>
           ))}
         </View>
 
         {(dashboard?.recentActivity || []).length > 0 && (
           <View style={styles.activitySection}>
-            <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
+            <View style={styles.activityHeader}>
+              <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
+              <Pressable onPress={() => router.push('/notifications')}>
+                <Text style={styles.scheduleLink}>View All</Text>
+              </Pressable>
+            </View>
             {(dashboard?.recentActivity || []).map(a => (
-              <View key={a.id} style={styles.activityRow}>
+              <Pressable
+                key={a.id}
+                style={styles.activityRow}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push('/notifications');
+                }}
+              >
                 <View style={[styles.activityDot, { backgroundColor: a.isRead ? Colors.textMuted : Colors.primary }]} />
                 <View style={styles.activityContent}>
                   <Text style={styles.activityText}>{a.title}</Text>
                   <Text style={styles.activityTime}>{timeAgo(a.createdAt)}</Text>
                 </View>
-              </View>
+                <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+              </Pressable>
             ))}
           </View>
         )}
@@ -440,6 +480,11 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: 4,
   },
+  statChevron: {
+    position: 'absolute',
+    top: 14,
+    right: 12,
+  },
   mapStatusRow: {
     flexDirection: 'row',
     gap: 12,
@@ -584,12 +629,17 @@ const styles = StyleSheet.create({
   activitySection: {
     marginBottom: 16,
   },
+  activityHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
   activityTitle: {
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 13,
     color: Colors.text,
     letterSpacing: 0.5,
-    marginBottom: 10,
   },
   activityRow: {
     flexDirection: 'row',
