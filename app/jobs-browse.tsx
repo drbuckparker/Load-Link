@@ -1,9 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, StyleSheet, Platform, ActivityIndicator } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor, timeAgo } from '@/lib/mock-data';
@@ -57,8 +57,15 @@ export default function JobsBrowseScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isContractor = isContractorRole(user?.role);
+  const params = useLocalSearchParams<{ filter?: string }>();
 
-  const [activeFilter, setActiveFilter] = useState<string>('Open');
+  const [activeFilter, setActiveFilter] = useState<string>(params.filter || 'Open');
+
+  useEffect(() => {
+    if (params.filter) {
+      setActiveFilter(params.filter);
+    }
+  }, [params.filter]);
   const [search, setSearch] = useState('');
   const [showTruckFilter, setShowTruckFilter] = useState(false);
   const [selectedTruckType, setSelectedTruckType] = useState<string | null>(null);
