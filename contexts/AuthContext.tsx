@@ -23,7 +23,11 @@ export interface User {
   rating: number;
   totalJobs: number;
   primaryLocationAddress?: string;
+  primaryLocationLat?: number;
+  primaryLocationLng?: number;
   secondaryLocationAddress?: string;
+  secondaryLocationLat?: number;
+  secondaryLocationLng?: number;
   tertiaryLocationAddress?: string;
 }
 
@@ -61,7 +65,11 @@ function mapDbUser(dbUser: any): User {
     rating: Number(dbUser.rating) || 0,
     totalJobs: dbUser.total_jobs ?? dbUser.totalJobs ?? 0,
     primaryLocationAddress: dbUser.primary_location_address || dbUser.primaryLocationAddress,
+    primaryLocationLat: dbUser.primary_location_lat ? Number(dbUser.primary_location_lat) : undefined,
+    primaryLocationLng: dbUser.primary_location_lng ? Number(dbUser.primary_location_lng) : undefined,
     secondaryLocationAddress: dbUser.secondary_location_address || dbUser.secondaryLocationAddress,
+    secondaryLocationLat: dbUser.secondary_location_lat ? Number(dbUser.secondary_location_lat) : undefined,
+    secondaryLocationLng: dbUser.secondary_location_lng ? Number(dbUser.secondary_location_lng) : undefined,
     tertiaryLocationAddress: dbUser.tertiary_location_address || dbUser.tertiaryLocationAddress,
   };
 }
@@ -153,7 +161,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (updates.licensePlate !== undefined) dbUpdates.license_plate = updates.licensePlate;
     if (updates.searchRadiusMiles !== undefined) dbUpdates.search_radius_miles = updates.searchRadiusMiles;
     if (updates.primaryLocationAddress !== undefined) dbUpdates.primary_location_address = updates.primaryLocationAddress;
+    if (updates.primaryLocationLat !== undefined) dbUpdates.primary_location_lat = updates.primaryLocationLat;
+    if (updates.primaryLocationLng !== undefined) dbUpdates.primary_location_lng = updates.primaryLocationLng;
     if (updates.secondaryLocationAddress !== undefined) dbUpdates.secondary_location_address = updates.secondaryLocationAddress;
+    if (updates.secondaryLocationLat !== undefined) dbUpdates.secondary_location_lat = updates.secondaryLocationLat;
+    if (updates.secondaryLocationLng !== undefined) dbUpdates.secondary_location_lng = updates.secondaryLocationLng;
     if (updates.tertiaryLocationAddress !== undefined) dbUpdates.tertiary_location_address = updates.tertiaryLocationAddress;
 
     try {

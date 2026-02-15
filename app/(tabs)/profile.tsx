@@ -9,6 +9,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatTruckType } from '@/lib/mock-data';
 import { apiRequest } from '@/lib/query-client';
 import { queryClient } from '@/lib/query-client';
+import LocationPickerModal from '@/components/LocationPickerModal';
 
 function isContractorRole(role: string): boolean {
   return role.includes('contractor');
@@ -40,6 +41,7 @@ export default function ProfileScreen() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
   const [switchingRole, setSwitchingRole] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  const [locationPickerType, setLocationPickerType] = useState<'primary' | 'secondary' | null>(null);
 
   async function handleStatusToggle(value: boolean) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -207,16 +209,34 @@ export default function ProfileScreen() {
 
         <Text style={styles.sectionTitle}>WORK LOCATIONS</Text>
         <View style={styles.infoCard}>
-          <View style={styles.infoRow}>
+          <Pressable
+            style={styles.infoRow}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setLocationPickerType('primary');
+            }}
+          >
             <Ionicons name="location" size={18} color={Colors.success} />
             <Text style={styles.infoLabel}>Primary</Text>
-            <Text style={styles.infoValue}>{user.primaryLocationAddress || 'Not set'}</Text>
-          </View>
-          <View style={styles.infoRow}>
+            <Text style={[styles.infoValue, !user.primaryLocationAddress && styles.infoValueMuted]} numberOfLines={1}>
+              {user.primaryLocationAddress || 'Tap to set'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+          </Pressable>
+          <Pressable
+            style={styles.infoRow}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setLocationPickerType('secondary');
+            }}
+          >
             <Ionicons name="location-outline" size={18} color={Colors.info} />
             <Text style={styles.infoLabel}>Secondary</Text>
-            <Text style={styles.infoValue}>{user.secondaryLocationAddress || 'Not set'}</Text>
-          </View>
+            <Text style={[styles.infoValue, !user.secondaryLocationAddress && styles.infoValueMuted]} numberOfLines={1}>
+              {user.secondaryLocationAddress || 'Tap to set'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+          </Pressable>
         </View>
 
         <Text style={styles.sectionTitle}>SEARCH RADIUS</Text>
@@ -439,6 +459,31 @@ export default function ProfileScreen() {
         {activeTab === 'account' && renderAccountTab()}
         {activeTab === 'billing' && renderBillingTab()}
       </ScrollView>
+
+      <LocationPickerModal
+        visible={locationPickerType !== null}
+        onClose={() => setLocationPickerType(null)}
+        title={locationPickerType === 'primary' ? 'Set Primary Location' : 'Set Secondary Location'}
+        initialLat={locationPickerType === 'primary' ? user.primaryLocationLat : user.secondaryLocationLat}
+        initialLng={locationPickerType === 'primary' ? user.primaryLocationLng : user.secondaryLocationLng}
+        initialAddress={locationPickerType === 'primary' ? user.primaryLocationAddress : user.secondaryLocationAddress}
+        onSelect={async (result) => {
+          if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          if (locationPickerType === 'primary') {
+            await updateUser({
+              primaryLocationAddress: result.address,
+              primaryLocationLat: result.lat,
+              primaryLocationLng: result.lng,
+            });
+          } else {
+            await updateUser({
+              secondaryLocationAddress: result.address,
+              secondaryLocationLat: result.lat,
+              secondaryLocationLng: result.lng,
+            });
+          }
+        }}
+      />
     </View>
   );
 }
@@ -612,6 +657,10 @@ const styles = StyleSheet.create({
     color: Colors.text,
     flex: 1,
     textAlign: 'right',
+  },
+  infoValueMuted: {
+    color: Colors.textMuted,
+    fontStyle: 'italic',
   },
   navCard: {
     flexDirection: 'row',
