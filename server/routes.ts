@@ -358,8 +358,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dayStart.setUTCHours(0, 0, 0, 0);
         const dayEnd = new Date(date as string);
         dayEnd.setUTCHours(23, 59, 59, 999);
-        conditions.push(gte(jobs.scheduled_date, dayStart));
-        conditions.push(lte(jobs.scheduled_date, dayEnd));
+        conditions.push(
+          or(
+            and(gte(jobs.scheduled_date, dayStart), lte(jobs.scheduled_date, dayEnd)),
+            sql`${jobs.scheduled_date} IS NULL`
+          )!
+        );
       }
 
       const result = await db
