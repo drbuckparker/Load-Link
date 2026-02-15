@@ -354,10 +354,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (date) {
-        const dayStart = new Date(date as string);
-        dayStart.setUTCHours(0, 0, 0, 0);
-        const dayEnd = new Date(date as string);
-        dayEnd.setUTCHours(23, 59, 59, 999);
+        const dayStart = new Date(date as string + "T00:00:00.000Z");
+        const dayEnd = new Date(date as string + "T23:59:59.999Z");
         conditions.push(gte(jobs.scheduled_date, dayStart));
         conditions.push(lte(jobs.scheduled_date, dayEnd));
       }
@@ -1401,6 +1399,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
+      const { date, status, search } = req.query;
+
+      const conditions: any[] = [eq(jobs.contractor_id, userId)];
+
+      if (date) {
+        const dayStart = new Date(date as string + "T00:00:00.000Z");
+        const dayEnd = new Date(date as string + "T23:59:59.999Z");
+        conditions.push(gte(jobs.scheduled_date, dayStart));
+        conditions.push(lte(jobs.scheduled_date, dayEnd));
+      }
+
+      if (status && status !== "all") {
+        conditions.push(eq(jobs.status, status as any));
+      }
+
+      if (search) {
+        const q = `%${search}%`;
+        conditions.push(
+          or(
+            ilike(jobs.material, q),
+            ilike(jobs.origin_address, q),
+            ilike(jobs.destination_address, q)
+          )!
+        );
+      }
 
       const result = await db
         .select({
@@ -1413,7 +1436,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(jobs)
         .leftJoin(users, eq(jobs.driver_id, users.id))
         .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
-        .where(eq(jobs.contractor_id, userId))
+        .where(and(...conditions))
         .orderBy(desc(jobs.created_at));
 
       const formattedJobs = result.map((r) => ({
