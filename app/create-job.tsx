@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
-import { apiRequest, queryClient } from '@/lib/query-client';
+import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
+import { fetch } from 'expo/fetch';
 
 const JOB_TYPES = [
   { label: 'Single Load', value: 'single_load' },
@@ -60,6 +61,14 @@ export default function CreateJobScreen() {
   const [mapPin, setMapPin] = useState<{ latitude: number; longitude: number } | null>(null);
   const [reversingGeocode, setReversingGeocode] = useState(false);
   const [distance, setDistance] = useState('');
+  const [originSuggestions, setOriginSuggestions] = useState<any[]>([]);
+  const [destSuggestions, setDestSuggestions] = useState<any[]>([]);
+  const [showOriginSuggestions, setShowOriginSuggestions] = useState(false);
+  const [showDestSuggestions, setShowDestSuggestions] = useState(false);
+  const [routeInfo, setRouteInfo] = useState<{ truck_duration_text: string; truck_duration_seconds: number; distance_miles: number } | null>(null);
+  const [fetchingRoute, setFetchingRoute] = useState(false);
+  const originDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scheduledDate, setScheduledDate] = useState('');
   const [showCalendar, setShowCalendar] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
@@ -215,6 +224,107 @@ export default function CreateJobScreen() {
     setReversingGeocode(false);
     setMapPickerTarget(null);
     setMapPin(null);
+  }
+
+  const fetchPlaceSuggestions = useCallback(async (input: string, target: 'origin' | 'destination') => {
+    if (input.trim().length < 2) {
+      if (target === 'origin') setOriginSuggestions([]);
+      else setDestSuggestions([]);
+      return;
+    }
+    try {
+      const baseUrl = getApiUrl();
+      const url = new URL('/api/places/autocomplete', baseUrl);
+      url.searchParams.set('input', input);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        if (target === 'origin') { setOriginSuggestions(data); setShowOriginSuggestions(true); }
+        else { setDestSuggestions(data); setShowDestSuggestions(true); }
+      }
+    } catch {}
+  }, []);
+
+  function handleOriginTextChange(text: string) {
+    setOriginAddress(text);
+    setOriginLat(null);
+    setOriginLng(null);
+    setRouteInfo(null);
+    if (originDebounceRef.current) clearTimeout(originDebounceRef.current);
+    originDebounceRef.current = setTimeout(() => fetchPlaceSuggestions(text, 'origin'), 300);
+  }
+
+  function handleDestTextChange(text: string) {
+    setDestinationAddress(text);
+    setDestLat(null);
+    setDestLng(null);
+    setRouteInfo(null);
+    if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
+    destDebounceRef.current = setTimeout(() => fetchPlaceSuggestions(text, 'destination'), 300);
+  }
+
+  async function selectSuggestion(placeId: string, description: string, target: 'origin' | 'destination') {
+    if (target === 'origin') { setOriginAddress(description); setShowOriginSuggestions(false); setOriginSuggestions([]); }
+    else { setDestinationAddress(description); setShowDestSuggestions(false); setDestSuggestions([]); }
+
+    try {
+      const baseUrl = getApiUrl();
+      const url = new URL('/api/places/details', baseUrl);
+      url.searchParams.set('place_id', placeId);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        if (target === 'origin') {
+          setOriginAddress(data.address || description);
+          setOriginLat(data.lat);
+          setOriginLng(data.lng);
+        } else {
+          setDestinationAddress(data.address || description);
+          setDestLat(data.lat);
+          setDestLng(data.lng);
+        }
+      }
+    } catch {}
+  }
+
+  async function fetchRouteInfo(oLat: number, oLng: number, dLat: number, dLng: number) {
+    setFetchingRoute(true);
+    try {
+      const baseUrl = getApiUrl();
+      const url = new URL('/api/directions', baseUrl);
+      url.searchParams.set('origin_lat', String(oLat));
+      url.searchParams.set('origin_lng', String(oLng));
+      url.searchParams.set('dest_lat', String(dLat));
+      url.searchParams.set('dest_lng', String(dLng));
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setRouteInfo(data);
+        setDistance(String(data.distance_miles));
+      }
+    } catch {}
+    setFetchingRoute(false);
+  }
+
+  useEffect(() => {
+    if (originLat && originLng && destLat && destLng) {
+      fetchRouteInfo(originLat, originLng, destLat, destLng);
+    }
+  }, [originLat, originLng, destLat, destLng]);
+
+  function getEstimatedDaysText() {
+    if (!routeInfo) return null;
+    if (jobType === 'single_load') return 'Less than 1 day';
+    const roundTripMinutes = (routeInfo.truck_duration_seconds * 2) / 60;
+    const tons = parseFloat(totalTonsNeeded) || 0;
+    const truckCap = 20;
+    if (tons <= 0) return 'Enter total tons for estimate';
+    const loads = Math.ceil(tons / truckCap);
+    const totalMinutes = loads * roundTripMinutes;
+    const workDayMinutes = 10 * 60;
+    const days = totalMinutes / workDayMinutes;
+    if (days < 1) return 'Less than 1 day';
+    return `~${Math.ceil(days)} work day${Math.ceil(days) > 1 ? 's' : ''}`;
   }
 
   async function handleSubmit() {
@@ -413,7 +523,7 @@ export default function CreateJobScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowMaterialDropdown(false); setShowCalendar(false); }}
+        onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowMaterialDropdown(false); setShowCalendar(false); setShowOriginSuggestions(false); setShowDestSuggestions(false); }}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
@@ -462,52 +572,148 @@ export default function CreateJobScreen() {
           <Text style={styles.sectionTitle}>LOCATIONS</Text>
           <View style={styles.sectionCard}>
             <View style={styles.labelRow}>
-              <Text style={[styles.label, { marginBottom: 0 }]}>Origin Address</Text>
+              <Text style={[styles.label, { marginBottom: 0 }]}>Pickup Location</Text>
               <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('origin')}>
                 <Ionicons name="location" size={16} color={originLat ? Colors.primary : Colors.textSecondary} />
                 <Text style={[styles.mapPinLinkText, originLat && { color: Colors.primary }]}>
-                  {originLat ? 'Pin Set' : 'Drop Pin'}
+                  {originLat ? 'Pin Set' : 'Drop Pin on Map'}
                 </Text>
               </Pressable>
             </View>
-            <TextInput
-              style={styles.input}
-              placeholder="Pickup location"
-              placeholderTextColor={Colors.textMuted}
-              value={originAddress}
-              onChangeText={(t) => { setOriginAddress(t); setOriginLat(null); setOriginLng(null); }}
-            />
+            <View style={{ zIndex: 10 }}>
+              <View style={styles.addressRow}>
+                <TextInput
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder="Search address or business"
+                  placeholderTextColor={Colors.textMuted}
+                  value={originAddress}
+                  onChangeText={handleOriginTextChange}
+                  onFocus={() => { if (originSuggestions.length > 0) setShowOriginSuggestions(true); }}
+                />
+                {originAddress.length > 0 && (
+                  <Pressable onPress={() => { setOriginAddress(''); setOriginLat(null); setOriginLng(null); setOriginSuggestions([]); setShowOriginSuggestions(false); setRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>
+                    <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                  </Pressable>
+                )}
+              </View>
+              {showOriginSuggestions && originSuggestions.length > 0 && (
+                <View style={styles.suggestionsDropdown}>
+                  {originSuggestions.map((s: any) => (
+                    <Pressable
+                      key={s.place_id}
+                      style={styles.suggestionItem}
+                      onPress={() => selectSuggestion(s.place_id, s.description, 'origin')}
+                    >
+                      <Ionicons name="location-outline" size={16} color={Colors.textSecondary} style={{ marginTop: 2 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestionMain} numberOfLines={1}>
+                          {s.structured?.main_text || s.description}
+                        </Text>
+                        {s.structured?.secondary_text && (
+                          <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                        )}
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+              {originLat && (
+                <View style={styles.coordBadge}>
+                  <Ionicons name="navigate" size={12} color={Colors.primary} />
+                  <Text style={styles.coordText}>{originLat.toFixed(4)}, {originLng?.toFixed(4)}</Text>
+                </View>
+              )}
+            </View>
 
             <View style={[styles.labelRow, { marginTop: 14 }]}>
-              <Text style={[styles.label, { marginBottom: 0 }]}>Destination Address</Text>
+              <Text style={[styles.label, { marginBottom: 0 }]}>Dropoff Location</Text>
               <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('destination')}>
                 <Ionicons name="location" size={16} color={destLat ? Colors.primary : Colors.textSecondary} />
                 <Text style={[styles.mapPinLinkText, destLat && { color: Colors.primary }]}>
-                  {destLat ? 'Pin Set' : 'Drop Pin'}
+                  {destLat ? 'Pin Set' : 'Drop Pin on Map'}
                 </Text>
               </Pressable>
             </View>
-            <TextInput
-              style={styles.input}
-              placeholder="Drop-off location"
-              placeholderTextColor={Colors.textMuted}
-              value={destinationAddress}
-              onChangeText={(t) => { setDestinationAddress(t); setDestLat(null); setDestLng(null); }}
-            />
-
-            <Text style={[styles.label, { marginTop: 14 }]}>Distance</Text>
-            <View style={styles.inputWithSuffix}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="0"
-                placeholderTextColor={Colors.textMuted}
-                value={distance}
-                onChangeText={setDistance}
-                keyboardType="numeric"
-              />
-              <Text style={styles.suffixText}>mi</Text>
+            <View style={{ zIndex: 9 }}>
+              <View style={styles.addressRow}>
+                <TextInput
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder="Search address or business"
+                  placeholderTextColor={Colors.textMuted}
+                  value={destinationAddress}
+                  onChangeText={handleDestTextChange}
+                  onFocus={() => { if (destSuggestions.length > 0) setShowDestSuggestions(true); }}
+                />
+                {destinationAddress.length > 0 && (
+                  <Pressable onPress={() => { setDestinationAddress(''); setDestLat(null); setDestLng(null); setDestSuggestions([]); setShowDestSuggestions(false); setRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>
+                    <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                  </Pressable>
+                )}
+              </View>
+              {showDestSuggestions && destSuggestions.length > 0 && (
+                <View style={styles.suggestionsDropdown}>
+                  {destSuggestions.map((s: any) => (
+                    <Pressable
+                      key={s.place_id}
+                      style={styles.suggestionItem}
+                      onPress={() => selectSuggestion(s.place_id, s.description, 'destination')}
+                    >
+                      <Ionicons name="location-outline" size={16} color={Colors.textSecondary} style={{ marginTop: 2 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestionMain} numberOfLines={1}>
+                          {s.structured?.main_text || s.description}
+                        </Text>
+                        {s.structured?.secondary_text && (
+                          <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                        )}
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+              {destLat && (
+                <View style={styles.coordBadge}>
+                  <Ionicons name="navigate" size={12} color={Colors.primary} />
+                  <Text style={styles.coordText}>{destLat.toFixed(4)}, {destLng?.toFixed(4)}</Text>
+                </View>
+              )}
             </View>
           </View>
+
+          {(routeInfo || fetchingRoute) && (
+            <View style={styles.routeCard}>
+              <View style={styles.routeCardHeader}>
+                <Ionicons name="speedometer-outline" size={18} color={Colors.primary} />
+                <Text style={styles.routeCardTitle}>ESTIMATED DURATION</Text>
+              </View>
+              {fetchingRoute ? (
+                <ActivityIndicator color={Colors.primary} style={{ paddingVertical: 12 }} />
+              ) : routeInfo ? (
+                <>
+                  <View style={styles.routeStatsRow}>
+                    <View style={styles.routeStat}>
+                      <Text style={styles.routeStatValue}>{routeInfo.truck_duration_text}</Text>
+                      <Text style={styles.routeStatLabel}>Per trip</Text>
+                    </View>
+                    <View style={[styles.routeDivider]} />
+                    <View style={styles.routeStat}>
+                      <Text style={styles.routeStatValue}>{routeInfo.distance_miles} mi</Text>
+                      <Text style={styles.routeStatLabel}>Distance</Text>
+                    </View>
+                    <View style={[styles.routeDivider]} />
+                    <View style={styles.routeStat}>
+                      <Text style={styles.routeStatValue}>{getEstimatedDaysText()}</Text>
+                      <Text style={styles.routeStatLabel}>Est. Days</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.routeNote}>Based on 10-hour workdays. Travel time adjusted for dump truck speeds (1.4x).</Text>
+                  {jobType === 'single_load' && (
+                    <Text style={styles.routeHint}>Need to haul multiple loads? Switch to "Full Day" or "Multi-Day" above for full duration estimates.</Text>
+                  )}
+                </>
+              ) : null}
+            </View>
+          )}
         </View>
 
         <View style={styles.section}>
@@ -1062,6 +1268,108 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 14,
     color: Colors.text,
+  },
+  suggestionsDropdown: {
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 6,
+    overflow: 'hidden',
+    maxHeight: 220,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  suggestionMain: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  suggestionSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  coordBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 6,
+    paddingHorizontal: 4,
+  },
+  coordText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.primary,
+  },
+  routeCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.primary + '40',
+    marginTop: 10,
+    padding: 16,
+  },
+  routeCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 14,
+  },
+  routeCardTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
+  routeStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  routeStat: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  routeStatValue: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.text,
+    textAlign: 'center',
+  },
+  routeStatLabel: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 3,
+  },
+  routeDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: Colors.border,
+  },
+  routeNote: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 12,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
+  routeHint: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    color: Colors.primary,
+    marginTop: 10,
+    textAlign: 'center',
+    lineHeight: 17,
   },
   calendarContainer: {
     backgroundColor: Colors.card,
