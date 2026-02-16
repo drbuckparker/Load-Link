@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,15 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Modal,
+  Dimensions,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
+import MapView, { Marker, MapPressEvent } from 'react-native-maps';
+import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient } from '@/lib/query-client';
 
@@ -48,7 +52,14 @@ export default function CreateJobScreen() {
   const [jobType, setJobType] = useState('single_load');
   const [truckType, setTruckType] = useState('end_dump');
   const [originAddress, setOriginAddress] = useState('');
+  const [originLat, setOriginLat] = useState<number | null>(null);
+  const [originLng, setOriginLng] = useState<number | null>(null);
   const [destinationAddress, setDestinationAddress] = useState('');
+  const [destLat, setDestLat] = useState<number | null>(null);
+  const [destLng, setDestLng] = useState<number | null>(null);
+  const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | null>(null);
+  const [mapPin, setMapPin] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [reversingGeocode, setReversingGeocode] = useState(false);
   const [distance, setDistance] = useState('');
   const [scheduledDate, setScheduledDate] = useState('');
   const [pickupTime, setPickupTime] = useState('');
@@ -102,6 +113,63 @@ export default function CreateJobScreen() {
     }
   }
 
+  async function openMapPicker(target: 'origin' | 'destination') {
+    if (Platform.OS !== 'web') {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Location permission helps center the map on your area.');
+      }
+    }
+
+    let initialPin: { latitude: number; longitude: number } | null = null;
+    if (target === 'origin' && originLat && originLng) {
+      initialPin = { latitude: originLat, longitude: originLng };
+    } else if (target === 'destination' && destLat && destLng) {
+      initialPin = { latitude: destLat, longitude: destLng };
+    }
+    setMapPin(initialPin);
+    setMapPickerTarget(target);
+  }
+
+  function handleMapPress(e: MapPressEvent) {
+    setMapPin(e.nativeEvent.coordinate);
+  }
+
+  async function confirmMapPin() {
+    if (!mapPin || !mapPickerTarget) return;
+
+    setReversingGeocode(true);
+    let address = `${mapPin.latitude.toFixed(5)}, ${mapPin.longitude.toFixed(5)}`;
+
+    try {
+      if (Platform.OS !== 'web') {
+        const results = await Location.reverseGeocodeAsync({
+          latitude: mapPin.latitude,
+          longitude: mapPin.longitude,
+        });
+        if (results.length > 0) {
+          const r = results[0];
+          const parts = [r.streetNumber, r.street, r.city, r.region].filter(Boolean);
+          if (parts.length > 0) address = parts.join(', ');
+        }
+      }
+    } catch {}
+
+    if (mapPickerTarget === 'origin') {
+      setOriginAddress(address);
+      setOriginLat(mapPin.latitude);
+      setOriginLng(mapPin.longitude);
+    } else {
+      setDestinationAddress(address);
+      setDestLat(mapPin.latitude);
+      setDestLng(mapPin.longitude);
+    }
+
+    setReversingGeocode(false);
+    setMapPickerTarget(null);
+    setMapPin(null);
+  }
+
   async function handleSubmit() {
     if (!material.trim()) {
       Alert.alert('Required', 'Please enter a material.');
@@ -139,7 +207,11 @@ export default function CreateJobScreen() {
         truck_type: truckType,
         ...(resolvedProjectId ? { project_id: resolvedProjectId } : {}),
         origin_address: originAddress.trim(),
+        ...(originLat ? { origin_lat: originLat } : {}),
+        ...(originLng ? { origin_lng: originLng } : {}),
         destination_address: destinationAddress.trim(),
+        ...(destLat ? { destination_lat: destLat } : {}),
+        ...(destLng ? { destination_lng: destLng } : {}),
         rate: parseFloat(rate),
         rate_type: rateType,
         trucks_needed: trucksNeeded,
@@ -320,22 +392,42 @@ export default function CreateJobScreen() {
           <Text style={styles.sectionTitle}>LOCATIONS</Text>
           <View style={styles.sectionCard}>
             <Text style={styles.label}>Origin Address</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Pickup location"
-              placeholderTextColor={Colors.textMuted}
-              value={originAddress}
-              onChangeText={setOriginAddress}
-            />
+            <View style={styles.addressRow}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="Pickup location"
+                placeholderTextColor={Colors.textMuted}
+                value={originAddress}
+                onChangeText={(t) => { setOriginAddress(t); setOriginLat(null); setOriginLng(null); }}
+              />
+              <Pressable style={styles.mapPinBtn} onPress={() => openMapPicker('origin')}>
+                <Ionicons name="location" size={20} color={originLat ? Colors.primary : Colors.textSecondary} />
+              </Pressable>
+            </View>
+            {originLat && originLng && (
+              <Text style={styles.coordText}>
+                {originLat.toFixed(5)}, {originLng.toFixed(5)}
+              </Text>
+            )}
 
             <Text style={[styles.label, { marginTop: 14 }]}>Destination Address</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Drop-off location"
-              placeholderTextColor={Colors.textMuted}
-              value={destinationAddress}
-              onChangeText={setDestinationAddress}
-            />
+            <View style={styles.addressRow}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="Drop-off location"
+                placeholderTextColor={Colors.textMuted}
+                value={destinationAddress}
+                onChangeText={(t) => { setDestinationAddress(t); setDestLat(null); setDestLng(null); }}
+              />
+              <Pressable style={styles.mapPinBtn} onPress={() => openMapPicker('destination')}>
+                <Ionicons name="location" size={20} color={destLat ? Colors.primary : Colors.textSecondary} />
+              </Pressable>
+            </View>
+            {destLat && destLng && (
+              <Text style={styles.coordText}>
+                {destLat.toFixed(5)}, {destLng.toFixed(5)}
+              </Text>
+            )}
 
             <Text style={[styles.label, { marginTop: 14 }]}>Distance</Text>
             <View style={styles.inputWithSuffix}>
@@ -518,6 +610,72 @@ export default function CreateJobScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      <Modal
+        visible={mapPickerTarget !== null}
+        animationType="slide"
+        onRequestClose={() => { setMapPickerTarget(null); setMapPin(null); }}
+      >
+        <View style={styles.mapContainer}>
+          <View style={[styles.mapHeader, { paddingTop: Platform.OS === 'web' ? 20 : insets.top }]}>
+            <Pressable onPress={() => { setMapPickerTarget(null); setMapPin(null); }} style={styles.backBtn}>
+              <Ionicons name="close" size={24} color={Colors.text} />
+            </Pressable>
+            <Text style={styles.mapHeaderTitle}>
+              {mapPickerTarget === 'origin' ? 'Set Origin' : 'Set Destination'}
+            </Text>
+            <View style={{ width: 40 }} />
+          </View>
+
+          <Text style={styles.mapHint}>Tap the map to drop a pin</Text>
+
+          {Platform.OS !== 'web' ? (
+            <MapView
+              style={styles.map}
+              initialRegion={{
+                latitude: mapPin?.latitude ?? 37.7749,
+                longitude: mapPin?.longitude ?? -122.4194,
+                latitudeDelta: 0.05,
+                longitudeDelta: 0.05,
+              }}
+              onPress={handleMapPress}
+              mapType="standard"
+            >
+              {mapPin && (
+                <Marker coordinate={mapPin} draggable onDragEnd={(e) => setMapPin(e.nativeEvent.coordinate)} />
+              )}
+            </MapView>
+          ) : (
+            <View style={[styles.map, styles.mapWebFallback]}>
+              <Ionicons name="map-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.mapWebText}>Map is available on your mobile device</Text>
+              <Text style={styles.mapWebSub}>Use the address field to type a location on web</Text>
+            </View>
+          )}
+
+          {mapPin && (
+            <View style={[styles.mapFooter, { paddingBottom: Platform.OS === 'web' ? 20 : insets.bottom + 16 }]}>
+              <View style={styles.mapCoordRow}>
+                <Ionicons name="location" size={16} color={Colors.primary} />
+                <Text style={styles.mapCoordText}>
+                  {mapPin.latitude.toFixed(5)}, {mapPin.longitude.toFixed(5)}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.mapConfirmBtn}
+                onPress={confirmMapPin}
+                disabled={reversingGeocode}
+              >
+                {reversingGeocode ? (
+                  <ActivityIndicator color={Colors.primaryForeground} />
+                ) : (
+                  <Text style={styles.mapConfirmText}>CONFIRM LOCATION</Text>
+                )}
+              </Pressable>
+            </View>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -742,6 +900,105 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   submitBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.primaryForeground,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mapPinBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.muted,
+    borderRadius: 10,
+  },
+  coordText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 4,
+    paddingHorizontal: 2,
+  },
+  mapContainer: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  mapHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: Colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  mapHeaderTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    letterSpacing: 1,
+  },
+  mapHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    paddingVertical: 10,
+    backgroundColor: Colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  map: {
+    flex: 1,
+  },
+  mapWebFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: Colors.card,
+  },
+  mapWebText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 16,
+    color: Colors.text,
+  },
+  mapWebSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  mapFooter: {
+    backgroundColor: Colors.card,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  mapCoordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  mapCoordText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  mapConfirmBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapConfirmText: {
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 16,
     color: Colors.primaryForeground,
