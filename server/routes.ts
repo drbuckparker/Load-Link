@@ -2148,6 +2148,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/places/autocomplete", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const input = req.query.input as string;
+      if (!input || input.trim().length < 2) return res.json([]);
+
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) return res.status(500).json({ message: "Google Maps API key not configured" });
+
+      const url = new URL("https://maps.googleapis.com/maps/api/place/autocomplete/json");
+      url.searchParams.set("input", input);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("types", "geocode|establishment");
+      url.searchParams.set("components", "country:us|country:ca");
+
+      const response = await fetch(url.toString());
+      const data = await response.json();
+
+      const predictions = (data.predictions || []).map((p: any) => ({
+        place_id: p.place_id,
+        description: p.description,
+        structured: p.structured_formatting,
+      }));
+
+      return res.json(predictions);
+    } catch (err) {
+      console.error("Places autocomplete error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/places/details", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const placeId = req.query.place_id as string;
+      if (!placeId) return res.status(400).json({ message: "place_id required" });
+
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) return res.status(500).json({ message: "Google Maps API key not configured" });
+
+      const url = new URL("https://maps.googleapis.com/maps/api/place/details/json");
+      url.searchParams.set("place_id", placeId);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("fields", "geometry,formatted_address");
+
+      const response = await fetch(url.toString());
+      const data = await response.json();
+
+      if (data.result) {
+        return res.json({
+          address: data.result.formatted_address,
+          lat: data.result.geometry?.location?.lat,
+          lng: data.result.geometry?.location?.lng,
+        });
+      }
+      return res.status(404).json({ message: "Place not found" });
+    } catch (err) {
+      console.error("Place details error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/directions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { origin_lat, origin_lng, dest_lat, dest_lng } = req.query;
+      if (!origin_lat || !origin_lng || !dest_lat || !dest_lng) {
+        return res.status(400).json({ message: "Origin and destination coordinates required" });
+      }
+
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) return res.status(500).json({ message: "Google Maps API key not configured" });
+
+      const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
+      url.searchParams.set("origin", `${origin_lat},${origin_lng}`);
+      url.searchParams.set("destination", `${dest_lat},${dest_lng}`);
+      url.searchParams.set("key", apiKey);
+
+      const response = await fetch(url.toString());
+      const data = await response.json();
+
+      if (data.routes && data.routes.length > 0) {
+        const leg = data.routes[0].legs[0];
+        const durationSeconds = leg.duration.value;
+        const distanceMeters = leg.distance.value;
+        const distanceMiles = (distanceMeters / 1609.34).toFixed(1);
+        const truckDurationSeconds = Math.round(durationSeconds * 1.4);
+
+        return res.json({
+          duration_seconds: durationSeconds,
+          duration_text: leg.duration.text,
+          truck_duration_seconds: truckDurationSeconds,
+          truck_duration_text: formatDuration(truckDurationSeconds),
+          distance_miles: parseFloat(distanceMiles),
+          distance_text: leg.distance.text,
+        });
+      }
+      return res.status(404).json({ message: "No route found" });
+    } catch (err) {
+      console.error("Directions error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  function formatDuration(totalSeconds: number): string {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.round((totalSeconds % 3600) / 60);
+    if (hours > 0 && minutes > 0) return `${hours} hr ${minutes} min`;
+    if (hours > 0) return `${hours} hr`;
+    return `${minutes} min`;
+  }
+
   const httpServer = createServer(app);
   return httpServer;
 }
