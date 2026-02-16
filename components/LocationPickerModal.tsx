@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, Modal, ActivityIndicator, Platform, KeyboardAvoidingView, FlatList } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, Modal, ActivityIndicator, Platform, ScrollView } from 'react-native';
 import MapView, { Marker, MapPressEvent, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
@@ -104,12 +104,17 @@ export default function LocationPickerModal({
     setSearching(true);
     setShowResults(true);
     try {
-      const results = await Location.geocodeAsync(searchText.trim());
-      const mapped: LocationResult[] = [];
-      for (const r of results.slice(0, 5)) {
-        const addr = await reverseGeocode(r.latitude, r.longitude);
-        mapped.push({ lat: r.latitude, lng: r.longitude, address: addr });
-      }
+      const query = encodeURIComponent(searchText.trim());
+      const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&addressdetails=1&limit=8&countrycodes=us,ca`;
+      const resp = await fetch(url, {
+        headers: { 'User-Agent': 'LoadLinkApp/1.0' },
+      });
+      const data = await resp.json();
+      const mapped: LocationResult[] = data.map((item: any) => ({
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon),
+        address: item.display_name,
+      }));
       setSearchResults(mapped);
       if (mapped.length > 0) {
         const first = mapped[0];
@@ -204,7 +209,7 @@ export default function LocationPickerModal({
         </View>
 
         {showResults && searchResults.length > 0 && (
-          <View style={styles.resultsContainer}>
+          <ScrollView style={styles.resultsContainer} nestedScrollEnabled>
             {searchResults.map((item, index) => (
               <Pressable
                 key={`${item.lat}-${item.lng}-${index}`}
@@ -215,7 +220,7 @@ export default function LocationPickerModal({
                 <Text style={styles.resultText} numberOfLines={2}>{item.address}</Text>
               </Pressable>
             ))}
-          </View>
+          </ScrollView>
         )}
 
         <View style={styles.mapContainer}>
