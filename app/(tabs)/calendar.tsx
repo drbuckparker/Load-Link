@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,10 @@ import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/lib/query-client';
 import { queryClient, getApiUrl } from '@/lib/query-client';
+
+function isContractorRole(role: string): boolean {
+  return role.includes('contractor');
+}
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -59,9 +63,16 @@ export default function CalendarScreen() {
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const isContractor = user?.role ? isContractorRole(user.role) : false;
+
   const availQuery = useQuery<any[]>({
     queryKey: ['/api/availability', `?month=${currentMonth + 1}&year=${currentYear}`],
-    enabled: !!user,
+    enabled: !!user && !isContractor,
+  });
+
+  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> }>({
+    queryKey: ['/api/contractor/calendar-capacity', `?month=${currentMonth + 1}&year=${currentYear}`],
+    enabled: !!user && isContractor,
   });
 
   useEffect(() => {
@@ -272,7 +283,13 @@ export default function CalendarScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-        <Text style={styles.headerTitle}>AVAILABILITY</Text>
+        <Text style={styles.headerTitle}>{isContractor ? 'TRUCK CAPACITY' : 'AVAILABILITY'}</Text>
+        {isContractor && capacityQuery.data && (
+          <View style={styles.fleetBadge}>
+            <MaterialCommunityIcons name="dump-truck" size={14} color={Colors.primary} />
+            <Text style={styles.fleetBadgeText}>{capacityQuery.data.fleetSize} trucks</Text>
+          </View>
+        )}
       </View>
 
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false}>
@@ -301,6 +318,54 @@ export default function CalendarScreen() {
               const key = `${day.year}-${String(day.month + 1).padStart(2, '0')}-${String(day.date).padStart(2, '0')}`;
               const isSelected = selectedDate === key;
 
+              if (isContractor) {
+                const cap = capacityQuery.data?.dailyCapacity?.[key];
+                const fleetSize = capacityQuery.data?.fleetSize || 0;
+                const booked = cap?.booked || 0;
+                const needed = cap?.needed || 0;
+                const jobCount = cap?.jobCount || 0;
+                let capacityStatus: 'full' | 'partial' | 'open' | null = null;
+                if (jobCount > 0) {
+                  if (fleetSize > 0 && booked >= fleetSize) capacityStatus = 'full';
+                  else if (booked > 0) capacityStatus = 'partial';
+                  else capacityStatus = 'open';
+                }
+
+                return (
+                  <Pressable
+                    key={key}
+                    style={[styles.dayCell, isSelected && styles.dayCellSelected]}
+                    onPress={() => { setSelectedDate(key); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                  >
+                    <Text style={[
+                      styles.dayNumber,
+                      isToday && styles.dayNumberToday,
+                    ]}>
+                      {day.date}
+                    </Text>
+                    {capacityStatus === 'full' && (
+                      <View style={styles.capacityDotsRow}>
+                        <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />
+                      </View>
+                    )}
+                    {capacityStatus === 'partial' && (
+                      <View style={styles.capacityDotsRow}>
+                        <View style={[styles.statusDot, { backgroundColor: Colors.warning }]} />
+                      </View>
+                    )}
+                    {capacityStatus === 'open' && (
+                      <View style={styles.capacityDotsRow}>
+                        <View style={[styles.statusDot, { backgroundColor: Colors.success }]} />
+                      </View>
+                    )}
+                    {jobCount > 0 && (
+                      <Text style={styles.truckCountBadge}>{booked}/{needed}</Text>
+                    )}
+                    {isToday && <View style={styles.todayIndicator} />}
+                  </Pressable>
+                );
+              }
+
               return (
                 <Pressable
                   key={key}
@@ -324,22 +389,105 @@ export default function CalendarScreen() {
           </View>
         </View>
 
-        <View style={styles.legendRow}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: Colors.success }]} />
-            <Text style={styles.legendText}>Available</Text>
+        {isContractor ? (
+          <View style={styles.legendRow}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.success }]} />
+              <Text style={styles.legendText}>Open</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.warning }]} />
+              <Text style={styles.legendText}>Partial</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
+              <Text style={styles.legendText}>Full</Text>
+            </View>
           </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
-            <Text style={styles.legendText}>Unavailable</Text>
+        ) : (
+          <View style={styles.legendRow}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.success }]} />
+              <Text style={styles.legendText}>Available</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
+              <Text style={styles.legendText}>Unavailable</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
+              <Text style={styles.legendText}>Committed</Text>
+            </View>
           </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
-            <Text style={styles.legendText}>Committed</Text>
-          </View>
-        </View>
+        )}
 
-        {selectedDate && selectedAvail && (
+        {isContractor && selectedDate && (() => {
+          const cap = capacityQuery.data?.dailyCapacity?.[selectedDate];
+          const fleetSize = capacityQuery.data?.fleetSize || 0;
+          const booked = cap?.booked || 0;
+          const needed = cap?.needed || 0;
+          const jobCount = cap?.jobCount || 0;
+          const remaining = fleetSize > 0 ? Math.max(0, fleetSize - booked) : 0;
+          const pct = fleetSize > 0 ? Math.min(100, Math.round((booked / fleetSize) * 100)) : 0;
+          const barColor = pct >= 100 ? Colors.destructive : pct > 0 ? Colors.warning : Colors.success;
+
+          return (
+            <View style={styles.capacityCard}>
+              <Text style={styles.detailDate}>
+                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+              </Text>
+
+              {fleetSize > 0 && (
+                <View style={styles.capacityBarOuter}>
+                  <View style={[styles.capacityBarInner, { width: `${pct}%`, backgroundColor: barColor }]} />
+                </View>
+              )}
+
+              <View style={styles.capacityStatsRow}>
+                <View style={styles.capacityStat}>
+                  <Text style={styles.capacityStatValue}>{booked}</Text>
+                  <Text style={styles.capacityStatLabel}>Booked</Text>
+                </View>
+                <View style={styles.capacityStatDivider} />
+                <View style={styles.capacityStat}>
+                  <Text style={styles.capacityStatValue}>{needed}</Text>
+                  <Text style={styles.capacityStatLabel}>Needed</Text>
+                </View>
+                <View style={styles.capacityStatDivider} />
+                <View style={styles.capacityStat}>
+                  <Text style={[styles.capacityStatValue, { color: remaining > 0 ? Colors.success : Colors.destructive }]}>{remaining}</Text>
+                  <Text style={styles.capacityStatLabel}>Available</Text>
+                </View>
+                <View style={styles.capacityStatDivider} />
+                <View style={styles.capacityStat}>
+                  <Text style={styles.capacityStatValue}>{jobCount}</Text>
+                  <Text style={styles.capacityStatLabel}>Jobs</Text>
+                </View>
+              </View>
+
+              {fleetSize === 0 && (
+                <View style={styles.noFleetBanner}>
+                  <Ionicons name="information-circle" size={16} color={Colors.warning} />
+                  <Text style={styles.noFleetText}>Set your fleet size in Profile to track capacity</Text>
+                </View>
+              )}
+
+              <Pressable
+                style={styles.detailJobsBtn}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push({ pathname: '/(tabs)', params: { tab: 'jobs', date: selectedDate } } as any);
+                }}
+              >
+                <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
+                <Text style={styles.detailJobsBtnText}>View jobs for this date</Text>
+                <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+              </Pressable>
+            </View>
+          );
+        })()}
+
+        {!isContractor && selectedDate && selectedAvail && (
           <View style={styles.detailCard}>
             <Text style={styles.detailDate}>
               {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
@@ -388,11 +536,13 @@ export default function CalendarScreen() {
         )}
 
         <Text style={styles.helpText}>
-          Tap a date to set your availability. Committed days are locked to accepted jobs.
+          {isContractor
+            ? 'Tap a date to see truck booking details. Numbers show booked/needed trucks.'
+            : 'Tap a date to set your availability. Committed days are locked to accepted jobs.'}
         </Text>
       </ScrollView>
 
-      <Modal
+      {!isContractor && <Modal
         visible={modalVisible}
         transparent
         animationType="fade"
@@ -518,7 +668,7 @@ export default function CalendarScreen() {
             </View>
           </Pressable>
         </Pressable>
-      </Modal>
+      </Modal>}
     </View>
   );
 }
@@ -530,12 +680,29 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   headerTitle: {
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 18,
     color: Colors.text,
     letterSpacing: 2,
+  },
+  fleetBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  fleetBadgeText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.primary,
   },
   scrollContent: { padding: 16 },
   monthNav: {
@@ -901,5 +1068,79 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 14,
     color: Colors.primaryForeground,
+  },
+  capacityDotsRow: {
+    flexDirection: 'row',
+    gap: 2,
+    marginTop: 1,
+  },
+  truckCountBadge: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 8,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  capacityCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    padding: 16,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 12,
+  },
+  capacityBarOuter: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.surface,
+    overflow: 'hidden',
+  },
+  capacityBarInner: {
+    height: '100%',
+    borderRadius: 4,
+    minWidth: 2,
+  },
+  capacityStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  capacityStat: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  capacityStatValue: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 20,
+    color: Colors.text,
+  },
+  capacityStatLabel: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 10,
+    color: Colors.textMuted,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+  },
+  capacityStatDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: Colors.border,
+  },
+  noFleetBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.2)',
+  },
+  noFleetText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.warning,
+    flex: 1,
   },
 });

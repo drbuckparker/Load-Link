@@ -1454,6 +1454,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { month, year } = req.query;
+      if (!month || !year) return res.status(400).json({ message: "month and year required" });
+
+      const m = parseInt(month as string);
+      const y = parseInt(year as string);
+      const monthStart = new Date(Date.UTC(y, m - 1, 1));
+      const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+
+      const [userData] = await db
+        .select({ fleet_size: users.fleet_size })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      const fleetSize = userData?.fleet_size || 0;
+
+      const contractorJobs = await db
+        .select({
+          id: jobs.id,
+          scheduled_date: jobs.scheduled_date,
+          trucks_needed: jobs.trucks_needed,
+          status: jobs.status,
+        })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.contractor_id, userId),
+            gte(jobs.scheduled_date, monthStart),
+            lte(jobs.scheduled_date, monthEnd),
+            or(
+              eq(jobs.status, 'open' as any),
+              eq(jobs.status, 'accepted' as any),
+              eq(jobs.status, 'in_progress' as any),
+              eq(jobs.status, 'completed' as any)
+            )!
+          )
+        );
+
+      const jobIds = contractorJobs.map(j => j.id);
+      let approvedByJob: Record<string, number> = {};
+      if (jobIds.length > 0) {
+        const assignments = await db
+          .select({
+            job_id: jobAssignments.job_id,
+            status: jobAssignments.status,
+          })
+          .from(jobAssignments)
+          .where(
+            and(
+              inArray(jobAssignments.job_id, jobIds),
+              or(
+                eq(jobAssignments.status, 'approved'),
+                eq(jobAssignments.status, 'accepted')
+              )!
+            )
+          );
+        for (const a of assignments) {
+          if (a.job_id) {
+            approvedByJob[a.job_id] = (approvedByJob[a.job_id] || 0) + 1;
+          }
+        }
+      }
+
+      const dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> = {};
+      for (const job of contractorJobs) {
+        if (!job.scheduled_date) continue;
+        const d = new Date(job.scheduled_date);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        if (!dailyCapacity[key]) {
+          dailyCapacity[key] = { booked: 0, needed: 0, jobCount: 0 };
+        }
+        dailyCapacity[key].booked += approvedByJob[job.id] || 0;
+        dailyCapacity[key].needed += job.trucks_needed || 1;
+        dailyCapacity[key].jobCount += 1;
+      }
+
+      return res.json({ fleetSize, dailyCapacity });
+    } catch (err) {
+      console.error("Contractor calendar capacity error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
