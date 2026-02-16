@@ -131,3 +131,8 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Removed all mock data arrays, kept interfaces and utility functions
 - Added password reset flow via Resend email (6-char code, 30min expiry)
 - Added set-password flow for web accounts using Replit auth
+- Added Google Places Autocomplete for pickup/dropoff location inputs with suggestions dropdown
+- Added route duration estimator card (per trip time with 1.4x dump truck speed adjustment, distance, estimated work days)
+- API endpoints: `/api/places/autocomplete`, `/api/places/details`, `/api/directions`
+- Calendar date picker for scheduled date (Month Day, Year format)
+- Materials autocomplete dropdown from past jobs

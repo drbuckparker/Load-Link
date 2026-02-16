@@ -2130,14 +2130,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
-      const { name, description } = req.body;
+      const { name } = req.body;
 
       const [project] = await db
         .insert(contractorProjects)
         .values({
           contractor_id: userId,
           name,
-          description,
         })
         .returning();
 

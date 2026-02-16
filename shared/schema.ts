@@ -351,9 +351,17 @@ export const contractorProjects = pgTable("contractor_projects", {
     .default(sql`gen_random_uuid()`),
   contractor_id: varchar("contractor_id").references(() => users.id),
   name: text("name"),
-  description: text("description"),
+  job_number: text("job_number"),
+  awarded_amount: numeric("awarded_amount"),
+  status: text("status").default("active"),
+  notes: text("notes"),
   created_at: timestamp("created_at").defaultNow(),
-  updated_at: timestamp("updated_at"),
+  updated_at: timestamp("updated_at").defaultNow(),
+  site_address: text("site_address"),
+  site_lat: numeric("site_lat"),
+  site_lng: numeric("site_lng"),
+  site_address_type: text("site_address_type").default("dropoff"),
+  deleted_at: timestamp("deleted_at"),
 });
 
 export const insertUserSchema = createInsertSchema(users).pick({
