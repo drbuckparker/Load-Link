@@ -1,7 +1,8 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch } from 'react-native';
+import { useState } from 'react';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
@@ -47,6 +48,8 @@ export default function DashboardScreen() {
 
   const unreadCount = (notifsData || []).filter((n: any) => !(n.is_read ?? n.isRead)).length;
 
+  const [switchingRole, setSwitchingRole] = useState(false);
+
   async function handleStatusToggle(value: boolean) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
@@ -54,6 +57,18 @@ export default function DashboardScreen() {
     } catch {}
     await updateUser({ isConnected: value });
     queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+  }
+
+  async function handleRoleToggle(newRole: string) {
+    if (newRole === role || switchingRole) return;
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSwitchingRole(true);
+    try {
+      await apiRequest('PUT', '/api/profile/role', { role: newRole });
+      await updateUser({ role: newRole });
+      queryClient.invalidateQueries();
+    } catch {}
+    setSwitchingRole(false);
   }
 
   if (!user) return null;
@@ -155,6 +170,26 @@ export default function DashboardScreen() {
             )}
           </Pressable>
         </View>
+      </View>
+
+      <View style={styles.roleToggleContainer}>
+        <Pressable
+          style={[styles.roleToggleBtn, role === 'trucking_company' && styles.roleToggleBtnActive]}
+          onPress={() => handleRoleToggle('trucking_company')}
+          disabled={switchingRole}
+        >
+          <MaterialCommunityIcons name="dump-truck" size={16} color={role === 'trucking_company' ? Colors.primaryForeground : Colors.textMuted} />
+          <Text style={[styles.roleToggleText, role === 'trucking_company' && styles.roleToggleTextActive]}>Fleet Manager</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.roleToggleBtn, isContractorRole(role) && styles.roleToggleBtnActive]}
+          onPress={() => handleRoleToggle('contractor')}
+          disabled={switchingRole}
+        >
+          <Ionicons name="construct" size={16} color={isContractorRole(role) ? Colors.primaryForeground : Colors.textMuted} />
+          <Text style={[styles.roleToggleText, isContractorRole(role) && styles.roleToggleTextActive]}>Construction Co</Text>
+        </Pressable>
+        {switchingRole && <ActivityIndicator size="small" color={Colors.primary} style={styles.roleSpinner} />}
       </View>
 
       <ScrollView
@@ -369,6 +404,41 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  roleToggleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginTop: 8,
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    padding: 3,
+    gap: 3,
+  },
+  roleToggleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  roleToggleBtnActive: {
+    backgroundColor: Colors.primary,
+  },
+  roleToggleText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 12,
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+  },
+  roleToggleTextActive: {
+    color: Colors.primaryForeground,
+  },
+  roleSpinner: {
+    position: 'absolute',
+    right: 12,
   },
   findLoadsBtn: {
     backgroundColor: Colors.primary,
