@@ -10,6 +10,8 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Modal,
+  FlatList,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -42,6 +44,7 @@ export default function CreateJobScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   const [projectId, setProjectId] = useState('');
+  const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [material, setMaterial] = useState('');
   const [jobType, setJobType] = useState('single_load');
   const [truckType, setTruckType] = useState('end_dump');
@@ -66,6 +69,13 @@ export default function CreateJobScreen() {
   const { data: projects = [] } = useQuery<any[]>({
     queryKey: ['/api/projects'],
   });
+
+  const selectedProject = projects.find((p: any) => String(p.id) === projectId);
+
+  function selectProject(id: string) {
+    setProjectId(id);
+    setShowProjectDropdown(false);
+  }
 
   async function handleSubmit() {
     if (!material.trim()) {
@@ -162,47 +172,95 @@ export default function CreateJobScreen() {
         <View style={{ width: 40 }} />
       </View>
 
+      <Pressable
+        style={styles.projectBar}
+        onPress={() => setShowProjectDropdown(true)}
+      >
+        <View style={styles.projectBarInner}>
+          <Ionicons name="folder-outline" size={18} color={selectedProject ? Colors.primary : Colors.textMuted} />
+          <Text
+            style={[
+              styles.projectBarText,
+              selectedProject && styles.projectBarTextActive,
+            ]}
+            numberOfLines={1}
+          >
+            {selectedProject ? selectedProject.name : 'Select Project'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
+      </Pressable>
+
+      <Modal
+        visible={showProjectDropdown}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowProjectDropdown(false)}
+      >
+        <Pressable style={styles.dropdownOverlay} onPress={() => setShowProjectDropdown(false)}>
+          <View style={[styles.dropdownContainer, { marginTop: Platform.OS === 'web' ? 130 : insets.top + 100 }]}>
+            <Text style={styles.dropdownTitle}>SELECT PROJECT</Text>
+
+            <Pressable
+              style={[styles.dropdownItem, !projectId && styles.dropdownItemActive]}
+              onPress={() => selectProject('')}
+            >
+              <Ionicons
+                name="remove-circle-outline"
+                size={20}
+                color={!projectId ? Colors.primary : Colors.textMuted}
+              />
+              <Text style={[styles.dropdownItemText, !projectId && styles.dropdownItemTextActive]}>
+                No Project
+              </Text>
+              {!projectId && <Ionicons name="checkmark" size={18} color={Colors.primary} />}
+            </Pressable>
+
+            <FlatList
+              data={projects}
+              keyExtractor={(item: any) => String(item.id)}
+              style={{ maxHeight: 300 }}
+              renderItem={({ item }: { item: any }) => {
+                const isSelected = projectId === String(item.id);
+                return (
+                  <Pressable
+                    style={[styles.dropdownItem, isSelected && styles.dropdownItemActive]}
+                    onPress={() => selectProject(String(item.id))}
+                  >
+                    <Ionicons
+                      name="folder"
+                      size={20}
+                      color={isSelected ? Colors.primary : Colors.textSecondary}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextActive]}>
+                        {item.name}
+                      </Text>
+                      {item.job_count > 0 && (
+                        <Text style={styles.dropdownItemSub}>
+                          {item.job_count} job{item.job_count !== 1 ? 's' : ''}
+                        </Text>
+                      )}
+                    </View>
+                    {isSelected && <Ionicons name="checkmark" size={18} color={Colors.primary} />}
+                  </Pressable>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={styles.dropdownEmpty}>
+                  <Text style={styles.dropdownEmptyText}>No projects yet</Text>
+                </View>
+              }
+            />
+          </View>
+        </Pressable>
+      </Modal>
+
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {projects.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>PROJECT</Text>
-            <View style={styles.sectionCard}>
-              <Text style={styles.label}>Assign to Project</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-                <Pressable
-                  style={[
-                    styles.chip,
-                    !projectId && styles.chipActive,
-                  ]}
-                  onPress={() => setProjectId('')}
-                >
-                  <Text style={[styles.chipText, !projectId && styles.chipTextActive]}>
-                    None
-                  </Text>
-                </Pressable>
-                {projects.map((p: any) => (
-                  <Pressable
-                    key={p.id}
-                    style={[
-                      styles.chip,
-                      projectId === String(p.id) && styles.chipActive,
-                    ]}
-                    onPress={() => setProjectId(String(p.id))}
-                  >
-                    <Text style={[styles.chipText, projectId === String(p.id) && styles.chipTextActive]}>
-                      {p.name || p.project_name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            </View>
-          </View>
-        )}
-
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
           <View style={styles.sectionCard}>
@@ -454,6 +512,93 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: Colors.text,
     letterSpacing: 1,
+  },
+  projectBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.card,
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingHorizontal: 14,
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  projectBarInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  projectBarText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textMuted,
+    flex: 1,
+  },
+  projectBarTextActive: {
+    color: Colors.text,
+    fontFamily: 'Inter_500Medium',
+  },
+  dropdownOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  dropdownContainer: {
+    backgroundColor: Colors.card,
+    marginHorizontal: 20,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: 'hidden',
+  },
+  dropdownTitle: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    letterSpacing: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 10,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  dropdownItemActive: {
+    backgroundColor: Colors.primaryLight,
+  },
+  dropdownItemText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: Colors.text,
+    flex: 1,
+  },
+  dropdownItemTextActive: {
+    color: Colors.primary,
+  },
+  dropdownItemSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  dropdownEmpty: {
+    paddingVertical: 24,
+    alignItems: 'center',
+  },
+  dropdownEmptyText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textMuted,
   },
   scrollContent: {
     padding: 16,
