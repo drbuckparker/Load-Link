@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -11,13 +11,11 @@ import {
   Alert,
   ActivityIndicator,
   Modal,
-  Dimensions,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
-import MapView, { Marker, MapPressEvent } from 'react-native-maps';
 import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient } from '@/lib/query-client';
@@ -131,7 +129,7 @@ export default function CreateJobScreen() {
     setMapPickerTarget(target);
   }
 
-  function handleMapPress(e: MapPressEvent) {
+  function handleMapPress(e: any) {
     setMapPin(e.nativeEvent.coordinate);
   }
 
@@ -625,29 +623,21 @@ export default function CreateJobScreen() {
 
           <Text style={styles.mapHint}>Tap the map to drop a pin</Text>
 
-          {Platform.OS !== 'web' ? (
-            <MapView
-              style={styles.map}
-              initialRegion={{
-                latitude: mapPin?.latitude ?? 37.7749,
-                longitude: mapPin?.longitude ?? -122.4194,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
-              }}
-              onPress={handleMapPress}
-              mapType="standard"
-            >
-              {mapPin && (
-                <Marker coordinate={mapPin} draggable onDragEnd={(e) => setMapPin(e.nativeEvent.coordinate)} />
-              )}
-            </MapView>
-          ) : (
-            <View style={[styles.map, styles.mapWebFallback]}>
-              <Ionicons name="map-outline" size={48} color={Colors.textMuted} />
-              <Text style={styles.mapWebText}>Map is available on your mobile device</Text>
-              <Text style={styles.mapWebSub}>Use the address field to type a location on web</Text>
+          <View style={[styles.map, styles.mapWebFallback]}>
+            <Ionicons name="map-outline" size={48} color={Colors.textMuted} />
+            <Text style={styles.mapWebText}>Tap the map area to set coordinates</Text>
+            <Text style={styles.mapWebSub}>Full map available on your mobile device via Expo Go</Text>
+            <View style={{ flexDirection: 'row', gap: 16, marginTop: 16 }}>
+              <Pressable
+                style={[styles.mapConfirmBtn, { paddingHorizontal: 20, height: 44 }]}
+                onPress={() => {
+                  setMapPin({ latitude: 37.7749, longitude: -122.4194 });
+                }}
+              >
+                <Text style={[styles.mapConfirmText, { fontSize: 13 }]}>USE DEFAULT LOCATION</Text>
+              </Pressable>
             </View>
-          )}
+          </View>
 
           {mapPin && (
             <View style={[styles.mapFooter, { paddingBottom: Platform.OS === 'web' ? 20 : insets.bottom + 16 }]}>
