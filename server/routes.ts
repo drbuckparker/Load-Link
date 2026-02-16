@@ -2162,7 +2162,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       url.searchParams.set("components", "country:us|country:ca");
 
       const response = await fetch(url.toString());
-      const data = await response.json();
+      const data = await response.json() as any;
+
+      if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+        console.error("Places API status:", data.status, data.error_message);
+      }
 
       const predictions = (data.predictions || []).map((p: any) => ({
         place_id: p.place_id,
