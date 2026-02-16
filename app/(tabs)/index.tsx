@@ -38,7 +38,6 @@ export default function DashboardScreen() {
 
   const { data: dashboard, isLoading } = useQuery<DashboardData>({
     queryKey: ['/api/dashboard'],
-    enabled: !contractor,
   });
 
   const { data: contractorJobs } = useQuery<any[]>({
