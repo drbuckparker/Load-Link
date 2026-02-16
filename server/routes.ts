@@ -2063,6 +2063,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============ MATERIALS (distinct from user's jobs) ============
+
+  app.get("/api/materials", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const result = await db
+        .selectDistinct({ material: jobs.material })
+        .from(jobs)
+        .where(eq(jobs.contractor_id, userId))
+        .orderBy(jobs.material);
+
+      const materials = result
+        .map((r) => r.material)
+        .filter((m): m is string => !!m && m.trim().length > 0);
+
+      return res.json(materials);
+    } catch (err) {
+      console.error("Materials error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   // ============ CONTRACTOR PROJECTS ============
 
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {

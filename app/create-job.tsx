@@ -47,6 +47,7 @@ export default function CreateJobScreen() {
   const [projectName, setProjectName] = useState('');
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [material, setMaterial] = useState('');
+  const [showMaterialDropdown, setShowMaterialDropdown] = useState(false);
   const [jobType, setJobType] = useState('single_load');
   const [truckType, setTruckType] = useState('end_dump');
   const [originAddress, setOriginAddress] = useState('');
@@ -77,6 +78,16 @@ export default function CreateJobScreen() {
   const { data: projects = [] } = useQuery<any[]>({
     queryKey: ['/api/projects'],
   });
+
+  const { data: pastMaterials = [] } = useQuery<string[]>({
+    queryKey: ['/api/materials'],
+  });
+
+  const filteredMaterials = material.trim()
+    ? pastMaterials.filter((m) =>
+        m.toLowerCase().includes(material.toLowerCase()) && m.toLowerCase() !== material.toLowerCase()
+      )
+    : pastMaterials;
 
   const selectedProject = projects.find((p: any) => String(p.id) === projectId);
 
@@ -364,19 +375,42 @@ export default function CreateJobScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        onScrollBeginDrag={() => setShowProjectDropdown(false)}
+        onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowMaterialDropdown(false); }}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
           <View style={styles.sectionCard}>
             <Text style={styles.label}>Material</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Gravel, Sand, Topsoil"
-              placeholderTextColor={Colors.textMuted}
-              value={material}
-              onChangeText={setMaterial}
-            />
+            <View style={{ zIndex: 5 }}>
+              <View style={styles.addressRow}>
+                <TextInput
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder="e.g. Gravel, Sand, Topsoil"
+                  placeholderTextColor={Colors.textMuted}
+                  value={material}
+                  onChangeText={(t) => { setMaterial(t); if (t.trim() && !showMaterialDropdown) setShowMaterialDropdown(true); }}
+                  onFocus={() => { if (pastMaterials.length > 0) setShowMaterialDropdown(true); }}
+                />
+                {pastMaterials.length > 0 && (
+                  <Pressable onPress={() => setShowMaterialDropdown(!showMaterialDropdown)} hitSlop={8} style={{ paddingHorizontal: 6 }}>
+                    <Ionicons name={showMaterialDropdown ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.textSecondary} />
+                  </Pressable>
+                )}
+              </View>
+              {showMaterialDropdown && filteredMaterials.length > 0 && (
+                <View style={styles.materialDropdown}>
+                  {filteredMaterials.map((m) => (
+                    <Pressable
+                      key={m}
+                      style={styles.materialDropdownItem}
+                      onPress={() => { setMaterial(m); setShowMaterialDropdown(false); }}
+                    >
+                      <Text style={styles.materialDropdownText}>{m}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </View>
 
             <Text style={[styles.label, { marginTop: 14 }]}>Job Type</Text>
             {renderChips(JOB_TYPES, jobType, setJobType)}
@@ -907,6 +941,30 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 12,
     color: Colors.textSecondary,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  materialDropdown: {
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 6,
+    overflow: 'hidden',
+    maxHeight: 200,
+  },
+  materialDropdownItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  materialDropdownText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.text,
   },
   mapContainer: {
     flex: 1,
