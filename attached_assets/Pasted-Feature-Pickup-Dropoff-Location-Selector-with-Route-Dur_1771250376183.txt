@@ -1,0 +1,38 @@
+Feature: Pickup & Dropoff Location Selector with Route Duration Estimator
+
+Overview:
+A location input component used when posting a new job/load. It allows the user to set a Pickup Location and a Dropoff Location, then automatically calculates and displays the estimated trip duration and number of work days based on the route between the two points.
+
+Pickup Location Input:
+
+A text input field with Google Places Autocomplete. The user can type an address or business name and select from autocomplete suggestions.
+Below the input, a "Drop Pin on Map" toggle button. When clicked, it reveals an interactive Google Map where the user can click or drag a pin to set a precise location (useful for job sites without a street address).
+Once a location is set (either by autocomplete or map pin), the resolved GPS coordinates are displayed next to the toggle (e.g., "Coordinates: 43.1588, -111.0384").
+A clear (X) button to reset the field.
+Dropoff Location Input:
+
+Identical behavior to the Pickup input — Google Places Autocomplete plus a "Drop Pin on Map" option.
+When the pin is placed on the map, it displays as "Dropped Pin (lat, lng)" in the text field and shows the coordinates.
+The map shows a draggable orange circle marker. A tooltip reads "Click map or drag pin to set location."
+Map Behavior:
+
+Uses the Google Maps JavaScript API with a dark/night-mode styled map.
+Map defaults to a regional center (e.g., the area around the user's typical work region).
+Supports Map and Satellite view toggle.
+Pin is draggable — coordinates update in real time as the user moves it.
+Toggle button text switches between "Drop Pin on Map" (map hidden) and "Hide Map" (map visible).
+Estimated Duration Calculator:
+
+Once both Pickup and Dropoff locations are set, the system automatically calculates route information using the Google Maps Directions API.
+Displays an "Estimated Duration" card below the locations showing:
+Per trip time — the estimated one-way travel time (e.g., "1 hr 29 min"), adjusted for dump truck speeds (applies a 1.4x multiplier to the standard driving time to account for slower heavy vehicle speeds).
+Est. Days — the estimated number of work days to complete the job, calculated based on 10-hour workdays. For a single load, this shows "Less than 1 day." For Full Day or Multi-Day job types, it factors in total material tonnage, truck capacity, and round-trip travel time to estimate the number of days.
+A note: "Based on 10-hour workdays. Travel time adjusted for dump truck speeds."
+If the job type is "Single Load," a prompt suggests: "Need to haul multiple loads? Switch to 'Full Day Job' or 'Multi-Day Job' above for full duration estimates."
+Technical Details:
+
+Google Maps JavaScript API with Places library (for autocomplete) and Directions service (for route calculation).
+Coordinates stored as separate latitude and longitude decimal values.
+The dump truck speed adjustment multiplier is 1.4x applied to the Google-estimated travel duration.
+Estimated days formula: (totalTons / truckCapacityTons) * roundTripMinutes / (10 * 60) for multi-load jobs.
+Dark map style to match the app's dark UI theme.
