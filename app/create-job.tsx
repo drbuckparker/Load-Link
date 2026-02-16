@@ -61,6 +61,9 @@ export default function CreateJobScreen() {
   const [reversingGeocode, setReversingGeocode] = useState(false);
   const [distance, setDistance] = useState('');
   const [scheduledDate, setScheduledDate] = useState('');
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
+  const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
   const [pickupTime, setPickupTime] = useState('');
   const [estimatedDays, setEstimatedDays] = useState('');
   const [includesWeekends, setIncludesWeekends] = useState(false);
@@ -88,6 +91,41 @@ export default function CreateJobScreen() {
         m.toLowerCase().includes(material.toLowerCase()) && m.toLowerCase() !== material.toLowerCase()
       )
     : pastMaterials;
+
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  function formatDisplayDate(isoDate: string) {
+    if (!isoDate) return '';
+    const [y, m, d] = isoDate.split('-').map(Number);
+    return `${MONTH_NAMES[m - 1]} ${d}, ${y}`;
+  }
+
+  function getCalendarDays() {
+    const firstDay = new Date(calendarYear, calendarMonth, 1).getDay();
+    const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+    const days: (number | null)[] = [];
+    for (let i = 0; i < firstDay; i++) days.push(null);
+    for (let d = 1; d <= daysInMonth; d++) days.push(d);
+    return days;
+  }
+
+  function selectCalendarDate(day: number) {
+    const m = String(calendarMonth + 1).padStart(2, '0');
+    const d = String(day).padStart(2, '0');
+    setScheduledDate(`${calendarYear}-${m}-${d}`);
+    setShowCalendar(false);
+  }
+
+  function prevMonth() {
+    if (calendarMonth === 0) { setCalendarMonth(11); setCalendarYear(calendarYear - 1); }
+    else setCalendarMonth(calendarMonth - 1);
+  }
+
+  function nextMonth() {
+    if (calendarMonth === 11) { setCalendarMonth(0); setCalendarYear(calendarYear + 1); }
+    else setCalendarMonth(calendarMonth + 1);
+  }
 
   const selectedProject = projects.find((p: any) => String(p.id) === projectId);
 
@@ -375,7 +413,7 @@ export default function CreateJobScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowMaterialDropdown(false); }}
+        onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowMaterialDropdown(false); setShowCalendar(false); }}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
@@ -476,13 +514,72 @@ export default function CreateJobScreen() {
           <Text style={styles.sectionTitle}>SCHEDULE</Text>
           <View style={styles.sectionCard}>
             <Text style={styles.label}>Scheduled Date</Text>
-            <TextInput
+            <Pressable
               style={styles.input}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor={Colors.textMuted}
-              value={scheduledDate}
-              onChangeText={setScheduledDate}
-            />
+              onPress={() => {
+                setShowCalendar(!showCalendar);
+                setShowMaterialDropdown(false);
+                setShowProjectDropdown(false);
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 15, color: scheduledDate ? Colors.text : Colors.textMuted }}>
+                  {scheduledDate ? formatDisplayDate(scheduledDate) : 'Select a date'}
+                </Text>
+                <Ionicons name="calendar-outline" size={18} color={Colors.textSecondary} />
+              </View>
+            </Pressable>
+            {showCalendar && (
+              <View style={styles.calendarContainer}>
+                <View style={styles.calendarHeader}>
+                  <Pressable onPress={prevMonth} hitSlop={12} style={styles.calendarArrow}>
+                    <Ionicons name="chevron-back" size={20} color={Colors.text} />
+                  </Pressable>
+                  <Text style={styles.calendarTitle}>
+                    {MONTH_NAMES[calendarMonth]} {calendarYear}
+                  </Text>
+                  <Pressable onPress={nextMonth} hitSlop={12} style={styles.calendarArrow}>
+                    <Ionicons name="chevron-forward" size={20} color={Colors.text} />
+                  </Pressable>
+                </View>
+                <View style={styles.calendarDayLabels}>
+                  {DAY_LABELS.map((label) => (
+                    <Text key={label} style={styles.calendarDayLabel}>{label}</Text>
+                  ))}
+                </View>
+                <View style={styles.calendarGrid}>
+                  {getCalendarDays().map((day, i) => {
+                    if (day === null) return <View key={`empty-${i}`} style={styles.calendarCell} />;
+                    const iso = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                    const isSelected = iso === scheduledDate;
+                    const today = new Date();
+                    const isToday = day === today.getDate() && calendarMonth === today.getMonth() && calendarYear === today.getFullYear();
+                    const isPast = new Date(calendarYear, calendarMonth, day) < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                    return (
+                      <Pressable
+                        key={day}
+                        style={[
+                          styles.calendarCell,
+                          isSelected && styles.calendarCellSelected,
+                          isToday && !isSelected && styles.calendarCellToday,
+                        ]}
+                        onPress={() => !isPast && selectCalendarDate(day)}
+                        disabled={isPast}
+                      >
+                        <Text style={[
+                          styles.calendarDayText,
+                          isSelected && styles.calendarDayTextSelected,
+                          isPast && { opacity: 0.3 },
+                          isToday && !isSelected && { color: Colors.primary },
+                        ]}>
+                          {day}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
 
             <Text style={[styles.label, { marginTop: 14 }]}>Pickup Time</Text>
             <TextInput
@@ -965,6 +1062,69 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 14,
     color: Colors.text,
+  },
+  calendarContainer: {
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 10,
+    padding: 14,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  calendarArrow: {
+    padding: 6,
+  },
+  calendarTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    textTransform: 'uppercase',
+  },
+  calendarDayLabels: {
+    flexDirection: 'row',
+    marginBottom: 6,
+  },
+  calendarDayLabel: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    color: Colors.textMuted,
+    textTransform: 'uppercase',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarCell: {
+    width: '14.28%' as any,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarCellSelected: {
+    backgroundColor: Colors.primary,
+    borderRadius: 20,
+  },
+  calendarCellToday: {
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: 20,
+  },
+  calendarDayText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  calendarDayTextSelected: {
+    color: '#000',
+    fontFamily: 'Inter_700Bold',
   },
   mapContainer: {
     flex: 1,
