@@ -1492,7 +1492,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             .select()
             .from(driverVehicles)
             .where(eq(driverVehicles.driver_id, driverId))
-            .orderBy(driverVehicles.is_primary)
+            .orderBy(desc(driverVehicles.is_primary))
             .limit(1);
           if (vehicles.length > 0) vehicle = vehicles[0];
         }

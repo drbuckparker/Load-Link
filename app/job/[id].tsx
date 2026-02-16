@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -138,6 +138,7 @@ export default function JobDetailScreen() {
   const [jobStatus, setJobStatus] = useState<string>('open');
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [selectedDriver, setSelectedDriver] = useState<Assignment | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -493,12 +494,15 @@ export default function JobDetailScreen() {
             <Text style={styles.sectionTitle}>DRIVER APPLICATIONS ({assignments.length})</Text>
             {pendingAssignments.length > 0 ? (
               pendingAssignments.map(a => (
-                <View key={a.id} style={styles.assignmentCard}>
+                <Pressable key={a.id} style={styles.assignmentCard} onPress={() => setSelectedDriver(a)}>
                   <View style={styles.assignmentInfo}>
                     <View style={styles.driverAvatar}>
                       <Text style={styles.driverAvatarText}>{a.driverName.charAt(0)}</Text>
                     </View>
                     <View style={{ flex: 1 }}>
+                      {a.truckingCompanyName ? (
+                        <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
+                      ) : null}
                       <Text style={styles.driverNameText}>{a.driverName}</Text>
                       <View style={styles.driverMeta}>
                         {a.driverTruckType ? (
@@ -513,42 +517,55 @@ export default function JobDetailScreen() {
                             <Text style={styles.driverMetaText}>{a.driverRating.toFixed(1)}</Text>
                           </View>
                         )}
+                        {a.vehicle ? (
+                          <View style={styles.driverMetaItem}>
+                            <Ionicons name="car" size={12} color={Colors.textMuted} />
+                            <Text style={styles.driverMetaText}>
+                              {[a.vehicle.year, a.vehicle.make, a.vehicle.model].filter(Boolean).join(' ')}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
                     </View>
+                    <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
                   </View>
                   <View style={styles.assignmentActions}>
                     <Pressable
                       style={styles.approveBtn}
-                      onPress={() => handleApproveAssignment(a.id)}
+                      onPress={(e) => { e.stopPropagation(); handleApproveAssignment(a.id); }}
                     >
                       <Ionicons name="checkmark" size={20} color="#fff" />
                     </Pressable>
                     <Pressable
                       style={styles.rejectBtn}
-                      onPress={() => handleRejectAssignment(a.id)}
+                      onPress={(e) => { e.stopPropagation(); handleRejectAssignment(a.id); }}
                     >
                       <Ionicons name="close" size={20} color="#fff" />
                     </Pressable>
                   </View>
-                </View>
+                </Pressable>
               ))
             ) : approvedAssignments.length > 0 ? (
               approvedAssignments.map(a => (
-                <View key={a.id} style={[styles.assignmentCard, { borderColor: 'rgba(34, 197, 94, 0.3)' }]}>
+                <Pressable key={a.id} style={[styles.assignmentCard, { borderColor: 'rgba(34, 197, 94, 0.3)' }]} onPress={() => setSelectedDriver(a)}>
                   <View style={styles.assignmentInfo}>
                     <View style={[styles.driverAvatar, { borderColor: Colors.success }]}>
                       <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{a.driverName.charAt(0)}</Text>
                     </View>
                     <View style={{ flex: 1 }}>
+                      {a.truckingCompanyName ? (
+                        <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
+                      ) : null}
                       <Text style={styles.driverNameText}>{a.driverName}</Text>
                       <Text style={[styles.driverMetaText, { color: Colors.success }]}>Approved</Text>
                     </View>
+                    <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
                   </View>
                   <View style={[styles.badge, { backgroundColor: Colors.successBg }]}>
                     <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
                     <Text style={[styles.badgeText, { color: Colors.success }]}>APPROVED</Text>
                   </View>
-                </View>
+                </Pressable>
               ))
             ) : (
               <View style={styles.noAssignments}>
@@ -599,6 +616,138 @@ export default function JobDetailScreen() {
           </Pressable>
         )}
       </ScrollView>
+
+      <Modal
+        visible={selectedDriver !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSelectedDriver(null)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setSelectedDriver(null)}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            {selectedDriver && (
+              <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
+                <View style={styles.modalHeader}>
+                  <View style={styles.modalAvatar}>
+                    <Text style={styles.modalAvatarText}>{selectedDriver.driverName.charAt(0)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    {selectedDriver.truckingCompanyName ? (
+                      <View style={styles.modalCompanyRow}>
+                        <Ionicons name="business" size={13} color={Colors.primary} />
+                        <Text style={styles.modalCompanyText}>{selectedDriver.truckingCompanyName}</Text>
+                      </View>
+                    ) : null}
+                    <Text style={styles.modalDriverName}>{selectedDriver.driverName}</Text>
+                    {selectedDriver.driverRating > 0 && (
+                      <View style={styles.modalRatingRow}>
+                        <Ionicons name="star" size={14} color={Colors.warning} />
+                        <Text style={styles.modalRatingText}>{selectedDriver.driverRating.toFixed(1)} rating</Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+
+                {(selectedDriver.driverPhone || selectedDriver.driverEmail) && (
+                  <View style={styles.modalSection}>
+                    <Text style={styles.modalSectionTitle}>CONTACT</Text>
+                    {selectedDriver.driverPhone ? (
+                      <View style={styles.modalDetailRow}>
+                        <Ionicons name="call" size={16} color={Colors.textMuted} />
+                        <Text style={styles.modalDetailText}>{selectedDriver.driverPhone}</Text>
+                      </View>
+                    ) : null}
+                    {selectedDriver.driverEmail ? (
+                      <View style={styles.modalDetailRow}>
+                        <Ionicons name="mail" size={16} color={Colors.textMuted} />
+                        <Text style={styles.modalDetailText}>{selectedDriver.driverEmail}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                )}
+
+                {selectedDriver.vehicle && (
+                  <View style={styles.modalSection}>
+                    <Text style={styles.modalSectionTitle}>VEHICLE</Text>
+                    <View style={styles.modalVehicleCard}>
+                      <MaterialCommunityIcons name="dump-truck" size={28} color={Colors.primary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.modalVehicleTitle}>
+                          {[selectedDriver.vehicle.year, selectedDriver.vehicle.make, selectedDriver.vehicle.model].filter(Boolean).join(' ')}
+                        </Text>
+                        {selectedDriver.vehicle.truckType ? (
+                          <Text style={styles.modalVehicleMeta}>{formatTruckType(selectedDriver.vehicle.truckType)}</Text>
+                        ) : null}
+                        <View style={styles.modalVehicleDetails}>
+                          {selectedDriver.vehicle.licensePlate ? (
+                            <View style={styles.modalVehicleTag}>
+                              <Text style={styles.modalVehicleTagText}>Plate: {selectedDriver.vehicle.licensePlate}</Text>
+                            </View>
+                          ) : null}
+                          {selectedDriver.vehicle.truckNumber ? (
+                            <View style={styles.modalVehicleTag}>
+                              <Text style={styles.modalVehicleTagText}>#{selectedDriver.vehicle.truckNumber}</Text>
+                            </View>
+                          ) : null}
+                          {selectedDriver.vehicle.maxCapacityTons ? (
+                            <View style={styles.modalVehicleTag}>
+                              <Text style={styles.modalVehicleTagText}>{selectedDriver.vehicle.maxCapacityTons}T</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                )}
+
+                {(selectedDriver.driverCdlNumber || selectedDriver.driverDotNumber || selectedDriver.driverMcNumber) && (
+                  <View style={styles.modalSection}>
+                    <Text style={styles.modalSectionTitle}>CREDENTIALS</Text>
+                    {selectedDriver.driverCdlNumber ? (
+                      <View style={styles.modalDetailRow}>
+                        <Ionicons name="card" size={16} color={Colors.textMuted} />
+                        <Text style={styles.modalDetailText}>CDL: {selectedDriver.driverCdlNumber}{selectedDriver.driverCdlState ? ` (${selectedDriver.driverCdlState})` : ''}</Text>
+                      </View>
+                    ) : null}
+                    {selectedDriver.driverDotNumber ? (
+                      <View style={styles.modalDetailRow}>
+                        <Ionicons name="shield-checkmark" size={16} color={Colors.textMuted} />
+                        <Text style={styles.modalDetailText}>DOT: {selectedDriver.driverDotNumber}</Text>
+                      </View>
+                    ) : null}
+                    {selectedDriver.driverMcNumber ? (
+                      <View style={styles.modalDetailRow}>
+                        <Ionicons name="document-text" size={16} color={Colors.textMuted} />
+                        <Text style={styles.modalDetailText}>MC: {selectedDriver.driverMcNumber}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                )}
+
+                {selectedDriver.status === 'pending' && (
+                  <View style={styles.modalActions}>
+                    <Pressable
+                      style={[styles.modalActionBtn, { backgroundColor: Colors.success }]}
+                      onPress={() => { handleApproveAssignment(selectedDriver.id); setSelectedDriver(null); }}
+                    >
+                      <Ionicons name="checkmark" size={20} color="#fff" />
+                      <Text style={styles.modalActionText}>APPROVE</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.modalActionBtn, { backgroundColor: Colors.destructive }]}
+                      onPress={() => { handleRejectAssignment(selectedDriver.id); setSelectedDriver(null); }}
+                    >
+                      <Ionicons name="close" size={20} color="#fff" />
+                      <Text style={styles.modalActionText}>REJECT</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -1034,6 +1183,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textMuted,
   },
+  companyLabel: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 10,
+    color: Colors.primary,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase' as const,
+    marginBottom: 1,
+  },
   cancelJobBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1050,6 +1207,159 @@ const styles = StyleSheet.create({
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 14,
     color: Colors.destructive,
+    letterSpacing: 1,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: Colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 36,
+    maxHeight: '80%',
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.border,
+    alignSelf: 'center',
+    marginTop: 10,
+    marginBottom: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 20,
+  },
+  modalAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: Colors.primary,
+  },
+  modalAvatarText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 22,
+    color: Colors.primary,
+  },
+  modalCompanyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 2,
+  },
+  modalCompanyText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    color: Colors.primary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase' as const,
+  },
+  modalDriverName: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 18,
+    color: Colors.text,
+  },
+  modalRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 3,
+  },
+  modalRatingText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  modalSection: {
+    marginBottom: 18,
+  },
+  modalSectionTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    color: Colors.textMuted,
+    letterSpacing: 1.2,
+    marginBottom: 10,
+  },
+  modalDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  modalDetailText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  modalVehicleCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: Colors.background,
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  modalVehicleTitle: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.text,
+  },
+  modalVehicleMeta: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  modalVehicleDetails: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  modalVehicleTag: {
+    backgroundColor: Colors.card,
+    borderRadius: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  modalVehicleTagText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textSecondary,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  modalActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 48,
+    borderRadius: 10,
+    gap: 6,
+  },
+  modalActionText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: '#fff',
     letterSpacing: 1,
   },
 });
