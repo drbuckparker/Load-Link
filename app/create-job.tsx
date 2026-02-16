@@ -400,7 +400,7 @@ export default function CreateJobScreen() {
         return key.includes('/api/jobs') || key.includes('/api/contractor/jobs');
       }});
 
-      router.back();
+      if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create job.');
     } finally {
@@ -434,7 +434,7 @@ export default function CreateJobScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable onPress={() => { if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); } }} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={Colors.text} />
         </Pressable>
         <Text style={styles.headerTitle}>Post a Job</Text>
