@@ -74,6 +74,10 @@ export default function CreateJobScreen() {
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
   const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
   const [pickupTime, setPickupTime] = useState('');
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [pickerHour, setPickerHour] = useState(7);
+  const [pickerMinute, setPickerMinute] = useState(0);
+  const [pickerAmPm, setPickerAmPm] = useState<'AM' | 'PM'>('AM');
   const [estimatedDays, setEstimatedDays] = useState('');
   const [includesWeekends, setIncludesWeekends] = useState(false);
   const [rate, setRate] = useState('');
@@ -788,13 +792,24 @@ export default function CreateJobScreen() {
             )}
 
             <Text style={[styles.label, { marginTop: 14 }]}>Pickup Time</Text>
-            <TextInput
+            <Pressable
               style={styles.input}
-              placeholder="7:00 AM"
-              placeholderTextColor={Colors.textMuted}
-              value={pickupTime}
-              onChangeText={setPickupTime}
-            />
+              onPress={() => {
+                if (pickupTime) {
+                  const match = pickupTime.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+                  if (match) {
+                    setPickerHour(parseInt(match[1], 10));
+                    setPickerMinute(parseInt(match[2], 10));
+                    setPickerAmPm(match[3].toUpperCase() as 'AM' | 'PM');
+                  }
+                }
+                setShowTimePicker(true);
+              }}
+            >
+              <Text style={pickupTime ? styles.inputText : styles.placeholderText}>
+                {pickupTime || '7:00 AM'}
+              </Text>
+            </Pressable>
 
             {jobType === 'multi_day' && (
               <>
@@ -941,6 +956,104 @@ export default function CreateJobScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      <Modal
+        visible={showTimePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTimePicker(false)}
+      >
+        <Pressable
+          style={styles.timePickerOverlay}
+          onPress={() => setShowTimePicker(false)}
+        >
+          <Pressable style={styles.timePickerSheet} onPress={() => {}}>
+            <View style={styles.timePickerHeader}>
+              <Pressable onPress={() => setShowTimePicker(false)}>
+                <Text style={styles.timePickerCancel}>Cancel</Text>
+              </Pressable>
+              <Text style={styles.timePickerTitle}>Pickup Time</Text>
+              <Pressable onPress={() => {
+                const minStr = pickerMinute.toString().padStart(2, '0');
+                setPickupTime(`${pickerHour}:${minStr} ${pickerAmPm}`);
+                setShowTimePicker(false);
+              }}>
+                <Text style={styles.timePickerDone}>Done</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.timePickerRollers}>
+              <View style={styles.rollerColumn}>
+                <Text style={styles.rollerLabel}>HOUR</Text>
+                <ScrollView
+                  style={styles.rollerScroll}
+                  showsVerticalScrollIndicator={false}
+                  snapToInterval={48}
+                  decelerationRate="fast"
+                  contentContainerStyle={{ paddingVertical: 72 }}
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map(h => (
+                    <Pressable
+                      key={h}
+                      style={[styles.rollerItem, pickerHour === h && styles.rollerItemActive]}
+                      onPress={() => setPickerHour(h)}
+                    >
+                      <Text style={[styles.rollerItemText, pickerHour === h && styles.rollerItemTextActive]}>
+                        {h}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+
+              <Text style={styles.rollerColon}>:</Text>
+
+              <View style={styles.rollerColumn}>
+                <Text style={styles.rollerLabel}>MIN</Text>
+                <ScrollView
+                  style={styles.rollerScroll}
+                  showsVerticalScrollIndicator={false}
+                  snapToInterval={48}
+                  decelerationRate="fast"
+                  contentContainerStyle={{ paddingVertical: 72 }}
+                >
+                  {[0, 15, 30, 45].map(m => (
+                    <Pressable
+                      key={m}
+                      style={[styles.rollerItem, pickerMinute === m && styles.rollerItemActive]}
+                      onPress={() => setPickerMinute(m)}
+                    >
+                      <Text style={[styles.rollerItemText, pickerMinute === m && styles.rollerItemTextActive]}>
+                        {m.toString().padStart(2, '0')}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+
+              <View style={[styles.rollerColumn, { flex: 0.8 }]}>
+                <Text style={styles.rollerLabel}> </Text>
+                <View style={styles.amPmContainer}>
+                  <Pressable
+                    style={[styles.amPmBtn, pickerAmPm === 'AM' && styles.amPmBtnActive]}
+                    onPress={() => setPickerAmPm('AM')}
+                  >
+                    <Text style={[styles.amPmText, pickerAmPm === 'AM' && styles.amPmTextActive]}>AM</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.amPmBtn, pickerAmPm === 'PM' && styles.amPmBtnActive]}
+                    onPress={() => setPickerAmPm('PM')}
+                  >
+                    <Text style={[styles.amPmText, pickerAmPm === 'PM' && styles.amPmTextActive]}>PM</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.timePickerHighlight} pointerEvents="none" />
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={mapPickerTarget !== null}
@@ -1512,5 +1625,140 @@ const styles = StyleSheet.create({
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 16,
     color: Colors.primaryForeground,
+  },
+  inputText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: Colors.text,
+  },
+  placeholderText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: Colors.textMuted,
+  },
+  timePickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  timePickerSheet: {
+    backgroundColor: Colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 40,
+    overflow: 'hidden',
+  },
+  timePickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  timePickerTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  timePickerCancel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: Colors.textMuted,
+  },
+  timePickerDone: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    color: Colors.primary,
+  },
+  timePickerRollers: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    height: 240,
+  },
+  timePickerHighlight: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    top: '50%' as any,
+    marginTop: -24,
+    height: 48,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 0,
+    pointerEvents: 'none' as any,
+  },
+  rollerColumn: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  rollerLabel: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    color: Colors.textMuted,
+    letterSpacing: 1.5,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+  },
+  rollerScroll: {
+    height: 192,
+  },
+  rollerItem: {
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    borderRadius: 10,
+  },
+  rollerItemActive: {
+    backgroundColor: 'rgba(255,153,0,0.15)',
+  },
+  rollerItemText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 22,
+    color: Colors.textMuted,
+  },
+  rollerItemTextActive: {
+    fontFamily: 'Inter_700Bold',
+    color: Colors.primary,
+    fontSize: 24,
+  },
+  rollerColon: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 28,
+    color: Colors.textMuted,
+    marginTop: 20,
+  },
+  amPmContainer: {
+    gap: 8,
+    paddingTop: 40,
+  },
+  amPmBtn: {
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    borderRadius: 10,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+  },
+  amPmBtnActive: {
+    backgroundColor: 'rgba(255,153,0,0.15)',
+    borderColor: Colors.primary,
+  },
+  amPmText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 16,
+    color: Colors.textMuted,
+  },
+  amPmTextActive: {
+    color: Colors.primary,
   },
 });
