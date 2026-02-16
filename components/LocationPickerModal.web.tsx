@@ -37,11 +37,21 @@ html,body,#map{margin:0;padding:0;width:100%;height:100%;background:#161a22;}
   font-family:Inter,sans-serif;font-size:13px;z-index:1000;pointer-events:none;
   display:flex;align-items:center;gap:6px;white-space:nowrap;}
 .hint-dot{width:8px;height:8px;background:#FF9900;border-radius:50%;}
+.my-loc-btn{position:absolute;top:12px;right:12px;width:44px;height:44px;border-radius:22px;
+  background:rgba(22,26,34,0.9);border:1px solid #2a3040;z-index:1000;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;transition:background 0.15s;}
+.my-loc-btn:hover{background:#1e2430;}
+.my-loc-btn svg{fill:#FF9900;}
+.my-loc-btn.loading svg{animation:spin 1s linear infinite;}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 </style>
 </head><body>
 <div id="map"></div>
 <div id="hint" class="hint-overlay" style="display:${hasMarker ? 'none' : 'flex'}">
   <span class="hint-dot"></span> Tap the map to drop a pin
+</div>
+<div id="myLocBtn" class="my-loc-btn" title="Find my location">
+  <svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0013 3.06V1h-2v2.06A8.994 8.994 0 003.06 11H1v2h2.06A8.994 8.994 0 0011 20.94V23h2v-2.06A8.994 8.994 0 0020.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
 </div>
 <script>
 var map=L.map('map',{attributionControl:false}).setView([${lat},${lng}],13);
@@ -69,6 +79,27 @@ map.on('click',function(e){
     });
   }
   window.parent.postMessage(JSON.stringify({type:'mapClick',lat:e.latlng.lat,lng:e.latlng.lng}),'*');
+});
+
+document.getElementById('myLocBtn').addEventListener('click',function(){
+  var btn=document.getElementById('myLocBtn');
+  btn.classList.add('loading');
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(function(pos){
+      var lat=pos.coords.latitude,lng=pos.coords.longitude;
+      map.flyTo([lat,lng],15,{duration:0.8});
+      document.getElementById('hint').style.display='none';
+      if(marker){marker.setLatLng([lat,lng]);}
+      else{marker=L.marker([lat,lng],{icon:orangeIcon,draggable:true}).addTo(map);
+        marker.on('dragend',function(ev){
+          var ll=ev.target.getLatLng();
+          window.parent.postMessage(JSON.stringify({type:'markerMoved',lat:ll.lat,lng:ll.lng}),'*');
+        });
+      }
+      window.parent.postMessage(JSON.stringify({type:'mapClick',lat:lat,lng:lng}),'*');
+      btn.classList.remove('loading');
+    },function(){btn.classList.remove('loading');},{enableHighAccuracy:true,timeout:10000});
+  }else{btn.classList.remove('loading');}
 });
 
 window.addEventListener('message',function(e){

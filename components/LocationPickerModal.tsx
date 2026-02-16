@@ -135,6 +135,31 @@ export default function LocationPickerModal({
     }
   }
 
+  const [locating, setLocating] = useState(false);
+
+  async function handleFindMyLocation() {
+    setLocating(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        const { latitude, longitude } = loc.coords;
+        const addr = await reverseGeocode(latitude, longitude);
+        const newRegion = {
+          latitude,
+          longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        };
+        setRegion(newRegion);
+        mapRef.current?.animateToRegion(newRegion, 500);
+        setSelectedLocation({ lat: latitude, lng: longitude, address: addr });
+        setShowResults(false);
+      }
+    } catch {}
+    setLocating(false);
+  }
+
   async function handleMapPress(e: MapPressEvent) {
     const { latitude, longitude } = e.nativeEvent.coordinate;
     setShowResults(false);
@@ -243,6 +268,18 @@ export default function LocationPickerModal({
               />
             )}
           </MapView>
+
+          <Pressable
+            style={({ pressed }) => [styles.myLocationBtn, pressed && styles.myLocationBtnPressed]}
+            onPress={handleFindMyLocation}
+            disabled={locating}
+          >
+            {locating ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <Ionicons name="navigate" size={22} color={Colors.primary} />
+            )}
+          </Pressable>
 
           {!selectedLocation && (
             <View style={styles.mapHint}>
@@ -368,6 +405,22 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
+  },
+  myLocationBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(22, 26, 34, 0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  myLocationBtnPressed: {
+    backgroundColor: Colors.surface,
   },
   mapHint: {
     position: 'absolute',
