@@ -283,13 +283,7 @@ export default function CalendarScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-        <Text style={styles.headerTitle}>{isContractor ? 'TRUCK CAPACITY' : 'AVAILABILITY'}</Text>
-        {isContractor && capacityQuery.data && (
-          <View style={styles.fleetBadge}>
-            <MaterialCommunityIcons name="dump-truck" size={14} color={Colors.primary} />
-            <Text style={styles.fleetBadgeText}>{capacityQuery.data.fleetSize} trucks</Text>
-          </View>
-        )}
+        <Text style={styles.headerTitle}>{isContractor ? 'SCHEDULED JOBS' : 'AVAILABILITY'}</Text>
       </View>
 
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false}>
