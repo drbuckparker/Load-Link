@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -139,6 +139,10 @@ export default function JobDetailScreen() {
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [selectedDriver, setSelectedDriver] = useState<Assignment | null>(null);
+  const [counterBidVisible, setCounterBidVisible] = useState(false);
+  const [counterBidRate, setCounterBidRate] = useState('');
+  const [counterBidNote, setCounterBidNote] = useState('');
+  const [submittingBid, setSubmittingBid] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -265,6 +269,29 @@ export default function JobDetailScreen() {
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to accept job');
     }
+  }
+
+  async function handleCounterBid() {
+    if (!counterBidRate || isNaN(Number(counterBidRate)) || Number(counterBidRate) <= 0) {
+      Alert.alert('Invalid Rate', 'Please enter a valid rate amount');
+      return;
+    }
+    setSubmittingBid(true);
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/counter-bid`, {
+        rate: counterBidRate,
+        note: counterBidNote.trim() || undefined,
+      });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setCounterBidVisible(false);
+      setCounterBidRate('');
+      setCounterBidNote('');
+      Alert.alert('Bid Submitted', 'Your counter bid has been sent to the contractor');
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to submit counter bid');
+    }
+    setSubmittingBid(false);
   }
 
   async function handleStartJob() {
@@ -587,13 +614,27 @@ export default function JobDetailScreen() {
         )}
 
         {canAccept && (
-          <Pressable
-            style={({ pressed }) => [styles.acceptBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-            onPress={handleAccept}
-          >
-            <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
-            <Text style={styles.acceptBtnText}>ACCEPT JOB</Text>
-          </Pressable>
+          <View style={styles.acceptRow}>
+            <Pressable
+              style={({ pressed }) => [styles.counterBidBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setCounterBidRate(job.rate?.toString() || '');
+                setCounterBidNote('');
+                setCounterBidVisible(true);
+              }}
+            >
+              <Ionicons name="swap-horizontal" size={20} color={Colors.primary} />
+              <Text style={styles.counterBidBtnText}>COUNTER BID</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.acceptBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+              onPress={handleAccept}
+            >
+              <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
+              <Text style={styles.acceptBtnText}>ACCEPT JOB</Text>
+            </Pressable>
+          </View>
         )}
 
         {canStart && !isRunning && jobStatus !== 'completed' && (
@@ -747,6 +788,74 @@ export default function JobDetailScreen() {
             )}
           </Pressable>
         </Pressable>
+      </Modal>
+
+      <Modal
+        visible={counterBidVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCounterBidVisible(false)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <Pressable style={styles.cbOverlay} onPress={() => setCounterBidVisible(false)}>
+            <Pressable style={styles.cbSheet} onPress={() => {}}>
+              <View style={styles.cbHandle} />
+              <Text style={styles.cbTitle}>COUNTER BID</Text>
+              <Text style={styles.cbSubtitle}>
+                Listed rate: ${job.rate ? Number(job.rate).toFixed(2) : '0.00'}/{job.rateType === 'per_hour' ? 'hr' : job.rateType === 'per_ton' ? 'ton' : 'load'}
+              </Text>
+
+              <View style={styles.cbField}>
+                <Text style={styles.cbLabel}>Your Rate</Text>
+                <View style={styles.cbInputRow}>
+                  <Text style={styles.cbDollar}>$</Text>
+                  <TextInput
+                    style={styles.cbInput}
+                    value={counterBidRate}
+                    onChangeText={setCounterBidRate}
+                    keyboardType="decimal-pad"
+                    placeholder="0.00"
+                    placeholderTextColor={Colors.textMuted}
+                    autoFocus
+                  />
+                  <Text style={styles.cbUnit}>/{job.rateType === 'per_hour' ? 'hr' : job.rateType === 'per_ton' ? 'ton' : 'load'}</Text>
+                </View>
+              </View>
+
+              <View style={styles.cbField}>
+                <Text style={styles.cbLabel}>Note (optional)</Text>
+                <TextInput
+                  style={styles.cbNoteInput}
+                  value={counterBidNote}
+                  onChangeText={setCounterBidNote}
+                  placeholder="Why this rate?"
+                  placeholderTextColor={Colors.textMuted}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [styles.cbSubmitBtn, pressed && { opacity: 0.85 }, submittingBid && { opacity: 0.6 }]}
+                onPress={handleCounterBid}
+                disabled={submittingBid}
+              >
+                {submittingBid ? (
+                  <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                ) : (
+                  <>
+                    <Ionicons name="send" size={18} color={Colors.primaryForeground} />
+                    <Text style={styles.cbSubmitText}>SUBMIT BID</Text>
+                  </>
+                )}
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1052,6 +1161,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textSecondary,
   },
+  acceptRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+  },
+  counterBidBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    borderRadius: 12,
+    height: 52,
+    gap: 6,
+    paddingHorizontal: 16,
+  },
+  counterBidBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.primary,
+    letterSpacing: 0.5,
+  },
   acceptBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1060,7 +1192,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     height: 52,
     gap: 8,
-    marginTop: 8,
   },
   acceptBtnText: {
     fontFamily: 'ChakraPetch_700Bold',
@@ -1360,6 +1491,106 @@ const styles = StyleSheet.create({
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 14,
     color: '#fff',
+    letterSpacing: 1,
+  },
+  cbOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  cbSheet: {
+    backgroundColor: Colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+    gap: 16,
+  },
+  cbHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.border,
+    alignSelf: 'center',
+    marginBottom: 4,
+  },
+  cbTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    letterSpacing: 2,
+    textAlign: 'center',
+  },
+  cbSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center',
+  },
+  cbField: {
+    gap: 6,
+  },
+  cbLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+  },
+  cbInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 14,
+    height: 52,
+  },
+  cbDollar: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 22,
+    color: Colors.primary,
+    marginRight: 4,
+  },
+  cbInput: {
+    flex: 1,
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 22,
+    color: Colors.text,
+    padding: 0,
+  },
+  cbUnit: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textMuted,
+    marginLeft: 6,
+  },
+  cbNoteInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 14,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.text,
+    minHeight: 80,
+  },
+  cbSubmitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    height: 52,
+    gap: 8,
+    marginTop: 4,
+  },
+  cbSubmitText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.primaryForeground,
     letterSpacing: 1,
   },
 });
