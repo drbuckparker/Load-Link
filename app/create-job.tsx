@@ -10,8 +10,6 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
-  Modal,
-  FlatList,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -44,6 +42,7 @@ export default function CreateJobScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   const [projectId, setProjectId] = useState('');
+  const [projectName, setProjectName] = useState('');
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [material, setMaterial] = useState('');
   const [jobType, setJobType] = useState('single_load');
@@ -72,9 +71,35 @@ export default function CreateJobScreen() {
 
   const selectedProject = projects.find((p: any) => String(p.id) === projectId);
 
-  function selectProject(id: string) {
+  const filteredProjects = projectName.trim()
+    ? projects.filter((p: any) =>
+        (p.name || '').toLowerCase().includes(projectName.toLowerCase())
+      )
+    : projects;
+
+  const exactMatch = projects.find(
+    (p: any) => (p.name || '').toLowerCase() === projectName.trim().toLowerCase()
+  );
+
+  function selectProject(id: string, name: string) {
     setProjectId(id);
+    setProjectName(name);
     setShowProjectDropdown(false);
+  }
+
+  function handleProjectNameChange(text: string) {
+    setProjectName(text);
+    if (!text.trim()) {
+      setProjectId('');
+    } else {
+      const match = projects.find(
+        (p: any) => (p.name || '').toLowerCase() === text.trim().toLowerCase()
+      );
+      setProjectId(match ? String(match.id) : '');
+    }
+    if (!showProjectDropdown && text.trim()) {
+      setShowProjectDropdown(true);
+    }
   }
 
   async function handleSubmit() {
@@ -97,11 +122,22 @@ export default function CreateJobScreen() {
 
     setSubmitting(true);
     try {
+      let resolvedProjectId = projectId ? parseInt(projectId, 10) : undefined;
+
+      if (!resolvedProjectId && projectName.trim()) {
+        const newProject = await apiRequest('POST', '/api/projects', {
+          name: projectName.trim(),
+        });
+        const proj = await newProject.json();
+        resolvedProjectId = proj.id;
+        queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
+      }
+
       const body: Record<string, any> = {
         material: material.trim(),
         job_type: jobType,
         truck_type: truckType,
-        ...(projectId ? { project_id: parseInt(projectId, 10) } : {}),
+        ...(resolvedProjectId ? { project_id: resolvedProjectId } : {}),
         origin_address: originAddress.trim(),
         destination_address: destinationAddress.trim(),
         rate: parseFloat(rate),
@@ -172,94 +208,93 @@ export default function CreateJobScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      <Pressable
-        style={styles.projectBar}
-        onPress={() => setShowProjectDropdown(true)}
-      >
-        <View style={styles.projectBarInner}>
-          <Ionicons name="folder-outline" size={18} color={selectedProject ? Colors.primary : Colors.textMuted} />
-          <Text
-            style={[
-              styles.projectBarText,
-              selectedProject && styles.projectBarTextActive,
-            ]}
-            numberOfLines={1}
-          >
-            {selectedProject ? selectedProject.name : 'Select Project'}
-          </Text>
-        </View>
-        <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
-      </Pressable>
-
-      <Modal
-        visible={showProjectDropdown}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowProjectDropdown(false)}
-      >
-        <Pressable style={styles.dropdownOverlay} onPress={() => setShowProjectDropdown(false)}>
-          <View style={[styles.dropdownContainer, { marginTop: Platform.OS === 'web' ? 130 : insets.top + 100 }]}>
-            <Text style={styles.dropdownTitle}>SELECT PROJECT</Text>
-
-            <Pressable
-              style={[styles.dropdownItem, !projectId && styles.dropdownItemActive]}
-              onPress={() => selectProject('')}
-            >
-              <Ionicons
-                name="remove-circle-outline"
-                size={20}
-                color={!projectId ? Colors.primary : Colors.textMuted}
-              />
-              <Text style={[styles.dropdownItemText, !projectId && styles.dropdownItemTextActive]}>
-                No Project
-              </Text>
-              {!projectId && <Ionicons name="checkmark" size={18} color={Colors.primary} />}
+      <View style={styles.projectBarWrap}>
+        <View style={[
+          styles.projectBar,
+          selectedProject && styles.projectBarSelected,
+        ]}>
+          <Ionicons
+            name={selectedProject ? 'folder' : 'folder-outline'}
+            size={18}
+            color={selectedProject ? Colors.primary : Colors.textMuted}
+          />
+          <TextInput
+            style={styles.projectBarInput}
+            placeholder="Type or select a project"
+            placeholderTextColor={Colors.textMuted}
+            value={projectName}
+            onChangeText={handleProjectNameChange}
+            onFocus={() => setShowProjectDropdown(true)}
+          />
+          {projectName.trim() ? (
+            <Pressable onPress={() => { setProjectName(''); setProjectId(''); setShowProjectDropdown(false); }} hitSlop={8}>
+              <Ionicons name="close-circle" size={20} color={Colors.textMuted} />
             </Pressable>
+          ) : null}
+          <Pressable onPress={() => setShowProjectDropdown(!showProjectDropdown)} hitSlop={8}>
+            <Ionicons name={showProjectDropdown ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.textSecondary} />
+          </Pressable>
+        </View>
 
-            <FlatList
-              data={projects}
-              keyExtractor={(item: any) => String(item.id)}
-              style={{ maxHeight: 300 }}
-              renderItem={({ item }: { item: any }) => {
-                const isSelected = projectId === String(item.id);
+        {selectedProject && (
+          <View style={styles.projectMatchBadge}>
+            <Ionicons name="checkmark-circle" size={14} color={Colors.success || '#22c55e'} />
+            <Text style={styles.projectMatchText}>Existing project</Text>
+          </View>
+        )}
+        {!selectedProject && projectName.trim() && !exactMatch && (
+          <View style={styles.projectMatchBadge}>
+            <Ionicons name="add-circle" size={14} color={Colors.primary} />
+            <Text style={[styles.projectMatchText, { color: Colors.primary }]}>New project will be created</Text>
+          </View>
+        )}
+
+        {showProjectDropdown && (
+          <View style={styles.dropdownList}>
+            {filteredProjects.length > 0 ? (
+              filteredProjects.map((p: any) => {
+                const isSelected = projectId === String(p.id);
                 return (
                   <Pressable
+                    key={p.id}
                     style={[styles.dropdownItem, isSelected && styles.dropdownItemActive]}
-                    onPress={() => selectProject(String(item.id))}
+                    onPress={() => selectProject(String(p.id), p.name)}
                   >
                     <Ionicons
                       name="folder"
-                      size={20}
+                      size={18}
                       color={isSelected ? Colors.primary : Colors.textSecondary}
                     />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextActive]}>
-                        {item.name}
+                        {p.name}
                       </Text>
-                      {item.job_count > 0 && (
+                      {p.job_count > 0 && (
                         <Text style={styles.dropdownItemSub}>
-                          {item.job_count} job{item.job_count !== 1 ? 's' : ''}
+                          {p.job_count} job{p.job_count !== 1 ? 's' : ''}
                         </Text>
                       )}
                     </View>
-                    {isSelected && <Ionicons name="checkmark" size={18} color={Colors.primary} />}
+                    {isSelected && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
                   </Pressable>
                 );
-              }}
-              ListEmptyComponent={
-                <View style={styles.dropdownEmpty}>
-                  <Text style={styles.dropdownEmptyText}>No projects yet</Text>
-                </View>
-              }
-            />
+              })
+            ) : (
+              <View style={styles.dropdownEmpty}>
+                <Text style={styles.dropdownEmptyText}>
+                  {projectName.trim() ? 'No matching projects' : 'No projects yet'}
+                </Text>
+              </View>
+            )}
           </View>
-        </Pressable>
-      </Modal>
+        )}
+      </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        onScrollBeginDrag={() => setShowProjectDropdown(false)}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
@@ -513,72 +548,69 @@ const styles = StyleSheet.create({
     color: Colors.text,
     letterSpacing: 1,
   },
-  projectBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: Colors.card,
+  projectBarWrap: {
     marginHorizontal: 16,
     marginTop: 12,
     marginBottom: 4,
+    zIndex: 10,
+  },
+  projectBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.card,
     paddingHorizontal: 14,
     height: 48,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: Colors.border,
-  },
-  projectBarInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 10,
-    flex: 1,
   },
-  projectBarText: {
+  projectBarSelected: {
+    borderColor: Colors.primary,
+  },
+  projectBarInput: {
+    flex: 1,
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
-    color: Colors.textMuted,
-    flex: 1,
-  },
-  projectBarTextActive: {
     color: Colors.text,
-    fontFamily: 'Inter_500Medium',
+    height: 48,
   },
-  dropdownOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+  projectMatchBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    paddingHorizontal: 4,
   },
-  dropdownContainer: {
+  projectMatchText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: '#22c55e',
+  },
+  dropdownList: {
     backgroundColor: Colors.card,
-    marginHorizontal: 20,
-    borderRadius: 14,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: Colors.border,
+    marginTop: 6,
     overflow: 'hidden',
-  },
-  dropdownTitle: {
-    fontFamily: 'ChakraPetch_600SemiBold',
-    fontSize: 12,
-    color: Colors.textSecondary,
-    letterSpacing: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 10,
+    maxHeight: 240,
   },
   dropdownItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
   dropdownItemActive: {
     backgroundColor: Colors.primaryLight,
   },
   dropdownItemText: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 15,
+    fontSize: 14,
     color: Colors.text,
     flex: 1,
   },
@@ -587,17 +619,17 @@ const styles = StyleSheet.create({
   },
   dropdownItemSub: {
     fontFamily: 'Inter_400Regular',
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.textMuted,
-    marginTop: 2,
+    marginTop: 1,
   },
   dropdownEmpty: {
-    paddingVertical: 24,
+    paddingVertical: 20,
     alignItems: 'center',
   },
   dropdownEmptyText: {
     fontFamily: 'Inter_400Regular',
-    fontSize: 14,
+    fontSize: 13,
     color: Colors.textMuted,
   },
   scrollContent: {
