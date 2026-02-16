@@ -14,6 +14,7 @@ import {
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient } from '@/lib/query-client';
 
@@ -40,6 +41,7 @@ export default function CreateJobScreen() {
   const insets = useSafeAreaInsets();
   const [submitting, setSubmitting] = useState(false);
 
+  const [projectId, setProjectId] = useState('');
   const [material, setMaterial] = useState('');
   const [jobType, setJobType] = useState('single_load');
   const [truckType, setTruckType] = useState('end_dump');
@@ -60,6 +62,10 @@ export default function CreateJobScreen() {
   const [requiresWeightTickets, setRequiresWeightTickets] = useState(false);
   const [urgent, setUrgent] = useState(false);
   const [capacityNeeded, setCapacityNeeded] = useState('');
+
+  const { data: projects = [] } = useQuery<any[]>({
+    queryKey: ['/api/projects'],
+  });
 
   async function handleSubmit() {
     if (!material.trim()) {
@@ -85,6 +91,7 @@ export default function CreateJobScreen() {
         material: material.trim(),
         job_type: jobType,
         truck_type: truckType,
+        ...(projectId ? { project_id: parseInt(projectId, 10) } : {}),
         origin_address: originAddress.trim(),
         destination_address: destinationAddress.trim(),
         rate: parseFloat(rate),
@@ -160,6 +167,42 @@ export default function CreateJobScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {projects.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>PROJECT</Text>
+            <View style={styles.sectionCard}>
+              <Text style={styles.label}>Assign to Project</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                <Pressable
+                  style={[
+                    styles.chip,
+                    !projectId && styles.chipActive,
+                  ]}
+                  onPress={() => setProjectId('')}
+                >
+                  <Text style={[styles.chipText, !projectId && styles.chipTextActive]}>
+                    None
+                  </Text>
+                </Pressable>
+                {projects.map((p: any) => (
+                  <Pressable
+                    key={p.id}
+                    style={[
+                      styles.chip,
+                      projectId === String(p.id) && styles.chipActive,
+                    ]}
+                    onPress={() => setProjectId(String(p.id))}
+                  >
+                    <Text style={[styles.chipText, projectId === String(p.id) && styles.chipTextActive]}>
+                      {p.name || p.project_name}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
           <View style={styles.sectionCard}>
@@ -357,7 +400,7 @@ export default function CreateJobScreen() {
               />
             </View>
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Capacity Needed</Text>
+            <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity Minimum</Text>
             <TextInput
               style={styles.input}
               placeholder="e.g. 20 tons"
