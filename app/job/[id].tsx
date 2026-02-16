@@ -14,23 +14,62 @@ function isContractorRole(role: string): boolean {
   return role.includes('contractor');
 }
 
+interface VehicleInfo {
+  id: string;
+  truckType: string;
+  make: string;
+  model: string;
+  year: number;
+  licensePlate: string;
+  truckNumber: string;
+  maxCapacityTons: string;
+}
+
 interface Assignment {
   id: string;
   driverName: string;
   driverPhone: string;
+  driverEmail: string;
   driverTruckType: string;
   driverRating: number;
+  driverCompany: string;
+  driverDotNumber: string;
+  driverMcNumber: string;
+  driverCdlNumber: string;
+  driverCdlState: string;
+  driverProfileImage: string;
+  truckingCompanyName: string;
+  vehicle: VehicleInfo | null;
   status: string;
   appliedAt: string;
 }
 
 function mapAssignment(a: any): Assignment {
+  const v = a.vehicle;
   return {
     id: a.id,
     driverName: a.driver_name ?? a.driverName ?? 'Unknown',
     driverPhone: a.driver_phone ?? a.driverPhone ?? '',
+    driverEmail: a.driver_email ?? a.driverEmail ?? '',
     driverTruckType: a.driver_truck_type ?? a.driverTruckType ?? '',
     driverRating: Number(a.driver_rating ?? a.driverRating ?? 0),
+    driverCompany: a.driver_company ?? a.driverCompany ?? '',
+    driverDotNumber: a.driver_dot_number ?? a.driverDotNumber ?? '',
+    driverMcNumber: a.driver_mc_number ?? a.driverMcNumber ?? '',
+    driverCdlNumber: a.driver_cdl_number ?? a.driverCdlNumber ?? '',
+    driverCdlState: a.driver_cdl_state ?? a.driverCdlState ?? '',
+    driverProfileImage: a.driver_profile_image ?? a.driverProfileImage ?? '',
+    truckingCompanyName: a.trucking_company_name ?? a.truckingCompanyName ?? '',
+    vehicle: v ? {
+      id: v.id,
+      truckType: v.truck_type ?? v.truckType ?? '',
+      make: v.make ?? '',
+      model: v.model ?? '',
+      year: v.year ?? 0,
+      licensePlate: v.license_plate ?? v.licensePlate ?? '',
+      truckNumber: v.truck_number ?? v.truckNumber ?? '',
+      maxCapacityTons: v.max_capacity_tons ?? v.maxCapacityTons ?? '',
+    } : null,
     status: a.status ?? 'pending',
     appliedAt: a.applied_at ?? a.appliedAt ?? a.created_at ?? '',
   };
