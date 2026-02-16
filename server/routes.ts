@@ -834,27 +834,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .limit(1);
 
       const upcoming5Days: any[] = [];
+      const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+      const isContractorUser = user.role?.includes('contractor');
+
       for (let i = 0; i < 5; i++) {
         const d = new Date(now);
         d.setDate(d.getDate() + i);
         const dateStr = d.toISOString().split('T')[0];
-        const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+        const dayStart = new Date(dateStr + 'T00:00:00.000Z');
+        const dayEnd = new Date(dateStr + 'T23:59:59.999Z');
 
-        const avail = await db
-          .select()
-          .from(driverAvailability)
-          .where(and(
-            eq(driverAvailability.driver_id, userId),
-            eq(driverAvailability.date, d)
-          ))
-          .then(r => r[0]);
+        if (isContractorUser) {
+          const dayJobs = await db
+            .select({
+              id: jobs.id,
+              material: jobs.material,
+              trucks_needed: jobs.trucks_needed,
+              status: jobs.status,
+              project_name: contractorProjects.name,
+            })
+            .from(jobs)
+            .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
+            .where(and(
+              eq(jobs.contractor_id, userId),
+              gte(jobs.scheduled_date, dayStart),
+              lte(jobs.scheduled_date, dayEnd),
+              or(
+                eq(jobs.status, 'open' as any),
+                eq(jobs.status, 'pending' as any),
+                eq(jobs.status, 'accepted' as any),
+                eq(jobs.status, 'in_progress' as any)
+              )!
+            ));
 
-        upcoming5Days.push({
-          date: dateStr,
-          dayName: dayNames[d.getDay()],
-          dayNum: d.getDate(),
-          status: avail?.status || 'available',
-        });
+          const jobIds = dayJobs.map(j => j.id);
+          let appliedCount: Record<string, number> = {};
+          if (jobIds.length > 0) {
+            const assigns = await db
+              .select({ job_id: jobAssignments.job_id })
+              .from(jobAssignments)
+              .where(inArray(jobAssignments.job_id, jobIds));
+            for (const a of assigns) {
+              if (a.job_id) appliedCount[a.job_id] = (appliedCount[a.job_id] || 0) + 1;
+            }
+          }
+
+          upcoming5Days.push({
+            date: dateStr,
+            dayName: dayNames[d.getDay()],
+            dayNum: d.getDate(),
+            status: dayJobs.length > 0 ? 'has_jobs' : 'available',
+            jobs: dayJobs.map(j => ({
+              id: j.id,
+              material: j.material || 'Unknown',
+              projectName: j.project_name || '',
+              trucksNeeded: j.trucks_needed || 1,
+              applied: appliedCount[j.id] || 0,
+              status: j.status || 'open',
+            })),
+          });
+        } else {
+          const avail = await db
+            .select()
+            .from(driverAvailability)
+            .where(and(
+              eq(driverAvailability.driver_id, userId),
+              eq(driverAvailability.date, d)
+            ))
+            .then(r => r[0]);
+
+          upcoming5Days.push({
+            date: dateStr,
+            dayName: dayNames[d.getDay()],
+            dayNum: d.getDate(),
+            status: avail?.status || 'available',
+          });
+        }
       }
 
       const recentActivity = await db

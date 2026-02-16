@@ -23,7 +23,7 @@ interface DashboardData {
   quickJob: { material: string; address: string } | null;
   earnings: { total: number; awaiting: number; thisMonth: number; thisWeek: number };
   location: { lat: number | null; lng: number | null; address: string | null };
-  upcomingDays: { date: string; dayName: string; dayNum: number; status: string }[];
+  upcomingDays: { date: string; dayName: string; dayNum: number; status: string; jobs?: { id: string; material: string; projectName: string; trucksNeeded: number; applied: number; status: string }[] }[];
   recentActivity: { id: string; type: string; title: string; message: string; createdAt: string; isRead: boolean }[];
 }
 
@@ -275,34 +275,77 @@ export default function DashboardScreen() {
             </Pressable>
           </View>
 
-          {(dashboard?.upcomingDays || getDefaultDays()).map((day, i) => (
-            <Pressable
-              key={i}
-              style={styles.upcomingRow}
-              onPress={() => {
-                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                if (day.status === 'available' || day.status === 'unavailable') {
-                  router.push('/(tabs)/calendar');
-                } else {
-                  router.push('/jobs-browse' as any);
-                }
-              }}
-            >
-              <View style={styles.dateBox}>
-                <Text style={styles.dateDay}>{day.dayName}</Text>
-                <Text style={styles.dateNum}>{day.dayNum}</Text>
+          {(dashboard?.upcomingDays || getDefaultDays()).map((day, i) => {
+            const hasJobs = day.jobs && day.jobs.length > 0;
+            return (
+              <View key={i}>
+                <Pressable
+                  style={styles.upcomingRow}
+                  onPress={() => {
+                    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (hasJobs) {
+                      router.push('/(tabs)/calendar');
+                    } else if (day.status === 'available' || day.status === 'unavailable') {
+                      router.push('/(tabs)/calendar');
+                    } else {
+                      router.push('/jobs-browse' as any);
+                    }
+                  }}
+                >
+                  <View style={styles.dateBox}>
+                    <Text style={styles.dateDay}>{day.dayName}</Text>
+                    <Text style={styles.dateNum}>{day.dayNum}</Text>
+                  </View>
+                  {!hasJobs ? (
+                    <>
+                      <Text style={styles.upcomingStatus}>
+                        {day.status === 'available' ? 'Available' : day.status === 'unavailable' ? 'Unavailable' : day.status}
+                      </Text>
+                      <View style={styles.openBadge}>
+                        <Text style={styles.openBadgeText}>OPEN</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                    </>
+                  ) : (
+                    <View style={{ flex: 1 }}>
+                      {day.jobs!.map((job) => (
+                        <Pressable
+                          key={job.id}
+                          style={styles.weekJobItem}
+                          onPress={() => {
+                            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            router.push(`/job/${job.id}` as any);
+                          }}
+                        >
+                          {job.projectName ? (
+                            <Text style={styles.weekJobProject} numberOfLines={1}>{job.projectName.toUpperCase()}</Text>
+                          ) : null}
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <Text style={styles.weekJobMaterial} numberOfLines={1}>{job.material}</Text>
+                            <View style={[styles.weekJobStatusBadge, {
+                              backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
+                                job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
+                            }]}>
+                              <Text style={[styles.weekJobStatusText, {
+                                color: job.status === 'open' || job.status === 'pending' ? Colors.success :
+                                  job.status === 'in_progress' ? Colors.warning : Colors.info
+                              }]}>{job.status === 'in_progress' ? 'ACTIVE' : job.status.toUpperCase()}</Text>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <MaterialCommunityIcons name="dump-truck" size={13} color={Colors.primary} />
+                            <Text style={styles.weekJobStat}>{job.trucksNeeded} requested</Text>
+                            <Ionicons name="people" size={13} color={job.applied > 0 ? Colors.info : Colors.textMuted} />
+                            <Text style={[styles.weekJobStat, job.applied > 0 && { color: Colors.info }]}>{job.applied} applied</Text>
+                          </View>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+                </Pressable>
               </View>
-              <Text style={styles.upcomingStatus}>
-                {day.status === 'available' ? 'Available' : day.status === 'unavailable' ? 'Unavailable' : day.status}
-              </Text>
-              <View style={styles.openBadge}>
-                <Text style={styles.openBadgeText}>
-                  {day.status === 'available' || day.status === 'unavailable' ? 'OPEN' : 'VIEW'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
-            </Pressable>
-          ))}
+            );
+          })}
         </View>
 
         {(dashboard?.recentActivity || []).length > 0 && (
@@ -695,6 +738,39 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Colors.textMuted,
     letterSpacing: 0.5,
+  },
+  weekJobItem: {
+    paddingVertical: 6,
+    borderBottomWidth: 0,
+    gap: 3,
+  },
+  weekJobProject: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 10,
+    color: Colors.primary,
+    letterSpacing: 0.5,
+  },
+  weekJobMaterial: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.text,
+    flex: 1,
+    marginRight: 8,
+  },
+  weekJobStatusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  weekJobStatusText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 9,
+    letterSpacing: 0.3,
+  },
+  weekJobStat: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textSecondary,
   },
   activitySection: {
     marginBottom: 16,
