@@ -1533,8 +1533,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           trucks_needed: jobs.trucks_needed,
           status: jobs.status,
           material: jobs.material,
-          pickup_address: jobs.pickup_address,
-          dropoff_address: jobs.dropoff_address,
+          origin_address: jobs.origin_address,
+          destination_address: jobs.destination_address,
         })
         .from(jobs)
         .where(
@@ -1593,8 +1593,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           applied: appliedByJob[job.id] || 0,
           approved: approvedByJob[job.id] || 0,
           status: job.status || 'open',
-          pickup: job.pickup_address || '',
-          dropoff: job.dropoff_address || '',
+          pickup: job.origin_address || '',
+          dropoff: job.destination_address || '',
         });
       }
 
