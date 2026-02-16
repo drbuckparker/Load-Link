@@ -1470,20 +1470,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
           driver_phone: users.phone,
           driver_truck_type: users.truck_type,
           driver_rating: users.rating,
+          driver_company: users.company,
+          driver_email: users.email,
+          driver_dot_number: users.dot_number,
+          driver_mc_number: users.mc_number,
+          driver_cdl_number: users.cdl_number,
+          driver_cdl_state: users.cdl_state,
+          driver_trucking_company_id: users.trucking_company_id,
+          driver_profile_image: users.profile_image_url,
         })
         .from(jobAssignments)
         .leftJoin(users, eq(jobAssignments.driver_id, users.id))
         .where(eq(jobAssignments.job_id, id));
 
-      const formatted = result.map((r) => ({
-        ...r.assignment,
-        driver_name: r.driver_name || "Unknown",
-        driver_phone: r.driver_phone || "",
-        driver_truck_type: r.driver_truck_type || null,
-        driver_rating: r.driver_rating || null,
-      }));
+      const assignmentResults = [];
+      for (const r of result) {
+        const driverId = r.assignment.driver_id;
+        let vehicle = null;
+        if (driverId) {
+          const vehicles = await db
+            .select()
+            .from(driverVehicles)
+            .where(eq(driverVehicles.driver_id, driverId))
+            .orderBy(driverVehicles.is_primary)
+            .limit(1);
+          if (vehicles.length > 0) vehicle = vehicles[0];
+        }
 
-      return res.json(formatted);
+        let truckingCompanyName = null;
+        if (r.driver_trucking_company_id) {
+          const [tc] = await db
+            .select({ company: users.company, full_name: users.full_name })
+            .from(users)
+            .where(eq(users.id, r.driver_trucking_company_id))
+            .limit(1);
+          if (tc) truckingCompanyName = tc.company || tc.full_name;
+        }
+
+        assignmentResults.push({
+          ...r.assignment,
+          driver_name: r.driver_name || "Unknown",
+          driver_phone: r.driver_phone || "",
+          driver_truck_type: r.driver_truck_type || null,
+          driver_rating: r.driver_rating || null,
+          driver_company: r.driver_company || null,
+          driver_email: r.driver_email || null,
+          driver_dot_number: r.driver_dot_number || null,
+          driver_mc_number: r.driver_mc_number || null,
+          driver_cdl_number: r.driver_cdl_number || null,
+          driver_cdl_state: r.driver_cdl_state || null,
+          driver_profile_image: r.driver_profile_image || null,
+          trucking_company_name: truckingCompanyName || r.driver_company || null,
+          vehicle: vehicle ? {
+            id: vehicle.id,
+            truck_type: vehicle.truck_type,
+            make: vehicle.make,
+            model: vehicle.model,
+            year: vehicle.year,
+            license_plate: vehicle.license_plate,
+            truck_number: vehicle.truck_number,
+            max_capacity_tons: vehicle.max_capacity_tons,
+          } : null,
+        });
+      }
+
+      return res.json(assignmentResults);
     } catch (err) {
       console.error("Job assignments error:", err);
       return res.status(500).json({ message: "Server error" });
