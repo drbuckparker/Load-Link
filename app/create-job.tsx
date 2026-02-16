@@ -391,43 +391,39 @@ export default function CreateJobScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>LOCATIONS</Text>
           <View style={styles.sectionCard}>
-            <Text style={styles.label}>Origin Address</Text>
-            <View style={styles.addressRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="Pickup location"
-                placeholderTextColor={Colors.textMuted}
-                value={originAddress}
-                onChangeText={(t) => { setOriginAddress(t); setOriginLat(null); setOriginLng(null); }}
-              />
-              <Pressable style={styles.mapPinBtn} onPress={() => openMapPicker('origin')}>
-                <Ionicons name="location" size={20} color={originLat ? Colors.primary : Colors.textSecondary} />
+            <View style={styles.labelRow}>
+              <Text style={[styles.label, { marginBottom: 0 }]}>Origin Address</Text>
+              <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('origin')}>
+                <Ionicons name="location" size={16} color={originLat ? Colors.primary : Colors.textSecondary} />
+                <Text style={[styles.mapPinLinkText, originLat && { color: Colors.primary }]}>
+                  {originLat ? 'Pin Set' : 'Drop Pin'}
+                </Text>
               </Pressable>
             </View>
-            {originLat && originLng && (
-              <Text style={styles.coordText}>
-                {originLat.toFixed(5)}, {originLng.toFixed(5)}
-              </Text>
-            )}
+            <TextInput
+              style={styles.input}
+              placeholder="Pickup location"
+              placeholderTextColor={Colors.textMuted}
+              value={originAddress}
+              onChangeText={(t) => { setOriginAddress(t); setOriginLat(null); setOriginLng(null); }}
+            />
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Destination Address</Text>
-            <View style={styles.addressRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="Drop-off location"
-                placeholderTextColor={Colors.textMuted}
-                value={destinationAddress}
-                onChangeText={(t) => { setDestinationAddress(t); setDestLat(null); setDestLng(null); }}
-              />
-              <Pressable style={styles.mapPinBtn} onPress={() => openMapPicker('destination')}>
-                <Ionicons name="location" size={20} color={destLat ? Colors.primary : Colors.textSecondary} />
+            <View style={[styles.labelRow, { marginTop: 14 }]}>
+              <Text style={[styles.label, { marginBottom: 0 }]}>Destination Address</Text>
+              <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('destination')}>
+                <Ionicons name="location" size={16} color={destLat ? Colors.primary : Colors.textSecondary} />
+                <Text style={[styles.mapPinLinkText, destLat && { color: Colors.primary }]}>
+                  {destLat ? 'Pin Set' : 'Drop Pin'}
+                </Text>
               </Pressable>
             </View>
-            {destLat && destLng && (
-              <Text style={styles.coordText}>
-                {destLat.toFixed(5)}, {destLng.toFixed(5)}
-              </Text>
-            )}
+            <TextInput
+              style={styles.input}
+              placeholder="Drop-off location"
+              placeholderTextColor={Colors.textMuted}
+              value={destinationAddress}
+              onChangeText={(t) => { setDestinationAddress(t); setDestLat(null); setDestLng(null); }}
+            />
 
             <Text style={[styles.label, { marginTop: 14 }]}>Distance</Text>
             <View style={styles.inputWithSuffix}>
@@ -904,25 +900,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.primaryForeground,
   },
-  addressRow: {
+  labelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  mapPinLink: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
   },
-  mapPinBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.muted,
-    borderRadius: 10,
-  },
-  coordText: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-    color: Colors.textMuted,
-    marginTop: 4,
-    paddingHorizontal: 2,
+  mapPinLinkText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    color: Colors.textSecondary,
   },
   mapContainer: {
     flex: 1,
