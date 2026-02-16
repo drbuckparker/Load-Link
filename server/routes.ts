@@ -1532,6 +1532,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           scheduled_date: jobs.scheduled_date,
           trucks_needed: jobs.trucks_needed,
           status: jobs.status,
+          material: jobs.material,
+          pickup_address: jobs.pickup_address,
+          dropoff_address: jobs.dropoff_address,
         })
         .from(jobs)
         .where(
@@ -1541,6 +1544,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             lte(jobs.scheduled_date, monthEnd),
             or(
               eq(jobs.status, 'open' as any),
+              eq(jobs.status, 'pending' as any),
               eq(jobs.status, 'accepted' as any),
               eq(jobs.status, 'in_progress' as any),
               eq(jobs.status, 'completed' as any)
@@ -1550,6 +1554,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const jobIds = contractorJobs.map(j => j.id);
       let approvedByJob: Record<string, number> = {};
+      let appliedByJob: Record<string, number> = {};
       if (jobIds.length > 0) {
         const assignments = await db
           .select({
@@ -1557,23 +1562,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
             status: jobAssignments.status,
           })
           .from(jobAssignments)
-          .where(
-            and(
-              inArray(jobAssignments.job_id, jobIds),
-              or(
-                eq(jobAssignments.status, 'approved'),
-                eq(jobAssignments.status, 'accepted')
-              )!
-            )
-          );
+          .where(inArray(jobAssignments.job_id, jobIds));
         for (const a of assignments) {
           if (a.job_id) {
-            approvedByJob[a.job_id] = (approvedByJob[a.job_id] || 0) + 1;
+            appliedByJob[a.job_id] = (appliedByJob[a.job_id] || 0) + 1;
+            if (a.status === 'approved' || a.status === 'accepted') {
+              approvedByJob[a.job_id] = (approvedByJob[a.job_id] || 0) + 1;
+            }
           }
         }
       }
 
       const dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> = {};
+      const dailyJobs: Record<string, { id: string; material: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> = {};
       for (const job of contractorJobs) {
         if (!job.scheduled_date) continue;
         const d = new Date(job.scheduled_date);
@@ -1584,9 +1585,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dailyCapacity[key].booked += approvedByJob[job.id] || 0;
         dailyCapacity[key].needed += job.trucks_needed || 1;
         dailyCapacity[key].jobCount += 1;
+        if (!dailyJobs[key]) dailyJobs[key] = [];
+        dailyJobs[key].push({
+          id: job.id,
+          material: job.material || 'Unknown',
+          trucksNeeded: job.trucks_needed || 1,
+          applied: appliedByJob[job.id] || 0,
+          approved: approvedByJob[job.id] || 0,
+          status: job.status || 'open',
+          pickup: job.pickup_address || '',
+          dropoff: job.dropoff_address || '',
+        });
       }
 
-      return res.json({ fleetSize, dailyCapacity });
+      return res.json({ fleetSize, dailyCapacity, dailyJobs });
     } catch (err) {
       console.error("Contractor calendar capacity error:", err);
       return res.status(500).json({ message: "Server error" });

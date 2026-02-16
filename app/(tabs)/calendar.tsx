@@ -70,7 +70,7 @@ export default function CalendarScreen() {
     enabled: !!user && !isContractor,
   });
 
-  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> }>({
+  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, { id: string; material: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> }>({
     queryKey: ['/api/contractor/calendar-capacity', `?month=${currentMonth + 1}&year=${currentYear}`],
     enabled: !!user && isContractor,
   });
@@ -422,14 +422,7 @@ export default function CalendarScreen() {
         )}
 
         {isContractor && selectedDate && (() => {
-          const cap = capacityQuery.data?.dailyCapacity?.[selectedDate];
-          const fleetSize = capacityQuery.data?.fleetSize || 0;
-          const booked = cap?.booked || 0;
-          const needed = cap?.needed || 0;
-          const jobCount = cap?.jobCount || 0;
-          const remaining = fleetSize > 0 ? Math.max(0, fleetSize - booked) : 0;
-          const pct = fleetSize > 0 ? Math.min(100, Math.round((booked / fleetSize) * 100)) : 0;
-          const barColor = pct >= 100 ? Colors.destructive : pct > 0 ? Colors.warning : Colors.success;
+          const dateJobs = capacityQuery.data?.dailyJobs?.[selectedDate] || [];
 
           return (
             <View style={styles.capacityCard}>
@@ -437,52 +430,57 @@ export default function CalendarScreen() {
                 {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
               </Text>
 
-              {fleetSize > 0 && (
-                <View style={styles.capacityBarOuter}>
-                  <View style={[styles.capacityBarInner, { width: `${pct}%`, backgroundColor: barColor }]} />
+              {dateJobs.length === 0 ? (
+                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                  <Ionicons name="calendar-outline" size={32} color={Colors.textMuted} />
+                  <Text style={{ color: Colors.textMuted, fontSize: 14, marginTop: 8 }}>No jobs scheduled for this date</Text>
+                </View>
+              ) : (
+                <View style={{ gap: 10, marginTop: 4 }}>
+                  {dateJobs.map((job) => (
+                    <Pressable
+                      key={job.id}
+                      style={styles.calJobCard}
+                      onPress={() => {
+                        if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        router.push(`/job/${job.id}` as any);
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
+                        <View style={[styles.calJobStatusBadge, {
+                          backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
+                            job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
+                        }]}>
+                          <Text style={[styles.calJobStatusText, {
+                            color: job.status === 'open' || job.status === 'pending' ? Colors.success :
+                              job.status === 'in_progress' ? Colors.warning : Colors.info
+                          }]}>{job.status === 'in_progress' ? 'Active' : job.status.charAt(0).toUpperCase() + job.status.slice(1)}</Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.calJobTruckRow}>
+                        <View style={styles.calJobTruckStat}>
+                          <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
+                          <Text style={styles.calJobTruckLabel}>{job.trucksNeeded} requested</Text>
+                        </View>
+                        <View style={styles.calJobTruckStat}>
+                          <Ionicons name="people" size={16} color={job.applied > 0 ? Colors.info : Colors.textMuted} />
+                          <Text style={[styles.calJobTruckLabel, job.applied > 0 && { color: Colors.info }]}>{job.applied} applied</Text>
+                        </View>
+                        {job.approved > 0 && (
+                          <View style={styles.calJobTruckStat}>
+                            <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+                            <Text style={[styles.calJobTruckLabel, { color: Colors.success }]}>{job.approved} approved</Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 12, top: '50%' }} />
+                    </Pressable>
+                  ))}
                 </View>
               )}
-
-              <View style={styles.capacityStatsRow}>
-                <View style={styles.capacityStat}>
-                  <Text style={styles.capacityStatValue}>{booked}</Text>
-                  <Text style={styles.capacityStatLabel}>Booked</Text>
-                </View>
-                <View style={styles.capacityStatDivider} />
-                <View style={styles.capacityStat}>
-                  <Text style={styles.capacityStatValue}>{needed}</Text>
-                  <Text style={styles.capacityStatLabel}>Needed</Text>
-                </View>
-                <View style={styles.capacityStatDivider} />
-                <View style={styles.capacityStat}>
-                  <Text style={[styles.capacityStatValue, { color: remaining > 0 ? Colors.success : Colors.destructive }]}>{remaining}</Text>
-                  <Text style={styles.capacityStatLabel}>Available</Text>
-                </View>
-                <View style={styles.capacityStatDivider} />
-                <View style={styles.capacityStat}>
-                  <Text style={styles.capacityStatValue}>{jobCount}</Text>
-                  <Text style={styles.capacityStatLabel}>Jobs</Text>
-                </View>
-              </View>
-
-              {fleetSize === 0 && (
-                <View style={styles.noFleetBanner}>
-                  <Ionicons name="information-circle" size={16} color={Colors.warning} />
-                  <Text style={styles.noFleetText}>Set your fleet size in Profile to track capacity</Text>
-                </View>
-              )}
-
-              <Pressable
-                style={styles.detailJobsBtn}
-                onPress={() => {
-                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  router.push({ pathname: '/(tabs)', params: { tab: 'jobs', date: selectedDate } } as any);
-                }}
-              >
-                <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
-                <Text style={styles.detailJobsBtnText}>View jobs for this date</Text>
-                <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
-              </Pressable>
             </View>
           );
         })()}
@@ -537,7 +535,7 @@ export default function CalendarScreen() {
 
         <Text style={styles.helpText}>
           {isContractor
-            ? 'Tap a date to see truck booking details. Numbers show booked/needed trucks.'
+            ? 'Tap a date to see your scheduled jobs and truck applications.'
             : 'Tap a date to set your availability. Committed days are locked to accepted jobs.'}
         </Text>
       </ScrollView>
@@ -1142,5 +1140,48 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.warning,
     flex: 1,
+  },
+  calJobCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    padding: 12,
+    paddingRight: 32,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 8,
+  },
+  calJobMaterial: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.text,
+    flex: 1,
+    marginRight: 8,
+  },
+  calJobStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  calJobStatusText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.3,
+  },
+  calJobTruckRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 14,
+    flexWrap: 'wrap' as const,
+  },
+  calJobTruckStat: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 5,
+  },
+  calJobTruckLabel: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
   },
 });
