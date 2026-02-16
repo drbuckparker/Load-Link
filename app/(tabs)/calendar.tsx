@@ -70,7 +70,7 @@ export default function CalendarScreen() {
     enabled: !!user && !isContractor,
   });
 
-  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, { id: string; material: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> }>({
+  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, { id: string; material: string; projectName: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> }>({
     queryKey: ['/api/contractor/calendar-capacity', `?month=${currentMonth + 1}&year=${currentYear}`],
     enabled: !!user && isContractor,
   });
@@ -440,6 +440,9 @@ export default function CalendarScreen() {
                         router.push(`/job/${job.id}` as any);
                       }}
                     >
+                      {job.projectName ? (
+                        <Text style={styles.calJobProject} numberOfLines={1}>{job.projectName.toUpperCase()}</Text>
+                      ) : null}
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
                         <View style={[styles.calJobStatusBadge, {
@@ -1143,6 +1146,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     gap: 8,
+  },
+  calJobProject: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    color: Colors.primary,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase' as const,
   },
   calJobMaterial: {
     fontFamily: 'ChakraPetch_700Bold',

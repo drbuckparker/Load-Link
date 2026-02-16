@@ -1535,8 +1535,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           material: jobs.material,
           origin_address: jobs.origin_address,
           destination_address: jobs.destination_address,
+          project_name: contractorProjects.name,
         })
         .from(jobs)
+        .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
         .where(
           and(
             eq(jobs.contractor_id, userId),
@@ -1574,7 +1576,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> = {};
-      const dailyJobs: Record<string, { id: string; material: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> = {};
+      const dailyJobs: Record<string, { id: string; material: string; projectName: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> = {};
       for (const job of contractorJobs) {
         if (!job.scheduled_date) continue;
         const d = new Date(job.scheduled_date);
@@ -1589,6 +1591,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dailyJobs[key].push({
           id: job.id,
           material: job.material || 'Unknown',
+          projectName: job.project_name || '',
           trucksNeeded: job.trucks_needed || 1,
           applied: appliedByJob[job.id] || 0,
           approved: approvedByJob[job.id] || 0,
