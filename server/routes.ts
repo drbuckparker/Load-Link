@@ -473,6 +473,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/jobs/:id/counter-bid", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+      const { rate, note } = req.body;
+
+      if (!rate || isNaN(Number(rate)) || Number(rate) <= 0) {
+        return res.status(400).json({ message: "Please enter a valid rate" });
+      }
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (job.status !== "open") return res.status(400).json({ message: "Job is no longer available" });
+
+      const existing = await db
+        .select()
+        .from(jobAssignments)
+        .where(and(eq(jobAssignments.job_id, id), eq(jobAssignments.driver_id, userId)))
+        .limit(1);
+
+      if (existing.length > 0) {
+        await db
+          .update(jobAssignments)
+          .set({
+            counter_bid_rate: String(rate),
+            counter_bid_note: note || null,
+            status: "counter_bid",
+          })
+          .where(eq(jobAssignments.id, existing[0].id));
+      } else {
+        await db.insert(jobAssignments).values({
+          job_id: id,
+          driver_id: userId,
+          status: "counter_bid",
+          counter_bid_rate: String(rate),
+          counter_bid_note: note || null,
+        });
+      }
+
+      await db.insert(notifications).values({
+        user_id: job.contractor_id!,
+        type: "counter_bid",
+        title: "Counter Bid Received",
+        message: `A driver submitted a counter bid of $${Number(rate).toFixed(2)} on your ${job.material} job`,
+        job_id: id,
+      });
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("Counter bid error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.post("/api/jobs/:id/withdraw", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
