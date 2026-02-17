@@ -13,6 +13,7 @@ import {
   driverVehicles,
   jobAssignments,
   contractorProjects,
+  reviews,
 } from "@shared/schema";
 import bcrypt from "bcrypt";
 import session from "express-session";
@@ -607,6 +608,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .where(eq(jobRuns.id, runId))
         .returning();
+
+      try {
+        const [job] = await db.select().from(jobs).where(eq(jobs.id, run.job_id!)).limit(1);
+        if (job) {
+          const driverId = run.driver_id;
+          const contractorId = job.contractor_id;
+          const [driverUser] = driverId ? await db.select({ full_name: users.full_name, company: users.company }).from(users).where(eq(users.id, driverId)).limit(1) : [null];
+          const [contractorUser] = contractorId ? await db.select({ full_name: users.full_name, company: users.company }).from(users).where(eq(users.id, contractorId)).limit(1) : [null];
+
+          if (driverId) {
+            await db.insert(notifications).values({
+              user_id: driverId,
+              type: "load_completed",
+              title: "Job Completed - Leave a Review",
+              message: `How was your experience hauling ${job.material || 'materials'} for ${contractorUser?.company || contractorUser?.full_name || 'the contractor'}? Tap to leave a review.`,
+              job_id: job.id,
+            });
+          }
+          if (contractorId) {
+            await db.insert(notifications).values({
+              user_id: contractorId,
+              type: "load_completed",
+              title: "Job Completed - Leave a Review",
+              message: `How was ${driverUser?.full_name || 'the driver'}'s work on your ${job.material || 'hauling'} job? Tap to leave a review.`,
+              job_id: job.id,
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("Review notification error (non-fatal):", notifErr);
+      }
 
       return res.json(updated);
     } catch (err) {
@@ -2481,6 +2513,172 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ message: "No route found" });
     } catch (err) {
       console.error("Directions error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // ============ REVIEWS ============
+
+  app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { jobId, revieweeId, rating, comment } = req.body;
+
+      if (!jobId || !revieweeId || !rating || rating < 1 || rating > 5) {
+        return res.status(400).json({ message: "Job ID, reviewee ID, and rating (1-5) required" });
+      }
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+
+      const isDriverOnJob = job.driver_id === userId ||
+        (await db.select().from(jobAssignments)
+          .where(and(eq(jobAssignments.job_id, jobId), eq(jobAssignments.driver_id, userId)))
+          .limit(1)).length > 0;
+      const isContractorOnJob = job.contractor_id === userId;
+
+      if (!isDriverOnJob && !isContractorOnJob) {
+        return res.status(403).json({ message: "You are not part of this job" });
+      }
+
+      const existing = await db.select().from(reviews)
+        .where(and(
+          eq(reviews.job_id, jobId),
+          eq(reviews.reviewer_id, userId),
+          eq(reviews.reviewee_id, revieweeId)
+        ))
+        .limit(1);
+
+      if (existing.length > 0) {
+        return res.status(400).json({ message: "You already reviewed this person for this job" });
+      }
+
+      const [reviewer] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+
+      const [review] = await db.insert(reviews).values({
+        job_id: jobId,
+        reviewer_id: userId,
+        reviewee_id: revieweeId,
+        rating: parseInt(rating),
+        comment: comment || null,
+        reviewer_role: reviewer?.role || 'driver',
+      }).returning();
+
+      const allReviews = await db.select().from(reviews)
+        .where(eq(reviews.reviewee_id, revieweeId));
+      const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+
+      await db.update(users)
+        .set({ rating: avgRating.toFixed(2) })
+        .where(eq(users.id, revieweeId));
+
+      return res.json(review);
+    } catch (err) {
+      console.error("Submit review error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/reviews/pending", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+
+      const reviewNotifs = await db.select().from(notifications)
+        .where(and(
+          eq(notifications.user_id, userId),
+          eq(notifications.type, "load_completed")
+        ));
+
+      const jobIds = [...new Set(reviewNotifs.map(n => n.job_id).filter(Boolean))] as string[];
+      if (jobIds.length === 0) return res.json([]);
+
+      const existingReviews = await db.select().from(reviews)
+        .where(eq(reviews.reviewer_id, userId));
+
+      const reviewedJobPairs = new Set(
+        existingReviews.map(r => `${r.job_id}:${r.reviewee_id}`)
+      );
+
+      const pendingReviews: any[] = [];
+
+      for (const jobId of jobIds) {
+        const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+        if (!job) continue;
+
+        const otherUserId = job.contractor_id === userId ? job.driver_id : job.contractor_id;
+        if (!otherUserId) continue;
+        if (reviewedJobPairs.has(`${jobId}:${otherUserId}`)) continue;
+
+        const [otherUser] = await db.select({
+          id: users.id,
+          full_name: users.full_name,
+          first_name: users.first_name,
+          last_name: users.last_name,
+          company: users.company,
+          role: users.role,
+          profile_image_url: users.profile_image_url,
+        }).from(users).where(eq(users.id, otherUserId)).limit(1);
+
+        if (otherUser) {
+          pendingReviews.push({
+            jobId,
+            material: job.material,
+            completedDate: job.completed_date,
+            reviewee: otherUser,
+          });
+        }
+      }
+
+      return res.json(pendingReviews);
+    } catch (err) {
+      console.error("Pending reviews error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/reviews/:userId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+
+      const userReviews = await db.select().from(reviews)
+        .where(eq(reviews.reviewee_id, userId))
+        .orderBy(desc(reviews.created_at));
+
+      const enriched = [];
+      for (const rev of userReviews) {
+        const [reviewer] = await db.select({
+          id: users.id,
+          full_name: users.full_name,
+          first_name: users.first_name,
+          last_name: users.last_name,
+          company: users.company,
+          role: users.role,
+          profile_image_url: users.profile_image_url,
+        }).from(users).where(eq(users.id, rev.reviewer_id!)).limit(1);
+
+        const [job] = await db.select({
+          id: jobs.id,
+          material: jobs.material,
+        }).from(jobs).where(eq(jobs.id, rev.job_id!)).limit(1);
+
+        enriched.push({
+          ...rev,
+          reviewer,
+          job,
+        });
+      }
+
+      const avgRating = userReviews.length > 0
+        ? userReviews.reduce((sum, r) => sum + r.rating, 0) / userReviews.length
+        : 0;
+
+      return res.json({
+        reviews: enriched,
+        averageRating: parseFloat(avgRating.toFixed(2)),
+        totalReviews: userReviews.length,
+      });
+    } catch (err) {
+      console.error("Get reviews error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });
