@@ -1662,6 +1662,112 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { month, year } = req.query;
+      if (!month || !year) return res.status(400).json({ message: "month and year required" });
+
+      const m = parseInt(month as string);
+      const y = parseInt(year as string);
+      const monthStart = new Date(Date.UTC(y, m - 1, 1));
+      const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+
+      const assignedJobs = await db
+        .select({
+          job_id: jobs.id,
+          material: jobs.material,
+          origin_address: jobs.origin_address,
+          destination_address: jobs.destination_address,
+          scheduled_date: jobs.scheduled_date,
+          pickup_time: jobs.pickup_time,
+          status: jobs.status,
+          truck_type: jobs.truck_type,
+          trucks_needed: jobs.trucks_needed,
+          rate: jobs.rate,
+          rate_type: jobs.rate_type,
+          project_name: contractorProjects.name,
+          assignment_status: jobAssignments.status,
+          vehicle_id: jobAssignments.vehicle_id,
+          contractor_name: sql<string>`(SELECT full_name FROM users WHERE id = ${jobs.contractor_id})`,
+        })
+        .from(jobAssignments)
+        .innerJoin(jobs, eq(jobAssignments.job_id, jobs.id))
+        .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
+        .where(
+          and(
+            eq(jobAssignments.driver_id, userId),
+            or(
+              eq(jobAssignments.status, 'approved'),
+              eq(jobAssignments.status, 'accepted')
+            )!,
+            gte(jobs.scheduled_date, monthStart),
+            lte(jobs.scheduled_date, monthEnd),
+            or(
+              eq(jobs.status, 'open' as any),
+              eq(jobs.status, 'pending' as any),
+              eq(jobs.status, 'accepted' as any),
+              eq(jobs.status, 'in_progress' as any),
+              eq(jobs.status, 'completed' as any)
+            )!
+          )
+        );
+
+      const vehicleIds = assignedJobs.map(j => j.vehicle_id).filter(Boolean) as string[];
+      let vehicleMap: Record<string, any> = {};
+      if (vehicleIds.length > 0) {
+        const vehicles = await db
+          .select()
+          .from(driverVehicles)
+          .where(inArray(driverVehicles.id, vehicleIds));
+        for (const v of vehicles) {
+          vehicleMap[v.id] = v;
+        }
+      }
+
+      const dailyJobs: Record<string, any[]> = {};
+      const jobDates: string[] = [];
+
+      for (const job of assignedJobs) {
+        if (!job.scheduled_date) continue;
+        const d = new Date(job.scheduled_date);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        if (!dailyJobs[key]) dailyJobs[key] = [];
+        if (!jobDates.includes(key)) jobDates.push(key);
+
+        const vehicle = job.vehicle_id ? vehicleMap[job.vehicle_id] : null;
+
+        dailyJobs[key].push({
+          id: job.job_id,
+          material: job.material || 'Unknown',
+          projectName: job.project_name || '',
+          pickup: job.origin_address || '',
+          dropoff: job.destination_address || '',
+          pickupTime: job.pickup_time || '',
+          status: job.status || 'open',
+          assignmentStatus: job.assignment_status,
+          truckType: job.truck_type || '',
+          contractorName: job.contractor_name || '',
+          rate: job.rate,
+          rateType: job.rate_type,
+          vehicle: vehicle ? {
+            id: vehicle.id,
+            make: vehicle.make,
+            model: vehicle.model,
+            year: vehicle.year,
+            licensePlate: vehicle.license_plate,
+            truckType: vehicle.truck_type,
+          } : null,
+        });
+      }
+
+      return res.json({ dailyJobs, jobDates });
+    } catch (err) {
+      console.error("Calendar jobs error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
