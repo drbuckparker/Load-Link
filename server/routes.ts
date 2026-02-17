@@ -2528,6 +2528,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Job ID, reviewee ID, and rating (1-5) required" });
       }
 
+      if (parseInt(rating) < 3 && (!comment || comment.trim().length < 10)) {
+        return res.status(400).json({ message: "Constructive feedback is required for ratings below 3 stars" });
+      }
+
       const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
       if (!job) return res.status(404).json({ message: "Job not found" });
 

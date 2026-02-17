@@ -59,9 +59,16 @@ export default function ReviewScreen() {
     );
   }
 
+  const lowRating = rating > 0 && rating < 3;
+
   async function handleSubmit() {
     if (rating === 0) {
       Alert.alert('Rating Required', 'Please select a star rating before submitting.');
+      return;
+    }
+
+    if (rating < 3 && comment.trim().length < 10) {
+      Alert.alert('Feedback Required', 'For ratings below 3 stars, please provide constructive feedback (at least 10 characters) so they can improve.');
       return;
     }
 
@@ -170,10 +177,16 @@ export default function ReviewScreen() {
           )}
 
           <View style={styles.commentSection}>
-            <Text style={styles.commentLabel}>ADDITIONAL COMMENTS</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.commentLabel}>{lowRating ? 'CONSTRUCTIVE FEEDBACK' : 'ADDITIONAL COMMENTS'}</Text>
+              {lowRating && <Text style={styles.requiredBadge}>REQUIRED</Text>}
+            </View>
+            {lowRating && (
+              <Text style={styles.feedbackHint}>Help them improve — what could they do better?</Text>
+            )}
             <TextInput
-              style={styles.commentInput}
-              placeholder="Share details about your experience..."
+              style={[styles.commentInput, lowRating && comment.trim().length < 10 && styles.commentInputRequired]}
+              placeholder={lowRating ? "What could they improve? Be specific and constructive..." : "Share details about your experience..."}
               placeholderTextColor={Colors.textMuted}
               value={comment}
               onChangeText={setComment}
@@ -317,6 +330,23 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     letterSpacing: 1,
   },
+  requiredBadge: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 9,
+    color: Colors.destructive,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
+    letterSpacing: 0.5,
+  },
+  feedbackHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.warning,
+    marginTop: -2,
+  },
   commentInput: {
     backgroundColor: Colors.card,
     borderRadius: 12,
@@ -327,6 +357,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.text,
     minHeight: 100,
+  },
+  commentInputRequired: {
+    borderColor: 'rgba(239, 68, 68, 0.5)',
   },
   charCount: {
     fontFamily: 'Inter_400Regular',
