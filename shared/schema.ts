@@ -364,6 +364,19 @@ export const contractorProjects = pgTable("contractor_projects", {
   deleted_at: timestamp("deleted_at"),
 });
 
+export const reviews = pgTable("reviews", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  job_id: varchar("job_id").references(() => jobs.id),
+  reviewer_id: varchar("reviewer_id").references(() => users.id),
+  reviewee_id: varchar("reviewee_id").references(() => users.id),
+  rating: integer("rating").notNull(),
+  comment: text("comment"),
+  reviewer_role: text("reviewer_role"),
+  created_at: timestamp("created_at").defaultNow(),
+});
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,
@@ -379,3 +392,4 @@ export type DriverAvailability = typeof driverAvailability.$inferSelect;
 export type MonthlyInvoice = typeof monthlyInvoices.$inferSelect;
 export type DriverVehicle = typeof driverVehicles.$inferSelect;
 export type JobAssignment = typeof jobAssignments.$inferSelect;
+export type Review = typeof reviews.$inferSelect;
