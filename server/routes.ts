@@ -1316,7 +1316,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       delete updates.id;
       delete updates.password;
-      delete updates.email;
 
       updates.updated_at = new Date();
 

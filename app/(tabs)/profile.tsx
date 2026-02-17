@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert, Linking } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert, Linking, Modal, TextInput, KeyboardAvoidingView } from 'react-native';
 import { useState, useRef } from 'react';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -42,6 +42,30 @@ export default function ProfileScreen() {
   const [switchingRole, setSwitchingRole] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const [locationPickerType, setLocationPickerType] = useState<'primary' | 'secondary' | null>(null);
+  const [editField, setEditField] = useState<{ label: string; key: string; value: string; apiKey: string; keyboard?: string } | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function openFieldEditor(label: string, key: string, currentValue: string, apiKey: string, keyboard?: string) {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setEditField({ label, key, value: currentValue, apiKey, keyboard });
+    setEditValue(currentValue);
+  }
+
+  async function saveFieldEdit() {
+    if (!editField) return;
+    setSaving(true);
+    try {
+      await apiRequest('PUT', '/api/profile', { [editField.apiKey]: editValue.trim() });
+      await updateUser({ [editField.key]: editValue.trim() });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setEditField(null);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to update');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleStatusToggle(value: boolean) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -154,46 +178,50 @@ export default function ProfileScreen() {
 
         <Text style={styles.sectionTitle}>CONTACT</Text>
         <View style={styles.infoCard}>
-          <View style={styles.infoRow}>
+          <Pressable style={styles.infoRow} onPress={() => openFieldEditor('Email', 'email', user.email || '', 'email', 'email-address')}>
             <Ionicons name="mail-outline" size={18} color={Colors.textMuted} />
             <Text style={styles.infoLabel}>Email</Text>
-            <Text style={styles.infoValue}>{user.email}</Text>
-          </View>
-          <View style={styles.infoRow}>
+            <Text style={styles.infoValue} numberOfLines={1}>{user.email}</Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+          </Pressable>
+          <Pressable style={styles.infoRow} onPress={() => openFieldEditor('Phone', 'phone', user.phone || '', 'phone', 'phone-pad')}>
             <Ionicons name="call-outline" size={18} color={Colors.textMuted} />
             <Text style={styles.infoLabel}>Phone</Text>
-            <Text style={styles.infoValue}>{user.phone || 'Not set'}</Text>
-          </View>
-          {user.company ? (
-            <View style={styles.infoRow}>
-              <Ionicons name="business-outline" size={18} color={Colors.textMuted} />
-              <Text style={styles.infoLabel}>Company</Text>
-              <Text style={styles.infoValue}>{user.company}</Text>
-            </View>
-          ) : null}
+            <Text style={[styles.infoValue, !user.phone && styles.infoValueMuted]} numberOfLines={1}>{user.phone || 'Not set'}</Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+          </Pressable>
+          <Pressable style={styles.infoRow} onPress={() => openFieldEditor('Company', 'company', user.company || '', 'company')}>
+            <Ionicons name="business-outline" size={18} color={Colors.textMuted} />
+            <Text style={styles.infoLabel}>Company</Text>
+            <Text style={[styles.infoValue, !user.company && styles.infoValueMuted]} numberOfLines={1}>{user.company || 'Not set'}</Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+          </Pressable>
         </View>
 
         {!isContractorRole(user.role) && (
           <>
             <Text style={styles.sectionTitle}>VEHICLE</Text>
             <View style={styles.infoCard}>
-              <View style={styles.infoRow}>
+              <Pressable style={styles.infoRow} onPress={() => openFieldEditor('Truck Type', 'truckType', user.truckType || '', 'truck_type')}>
                 <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.textMuted} />
                 <Text style={styles.infoLabel}>Type</Text>
-                <Text style={styles.infoValue}>{user.truckType ? formatTruckType(user.truckType) : 'Not set'}</Text>
-              </View>
-              <View style={styles.infoRow}>
+                <Text style={[styles.infoValue, !user.truckType && styles.infoValueMuted]} numberOfLines={1}>{user.truckType ? formatTruckType(user.truckType) : 'Not set'}</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+              </Pressable>
+              <Pressable style={styles.infoRow} onPress={() => openFieldEditor('Truck', 'truckMake', user.truckMake || '', 'truck_make')}>
                 <Ionicons name="car" size={18} color={Colors.textMuted} />
                 <Text style={styles.infoLabel}>Truck</Text>
-                <Text style={styles.infoValue}>
+                <Text style={[styles.infoValue, !(user.truckYear && user.truckMake) && styles.infoValueMuted]} numberOfLines={1}>
                   {user.truckYear && user.truckMake ? `${user.truckYear} ${user.truckMake} ${user.truckModel || ''}`.trim() : 'Not set'}
                 </Text>
-              </View>
-              <View style={styles.infoRow}>
+                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+              </Pressable>
+              <Pressable style={styles.infoRow} onPress={() => openFieldEditor('License Plate', 'licensePlate', user.licensePlate || '', 'license_plate')}>
                 <Ionicons name="card-outline" size={18} color={Colors.textMuted} />
                 <Text style={styles.infoLabel}>Plate</Text>
-                <Text style={styles.infoValue}>{user.licensePlate || 'Not set'}</Text>
-              </View>
+                <Text style={[styles.infoValue, !user.licensePlate && styles.infoValueMuted]} numberOfLines={1}>{user.licensePlate || 'Not set'}</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+              </Pressable>
             </View>
             <Pressable style={styles.navCard} onPress={() => router.push('/vehicles')}>
               <View style={styles.navCardLeft}>
@@ -459,6 +487,43 @@ export default function ProfileScreen() {
         {activeTab === 'account' && renderAccountTab()}
         {activeTab === 'billing' && renderBillingTab()}
       </ScrollView>
+
+      <Modal
+        visible={editField !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditField(null)}
+      >
+        <Pressable style={styles.editOverlay} onPress={() => setEditField(null)}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.editKeyboard}>
+            <Pressable style={styles.editSheet} onPress={() => {}}>
+              <View style={styles.editHeader}>
+                <Pressable onPress={() => setEditField(null)}>
+                  <Text style={styles.editCancel}>Cancel</Text>
+                </Pressable>
+                <Text style={styles.editTitle}>{editField?.label || ''}</Text>
+                <Pressable onPress={saveFieldEdit} disabled={saving}>
+                  <Text style={[styles.editDone, saving && { opacity: 0.5 }]}>Save</Text>
+                </Pressable>
+              </View>
+              <View style={styles.editInputWrap}>
+                <TextInput
+                  style={styles.editInput}
+                  value={editValue}
+                  onChangeText={setEditValue}
+                  placeholder={`Enter ${editField?.label?.toLowerCase() || ''}`}
+                  placeholderTextColor={Colors.textMuted}
+                  autoFocus
+                  keyboardType={(editField?.keyboard as any) || 'default'}
+                  autoCapitalize={editField?.keyboard === 'email-address' ? 'none' : 'words'}
+                  returnKeyType="done"
+                  onSubmitEditing={saveFieldEdit}
+                />
+              </View>
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Modal>
 
       <LocationPickerModal
         visible={locationPickerType !== null}
@@ -909,5 +974,60 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textMuted,
     marginTop: 2,
+  },
+  editOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  editKeyboard: {
+    justifyContent: 'flex-end',
+  },
+  editSheet: {
+    backgroundColor: Colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 40,
+  },
+  editHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  editTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  editCancel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: Colors.textMuted,
+  },
+  editDone: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    color: Colors.primary,
+  },
+  editInputWrap: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+  },
+  editInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontFamily: 'Inter_500Medium',
+    fontSize: 16,
+    color: Colors.text,
   },
 });
