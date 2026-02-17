@@ -190,7 +190,7 @@ export default function JobDetailScreen() {
   const statusColor = getStatusColor(jobStatus);
   const jobTypeColor = getJobTypeColor(job.jobType);
   const isMyJob = job.driverId === user?.id;
-  const canAccept = (jobStatus === 'open' || jobStatus === 'pending') && !isMyJob && !isMyPostedJob;
+  const canAccept = jobStatus === 'open' || jobStatus === 'pending';
   const canStart = (jobStatus === 'accepted' || jobStatus === 'in_progress') && isMyJob;
 
   function formatElapsed(sec: number) {
