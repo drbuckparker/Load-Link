@@ -36,9 +36,9 @@ function NativeTabLayout({ role }: { role: string }) {
           <Label>Invoices</Label>
         </NativeTabs.Trigger>
       ) : (
-        <NativeTabs.Trigger name="earnings">
-          <Icon sf={{ default: "dollarsign.circle", selected: "dollarsign.circle.fill" }} />
-          <Label>Earnings</Label>
+        <NativeTabs.Trigger name="my-jobs">
+          <Icon sf={{ default: "briefcase", selected: "briefcase.fill" }} />
+          <Label>Jobs</Label>
         </NativeTabs.Trigger>
       )}
       <NativeTabs.Trigger name="profile">
@@ -112,13 +112,19 @@ function ClassicTabLayout({ role }: { role: string }) {
         }}
       />
       <Tabs.Screen
-        name="earnings"
+        name="my-jobs"
         options={{
-          title: "Earnings",
+          title: "Jobs",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet" size={size} color={color} />
+            <Ionicons name="briefcase" size={size} color={color} />
           ),
           href: contractor ? null : undefined,
+        }}
+      />
+      <Tabs.Screen
+        name="earnings"
+        options={{
+          href: null,
         }}
       />
       <Tabs.Screen

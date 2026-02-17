@@ -1662,6 +1662,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { filter } = req.query;
+
+      const statusFilter = filter === 'completed'
+        ? [eq(jobs.status, 'completed')]
+        : [
+            or(
+              eq(jobs.status, 'open' as any),
+              eq(jobs.status, 'pending' as any),
+              eq(jobs.status, 'accepted' as any),
+              eq(jobs.status, 'in_progress' as any)
+            )!
+          ];
+
+      const assignedJobs = await db
+        .select({
+          assignment_id: jobAssignments.id,
+          assignment_status: jobAssignments.status,
+          vehicle_id: jobAssignments.vehicle_id,
+          job_id: jobs.id,
+          material: jobs.material,
+          origin_address: jobs.origin_address,
+          destination_address: jobs.destination_address,
+          scheduled_date: jobs.scheduled_date,
+          pickup_time: jobs.pickup_time,
+          status: jobs.status,
+          truck_type: jobs.truck_type,
+          trucks_needed: jobs.trucks_needed,
+          rate: jobs.rate,
+          rate_type: jobs.rate_type,
+          project_name: contractorProjects.name,
+          contractor_name: sql<string>`(SELECT full_name FROM users WHERE id = ${jobs.contractor_id})`,
+          contractor_company: sql<string>`(SELECT company FROM users WHERE id = ${jobs.contractor_id})`,
+        })
+        .from(jobAssignments)
+        .innerJoin(jobs, eq(jobAssignments.job_id, jobs.id))
+        .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
+        .where(
+          and(
+            eq(jobAssignments.driver_id, userId),
+            or(
+              eq(jobAssignments.status, 'approved'),
+              eq(jobAssignments.status, 'accepted'),
+              eq(jobAssignments.status, 'pending')
+            )!,
+            ...statusFilter
+          )
+        )
+        .orderBy(desc(jobs.scheduled_date));
+
+      const vehicleIds = assignedJobs.map(j => j.vehicle_id).filter(Boolean) as string[];
+      let vehicleMap: Record<string, any> = {};
+      if (vehicleIds.length > 0) {
+        const vehicles = await db.select().from(driverVehicles).where(inArray(driverVehicles.id, vehicleIds));
+        for (const v of vehicles) vehicleMap[v.id] = v;
+      }
+
+      const result = assignedJobs.map(job => {
+        const vehicle = job.vehicle_id ? vehicleMap[job.vehicle_id] : null;
+        return {
+          assignmentId: job.assignment_id,
+          id: job.job_id,
+          material: job.material || 'Unknown',
+          projectName: job.project_name || '',
+          pickup: job.origin_address || '',
+          dropoff: job.destination_address || '',
+          pickupTime: job.pickup_time || '',
+          scheduledDate: job.scheduled_date,
+          status: job.status || 'open',
+          assignmentStatus: job.assignment_status,
+          truckType: job.truck_type || '',
+          trucksNeeded: job.trucks_needed || 1,
+          contractorName: job.contractor_name || '',
+          contractorCompany: job.contractor_company || '',
+          rate: job.rate,
+          rateType: job.rate_type,
+          vehicle: vehicle ? {
+            id: vehicle.id,
+            make: vehicle.make,
+            model: vehicle.model,
+            year: vehicle.year,
+            licensePlate: vehicle.license_plate,
+            truckType: vehicle.truck_type,
+          } : null,
+        };
+      });
+
+      return res.json(result);
+    } catch (err) {
+      console.error("Driver jobs error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.put("/api/assignments/:assignmentId/vehicle", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { assignmentId } = req.params;
+      const { vehicleId } = req.body;
+
+      const [assignment] = await db
+        .select()
+        .from(jobAssignments)
+        .where(eq(jobAssignments.id, assignmentId))
+        .limit(1);
+
+      if (!assignment) return res.status(404).json({ message: "Assignment not found" });
+      if (assignment.driver_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      if (vehicleId) {
+        const [vehicle] = await db.select().from(driverVehicles).where(eq(driverVehicles.id, vehicleId)).limit(1);
+        if (!vehicle || vehicle.driver_id !== userId) return res.status(400).json({ message: "Vehicle not found" });
+      }
+
+      await db
+        .update(jobAssignments)
+        .set({ vehicle_id: vehicleId || null })
+        .where(eq(jobAssignments.id, assignmentId));
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Assign vehicle error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;

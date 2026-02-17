@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert, Linking, Modal, TextInput, KeyboardAvoidingView } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert, Linking, Modal, TextInput, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
 import { useState, useRef } from 'react';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,17 +9,20 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatTruckType } from '@/lib/mock-data';
 import { apiRequest } from '@/lib/query-client';
 import { queryClient } from '@/lib/query-client';
+import { useQuery } from '@tanstack/react-query';
+import { Earning } from '@/lib/mock-data';
 import LocationPickerModal from '@/components/LocationPickerModal';
 
 function isContractorRole(role: string): boolean {
   return role.includes('contractor');
 }
 
-type SettingsTab = 'profile' | 'role' | 'help' | 'account' | 'billing';
+type SettingsTab = 'profile' | 'role' | 'earnings' | 'help' | 'account' | 'billing';
 
 const TABS: { key: SettingsTab; label: string; icon: string }[] = [
   { key: 'profile', label: 'Profile', icon: 'person-outline' },
   { key: 'role', label: 'Role', icon: 'swap-horizontal' },
+  { key: 'earnings', label: 'Earnings', icon: 'wallet-outline' },
   { key: 'help', label: 'Help', icon: 'help-circle-outline' },
   { key: 'account', label: 'Account', icon: 'shield-outline' },
   { key: 'billing', label: 'Billing', icon: 'card-outline' },
@@ -45,6 +48,12 @@ export default function ProfileScreen() {
   const [editField, setEditField] = useState<{ label: string; key: string; value: string; apiKey: string; keyboard?: string } | null>(null);
   const [editValue, setEditValue] = useState('');
   const [saving, setSaving] = useState(false);
+  const [earningsPeriod, setEarningsPeriod] = useState<'week' | 'month' | 'all'>('month');
+
+  const earningsQuery = useQuery<any>({
+    queryKey: [`/api/earnings?period=${earningsPeriod}`],
+    enabled: activeTab === 'earnings',
+  });
 
   function openFieldEditor(label: string, key: string, currentValue: string, apiKey: string, keyboard?: string) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -414,6 +423,114 @@ export default function ProfileScreen() {
     );
   }
 
+  function renderEarningsTab() {
+    const earningsData = earningsQuery.data;
+    const earningsLoading = earningsQuery.isLoading;
+
+    const earningsList = earningsData?.earnings || earningsData || [];
+    const items = Array.isArray(earningsList) ? earningsList : [];
+    const stats = earningsData?.stats;
+    const totalEarnings = stats?.totalEarnings ?? stats?.total_earnings ?? items.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+    const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? items.filter((e: any) => e.status === 'pending').reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+    const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? items.filter((e: any) => e.status === 'paid').reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+    const totalHours = items.reduce((sum: number, e: any) => sum + (Number(e.billed_hours ?? e.billedHours) || 0), 0);
+
+    return (
+      <>
+        <View style={styles.earningsStatsCard}>
+          <View style={{ alignItems: 'center', marginBottom: 16 }}>
+            <Text style={styles.earningsLabel}>TOTAL EARNINGS</Text>
+            <Text style={styles.earningsTotal}>${Number(totalEarnings).toLocaleString()}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success }} />
+              <View>
+                <Text style={styles.earningsStatLabel}>Paid</Text>
+                <Text style={styles.earningsStatValue}>${Number(paidAmount).toLocaleString()}</Text>
+              </View>
+            </View>
+            <View style={{ width: 1, height: 28, backgroundColor: Colors.border }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.warning }} />
+              <View>
+                <Text style={styles.earningsStatLabel}>Pending</Text>
+                <Text style={styles.earningsStatValue}>${Number(pendingAmount).toLocaleString()}</Text>
+              </View>
+            </View>
+            <View style={{ width: 1, height: 28, backgroundColor: Colors.border }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.info }} />
+              <View>
+                <Text style={styles.earningsStatLabel}>Hours</Text>
+                <Text style={styles.earningsStatValue}>{totalHours.toFixed(1)}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+          {(['week', 'month', 'all'] as const).map(p => (
+            <Pressable
+              key={p}
+              style={[styles.earningsPeriodChip, earningsPeriod === p && styles.earningsPeriodChipActive]}
+              onPress={() => setEarningsPeriod(p)}
+            >
+              <Text style={[styles.earningsPeriodText, earningsPeriod === p && styles.earningsPeriodTextActive]}>
+                {p === 'week' ? 'This Week' : p === 'month' ? 'This Month' : 'All Time'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <Text style={styles.earningsSectionTitle}>JOB HISTORY</Text>
+
+        {earningsLoading ? (
+          <View style={{ paddingTop: 40, alignItems: 'center' }}>
+            <ActivityIndicator size="large" color={Colors.primary} />
+          </View>
+        ) : items.length === 0 ? (
+          <View style={{ paddingTop: 40, alignItems: 'center', gap: 8 }}>
+            <Ionicons name="wallet-outline" size={48} color={Colors.textMuted} />
+            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, marginTop: 8 }}>No Earnings Yet</Text>
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted }}>Complete jobs to start earning</Text>
+          </View>
+        ) : (
+          <View style={{ gap: 10 }}>
+            {items.map((item: any) => (
+              <View key={item.id} style={styles.earningCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                  <View style={styles.earningCardIcon}>
+                    <Ionicons name="briefcase" size={16} color={Colors.primary} />
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.text }}>{item.material}</Text>
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary }}>{item.contractor_company || item.contractorCompany}</Text>
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted }}>
+                      {new Date(item.date || item.completed_date || item.completedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {Number(item.billed_hours ?? item.billedHours ?? 0).toFixed(1)}h
+                    </Text>
+                  </View>
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>${Number(item.amount).toLocaleString()}</Text>
+                  <View style={{
+                    paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
+                    backgroundColor: (item.status === 'paid' || item.payment_status === 'paid') ? Colors.successBg : Colors.warningBg
+                  }}>
+                    <Text style={{
+                      fontFamily: 'Inter_600SemiBold', fontSize: 9, letterSpacing: 0.5,
+                      color: (item.status === 'paid' || item.payment_status === 'paid') ? Colors.success : Colors.warning
+                    }}>{(item.status || item.payment_status || 'pending').toUpperCase()}</Text>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+      </>
+    );
+  }
+
   function renderBillingTab() {
     return (
       <>
@@ -484,6 +601,7 @@ export default function ProfileScreen() {
         {activeTab === 'profile' && renderProfileTab()}
         {activeTab === 'role' && renderRoleTab()}
         {activeTab === 'help' && renderHelpTab()}
+        {activeTab === 'earnings' && renderEarningsTab()}
         {activeTab === 'account' && renderAccountTab()}
         {activeTab === 'billing' && renderBillingTab()}
       </ScrollView>
@@ -1029,5 +1147,81 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 16,
     color: Colors.text,
+  },
+  earningsStatsCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 14,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 16,
+  },
+  earningsLabel: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 11,
+    color: Colors.textSecondary,
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  earningsTotal: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 36,
+    color: Colors.primary,
+  },
+  earningsStatLabel: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
+  earningsStatValue: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.text,
+  },
+  earningsPeriodChip: {
+    flex: 1,
+    alignItems: 'center' as const,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  earningsPeriodChipActive: {
+    backgroundColor: Colors.primaryLight,
+    borderColor: Colors.primary,
+  },
+  earningsPeriodText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  earningsPeriodTextActive: {
+    color: Colors.primary,
+  },
+  earningsSectionTitle: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    letterSpacing: 1,
+    marginBottom: 12,
+  },
+  earningCard: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  earningCardIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
   },
 });
