@@ -81,6 +81,11 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `GET /api/messages/:jobId` - Get messages for a job
 - `POST /api/messages/:jobId` - Send a message
 
+### Reviews
+- `POST /api/reviews` - Submit a review (jobId, revieweeId, rating 1-5, comment)
+- `GET /api/reviews/pending` - Get jobs where current user hasn't reviewed the other party yet
+- `GET /api/reviews/:userId` - Get all reviews for a user (with reviewer info, average rating)
+
 ### Other
 - `GET /api/notifications` - Get user notifications
 - `POST /api/notifications/mark-read` - Mark all notifications read
@@ -94,12 +99,13 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 
 ## App Screens
 - **(auth)**: login, register, forgot-password
-- **(tabs)**: jobs (index), calendar, messages, earnings/invoices, profile
+- **(tabs)**: jobs (index), calendar, messages, my-jobs/invoices, profile
 - **job/[id]**: Job detail with timer (drivers), driver assignments (contractors)
 - **chat/[jobId]**: Chat messages for a job
 - **notifications**: Notification center
 - **create-job**: Contractor job creation form
 - **vehicles**: Vehicle management (add/edit/delete)
+- **review**: Review submission screen (star rating + comment)
 
 ## Key Files
 - `shared/schema.ts` - Drizzle ORM schema (snake_case field names matching DB)
@@ -139,3 +145,10 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - API endpoints: `/api/places/autocomplete`, `/api/places/details`, `/api/directions`
 - Calendar date picker for scheduled date (Month Day, Year format)
 - Materials autocomplete dropdown from past jobs
+- Built review system: reviews table, POST/GET API endpoints, star rating + comment UI
+- Review notifications auto-sent to both driver and contractor on job clock-out
+- Tapping "load_completed" notification opens review screen for that job
+- Pending reviews banner shown at top of Messages tab
+- Submitted reviews update user's average rating in users table
+- Moved Earnings from tab bar to Profile screen (as Earnings sub-tab)
+- Replaced Earnings tab with Jobs tab showing driver's assigned jobs with vehicle assignment
