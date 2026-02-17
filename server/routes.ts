@@ -443,6 +443,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req.session as any).userId;
       const { id } = req.params;
+      const { vehicleIds } = req.body || {};
 
       const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
       if (!job) return res.status(404).json({ message: "Job not found" });
@@ -453,11 +454,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .set({ driver_id: userId, status: "accepted", updated_at: new Date() })
         .where(eq(jobs.id, id));
 
-      await db.insert(jobAssignments).values({
-        job_id: id,
-        driver_id: userId,
-        status: "accepted",
-      });
+      const vIds = Array.isArray(vehicleIds) ? vehicleIds : [];
+      if (vIds.length > 0) {
+        for (const vehicleId of vIds) {
+          await db.insert(jobAssignments).values({
+            job_id: id,
+            driver_id: userId,
+            vehicle_id: vehicleId,
+            status: "accepted",
+          });
+        }
+      } else {
+        await db.insert(jobAssignments).values({
+          job_id: id,
+          driver_id: userId,
+          status: "accepted",
+        });
+      }
 
       await db.insert(notifications).values({
         user_id: job.contractor_id!,
