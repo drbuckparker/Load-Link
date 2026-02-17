@@ -107,9 +107,22 @@ export default function CalendarScreen() {
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
+  const calendarJobsQuery = useQuery<{
+    dailyJobs: Record<string, {
+      id: string; material: string; projectName: string; pickup: string; dropoff: string;
+      pickupTime: string; status: string; assignmentStatus: string; truckType: string;
+      contractorName: string; rate: string; rateType: string;
+      vehicle: { id: string; make: string; model: string; year: number; licensePlate: string; truckType: string } | null;
+    }[]>;
+    jobDates: string[];
+  }>({
+    queryKey: ['/api/calendar/jobs', `?month=${currentMonth + 1}&year=${currentYear}`],
+    enabled: !!user && !isContractor,
+  });
+
   const dateJobsQuery = useQuery<any[]>({
     queryKey: ['/api/jobs', `?date=${selectedDate}&status=open`],
-    enabled: !!user && !!selectedDate,
+    enabled: !!user && !!selectedDate && !isContractor,
   });
 
   const calendarDays = useMemo(() => {
@@ -360,11 +373,16 @@ export default function CalendarScreen() {
                 );
               }
 
+              const assignedJobCount = calendarJobsQuery.data?.dailyJobs?.[key]?.length || 0;
+
               return (
                 <Pressable
                   key={key}
                   style={[styles.dayCell, isSelected && styles.dayCellSelected]}
-                  onPress={() => openModal(day)}
+                  onPress={() => {
+                    setSelectedDate(key);
+                    openModal(day);
+                  }}
                 >
                   <Text style={[
                     styles.dayNumber,
@@ -373,9 +391,20 @@ export default function CalendarScreen() {
                   ]}>
                     {day.date}
                   </Text>
-                  {day.status === 'available' && <View style={[styles.statusDot, { backgroundColor: Colors.success }]} />}
-                  {day.status === 'unavailable' && <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />}
-                  {day.status === 'committed' && <View style={[styles.statusDot, { backgroundColor: Colors.info }]} />}
+                  {assignedJobCount > 0 ? (
+                    <View style={styles.capacityDotsRow}>
+                      <View style={[styles.statusDot, { backgroundColor: Colors.info }]} />
+                    </View>
+                  ) : (
+                    <>
+                      {day.status === 'available' && <View style={[styles.statusDot, { backgroundColor: Colors.success }]} />}
+                      {day.status === 'unavailable' && <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />}
+                      {day.status === 'committed' && <View style={[styles.statusDot, { backgroundColor: Colors.info }]} />}
+                    </>
+                  )}
+                  {assignedJobCount > 0 && (
+                    <Text style={styles.truckCountBadge}>{assignedJobCount}</Text>
+                  )}
                   {isToday && <View style={styles.todayIndicator} />}
                 </Pressable>
               );
@@ -410,7 +439,7 @@ export default function CalendarScreen() {
             </View>
             <View style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
-              <Text style={styles.legendText}>Committed</Text>
+              <Text style={styles.legendText}>Assigned</Text>
             </View>
           </View>
         )}
@@ -482,53 +511,144 @@ export default function CalendarScreen() {
           );
         })()}
 
-        {!isContractor && selectedDate && selectedAvail && (
-          <View style={styles.detailCard}>
-            <Text style={styles.detailDate}>
-              {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-            </Text>
-            <View style={styles.detailRow}>
-              <View style={[styles.detailBadge, {
-                backgroundColor: selectedAvail.status === 'committed' ? Colors.infoBg :
-                  selectedAvail.status === 'available' ? Colors.successBg : Colors.destructiveBg
-              }]}>
-                <Text style={[styles.detailBadgeText, {
-                  color: selectedAvail.status === 'committed' ? Colors.info :
-                    selectedAvail.status === 'available' ? Colors.success : Colors.destructive
-                }]}>
-                  {selectedAvail.status?.toUpperCase()}
-                </Text>
-              </View>
-              {selectedAvail.shift && (
-                <Text style={styles.detailShift}>
-                  {SHIFTS.find(s => s.key === selectedAvail.shift)?.label || selectedAvail.shift}
-                </Text>
-              )}
-            </View>
-            {selectedAvail.name && (
-              <Text style={styles.detailCompany}>{selectedAvail.name}</Text>
-            )}
-            {selectedAvail.notes ? (
-              <Text style={styles.detailNotes}>{selectedAvail.notes}</Text>
-            ) : null}
+        {!isContractor && selectedDate && (() => {
+          const assignedJobs = calendarJobsQuery.data?.dailyJobs?.[selectedDate] || [];
 
-            <Pressable
-              style={styles.detailJobsBtn}
-              onPress={() => {
-                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                router.push({ pathname: '/jobs-browse', params: { date: selectedDate || '' } } as any);
-              }}
-            >
-              <Ionicons name="search-outline" size={16} color={Colors.primary} />
-              <Text style={styles.detailJobsBtnText}>
-                {dateJobsQuery.isLoading ? 'Checking jobs...' :
-                  dateJobsQuery.data?.length ? `${dateJobsQuery.data.length} open job${dateJobsQuery.data.length !== 1 ? 's' : ''} on this date` :
-                  'Check for jobs on this date'}
+          return (
+            <View style={styles.detailCard}>
+              <Text style={styles.detailDate}>
+                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
               </Text>
-              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
-            </Pressable>
-          </View>
-        )}
+
+              {selectedAvail && (
+                <View style={styles.detailRow}>
+                  <View style={[styles.detailBadge, {
+                    backgroundColor: selectedAvail.status === 'committed' ? Colors.infoBg :
+                      selectedAvail.status === 'available' ? Colors.successBg : Colors.destructiveBg
+                  }]}>
+                    <Text style={[styles.detailBadgeText, {
+                      color: selectedAvail.status === 'committed' ? Colors.info :
+                        selectedAvail.status === 'available' ? Colors.success : Colors.destructive
+                    }]}>
+                      {selectedAvail.status?.toUpperCase()}
+                    </Text>
+                  </View>
+                  {selectedAvail.shift && (
+                    <Text style={styles.detailShift}>
+                      {SHIFTS.find(s => s.key === selectedAvail.shift)?.label || selectedAvail.shift}
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              {selectedAvail?.name && (
+                <Text style={styles.detailCompany}>{selectedAvail.name}</Text>
+              )}
+              {selectedAvail?.notes ? (
+                <Text style={styles.detailNotes}>{selectedAvail.notes}</Text>
+              ) : null}
+
+              {assignedJobs.length > 0 && (
+                <View style={{ gap: 10, marginTop: 4 }}>
+                  <Text style={styles.assignedJobsTitle}>ASSIGNED JOBS</Text>
+                  {assignedJobs.map((job) => (
+                    <Pressable
+                      key={job.id}
+                      style={styles.calJobCard}
+                      onPress={() => {
+                        if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        router.push(`/job/${job.id}` as any);
+                      }}
+                    >
+                      {job.projectName ? (
+                        <Text style={styles.calJobProject} numberOfLines={1}>{job.projectName.toUpperCase()}</Text>
+                      ) : null}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
+                        <View style={[styles.calJobStatusBadge, {
+                          backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
+                            job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
+                        }]}>
+                          <Text style={[styles.calJobStatusText, {
+                            color: job.status === 'open' || job.status === 'pending' ? Colors.success :
+                              job.status === 'in_progress' ? Colors.warning : Colors.info
+                          }]}>{job.status === 'in_progress' ? 'Active' : job.status.charAt(0).toUpperCase() + job.status.slice(1)}</Text>
+                        </View>
+                      </View>
+
+                      {job.contractorName ? (
+                        <View style={styles.calJobTruckStat}>
+                          <Ionicons name="business-outline" size={14} color={Colors.textSecondary} />
+                          <Text style={styles.calJobTruckLabel}>{job.contractorName}</Text>
+                        </View>
+                      ) : null}
+
+                      {job.vehicle ? (
+                        <View style={styles.truckAssignmentRow}>
+                          <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
+                          <Text style={styles.truckAssignmentText}>
+                            {job.vehicle.year} {job.vehicle.make} {job.vehicle.model}
+                          </Text>
+                          {job.vehicle.licensePlate ? (
+                            <View style={styles.licensePlateBadge}>
+                              <Text style={styles.licensePlateText}>{job.vehicle.licensePlate}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      ) : (
+                        <View style={styles.calJobTruckStat}>
+                          <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.textMuted} />
+                          <Text style={[styles.calJobTruckLabel, { color: Colors.textMuted, fontStyle: 'italic' }]}>No truck assigned</Text>
+                        </View>
+                      )}
+
+                      {(job.pickup || job.dropoff) && (
+                        <View style={{ gap: 4 }}>
+                          {job.pickup ? (
+                            <View style={styles.calJobTruckStat}>
+                              <Ionicons name="location" size={14} color={Colors.success} />
+                              <Text style={styles.calJobTruckLabel} numberOfLines={1}>{job.pickup}</Text>
+                            </View>
+                          ) : null}
+                          {job.dropoff ? (
+                            <View style={styles.calJobTruckStat}>
+                              <Ionicons name="flag" size={14} color={Colors.destructive} />
+                              <Text style={styles.calJobTruckLabel} numberOfLines={1}>{job.dropoff}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      )}
+
+                      <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 12, top: '50%' }} />
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+
+              {assignedJobs.length === 0 && !selectedAvail && (
+                <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+                  <Text style={{ color: Colors.textMuted, fontSize: 13, fontFamily: 'Inter_400Regular' }}>No jobs or availability set</Text>
+                </View>
+              )}
+
+              <Pressable
+                style={styles.detailJobsBtn}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push({ pathname: '/jobs-browse', params: { date: selectedDate || '' } } as any);
+                }}
+              >
+                <Ionicons name="search-outline" size={16} color={Colors.primary} />
+                <Text style={styles.detailJobsBtnText}>
+                  {dateJobsQuery.isLoading ? 'Checking jobs...' :
+                    dateJobsQuery.data?.length ? `${dateJobsQuery.data.length} open job${dateJobsQuery.data.length !== 1 ? 's' : ''} on this date` :
+                    'Browse jobs on this date'}
+                </Text>
+                <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+              </Pressable>
+            </View>
+          );
+        })()}
 
         <Text style={styles.helpText}>
           {isContractor
@@ -1187,5 +1307,40 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
     color: Colors.textSecondary,
+  },
+  assignedJobsTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    color: Colors.textMuted,
+    letterSpacing: 1,
+  },
+  truckAssignmentRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  truckAssignmentText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.primary,
+    flex: 1,
+  },
+  licensePlateBadge: {
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  licensePlateText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 11,
+    color: Colors.text,
+    letterSpacing: 0.5,
   },
 });
