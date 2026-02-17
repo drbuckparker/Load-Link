@@ -143,6 +143,14 @@ export default function JobDetailScreen() {
   const [counterBidRate, setCounterBidRate] = useState('');
   const [counterBidNote, setCounterBidNote] = useState('');
   const [submittingBid, setSubmittingBid] = useState(false);
+  const [truckSelectVisible, setTruckSelectVisible] = useState(false);
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
+  const [acceptingJob, setAcceptingJob] = useState(false);
+
+  const { data: vehiclesData } = useQuery<any[]>({
+    queryKey: ['/api/vehicles'],
+    enabled: truckSelectVisible,
+  });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -259,16 +267,38 @@ export default function JobDetailScreen() {
     ]);
   }
 
-  async function handleAccept() {
+  function handleAccept() {
+    setSelectedVehicleIds([]);
+    setTruckSelectVisible(true);
+  }
+
+  async function handleConfirmAccept() {
+    if (selectedVehicleIds.length === 0) {
+      Alert.alert('Select a Truck', 'Please select at least one truck to assign to this job');
+      return;
+    }
+    setAcceptingJob(true);
     try {
-      await apiRequest('POST', `/api/jobs/${id}/accept`);
+      await apiRequest('POST', `/api/jobs/${id}/accept`, {
+        vehicleIds: selectedVehicleIds,
+      });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setTruckSelectVisible(false);
       setJobStatus('accepted');
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to accept job');
     }
+    setAcceptingJob(false);
+  }
+
+  function toggleVehicleSelection(vehicleId: string) {
+    setSelectedVehicleIds(prev =>
+      prev.includes(vehicleId)
+        ? prev.filter(id => id !== vehicleId)
+        : [...prev, vehicleId]
+    );
   }
 
   async function handleCounterBid() {
@@ -856,6 +886,113 @@ export default function JobDetailScreen() {
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={truckSelectVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTruckSelectVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setTruckSelectVisible(false)}>
+          <Pressable style={styles.truckSelectSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.truckSelectTitle}>SELECT YOUR TRUCK{job.trucksNeeded > 1 ? 'S' : ''}</Text>
+            <Text style={styles.truckSelectSubtitle}>
+              {job.trucksNeeded > 1
+                ? `This job needs ${job.trucksNeeded} trucks. Select which to assign.`
+                : 'Choose which truck to assign to this job.'}
+            </Text>
+
+            {!vehiclesData ? (
+              <View style={{ padding: 32, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+              </View>
+            ) : vehiclesData.length === 0 ? (
+              <View style={styles.noTrucksBox}>
+                <MaterialCommunityIcons name="dump-truck" size={32} color={Colors.textMuted} />
+                <Text style={styles.noTrucksText}>No trucks found</Text>
+                <Pressable
+                  style={styles.addTruckBtn}
+                  onPress={() => {
+                    setTruckSelectVisible(false);
+                    router.push('/vehicles');
+                  }}
+                >
+                  <Ionicons name="add-circle" size={18} color={Colors.primary} />
+                  <Text style={styles.addTruckBtnText}>ADD A TRUCK</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false} bounces={false}>
+                {vehiclesData.map((v: any) => {
+                  const vId = v.id;
+                  const isSelected = selectedVehicleIds.includes(vId);
+                  const truckLabel = [v.year, v.make, v.model].filter(Boolean).join(' ');
+                  const truckTypeLabel = v.truck_type ? formatTruckType(v.truck_type) : '';
+                  return (
+                    <Pressable
+                      key={vId}
+                      style={[styles.truckOption, isSelected && styles.truckOptionSelected]}
+                      onPress={() => {
+                        if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        toggleVehicleSelection(vId);
+                      }}
+                    >
+                      <View style={[styles.truckCheckbox, isSelected && styles.truckCheckboxSelected]}>
+                        {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                      </View>
+                      <MaterialCommunityIcons name="dump-truck" size={24} color={isSelected ? Colors.primary : Colors.textMuted} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }]}>
+                          {truckLabel || 'Unnamed Truck'}
+                        </Text>
+                        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                          {truckTypeLabel ? (
+                            <Text style={styles.truckOptionMeta}>{truckTypeLabel}</Text>
+                          ) : null}
+                          {v.license_plate ? (
+                            <Text style={styles.truckOptionMeta}>Plate: {v.license_plate}</Text>
+                          ) : null}
+                          {v.truck_number ? (
+                            <Text style={styles.truckOptionMeta}>#{v.truck_number}</Text>
+                          ) : null}
+                          {v.max_capacity_tons ? (
+                            <Text style={styles.truckOptionMeta}>{v.max_capacity_tons}T</Text>
+                          ) : null}
+                        </View>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            {vehiclesData && vehiclesData.length > 0 && (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmAcceptBtn,
+                  selectedVehicleIds.length === 0 && { opacity: 0.5 },
+                  pressed && { opacity: 0.85 },
+                  acceptingJob && { opacity: 0.6 },
+                ]}
+                onPress={handleConfirmAccept}
+                disabled={acceptingJob || selectedVehicleIds.length === 0}
+              >
+                {acceptingJob ? (
+                  <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
+                    <Text style={styles.confirmAcceptText}>
+                      ACCEPT WITH {selectedVehicleIds.length} TRUCK{selectedVehicleIds.length !== 1 ? 'S' : ''}
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+            )}
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
@@ -1597,6 +1734,109 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   cbSubmitText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.primaryForeground,
+    letterSpacing: 1,
+  },
+  truckSelectSheet: {
+    backgroundColor: Colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    paddingBottom: 40,
+    width: '100%',
+  },
+  truckSelectTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    letterSpacing: 1,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  truckSelectSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  noTrucksBox: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    gap: 12,
+  },
+  noTrucksText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: Colors.textMuted,
+  },
+  addTruckBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: 10,
+  },
+  addTruckBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.primary,
+    letterSpacing: 0.5,
+  },
+  truckOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    marginBottom: 8,
+    gap: 12,
+  },
+  truckOptionSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: 'rgba(255, 153, 0, 0.08)',
+  },
+  truckCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: Colors.textMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  truckCheckboxSelected: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  truckOptionName: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.textSecondary,
+  },
+  truckOptionMeta: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  confirmAcceptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    height: 52,
+    gap: 8,
+    marginTop: 16,
+  },
+  confirmAcceptText: {
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 15,
     color: Colors.primaryForeground,
