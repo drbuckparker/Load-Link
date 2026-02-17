@@ -331,12 +331,20 @@ export default function DashboardScreen() {
                               }]}>{job.status === 'in_progress' ? 'ACTIVE' : job.status.toUpperCase()}</Text>
                             </View>
                           </View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                             <MaterialCommunityIcons name="dump-truck" size={13} color={Colors.primary} />
-                            <Text style={styles.weekJobStat}>{job.trucksNeeded} requested</Text>
+                            <Text style={styles.weekJobStat}>{job.assigned || 0}/{job.trucksNeeded} trucks</Text>
                             <Ionicons name="people" size={13} color={job.applied > 0 ? Colors.info : Colors.textMuted} />
                             <Text style={[styles.weekJobStat, job.applied > 0 && { color: Colors.info }]}>{job.applied} applied</Text>
                           </View>
+                          {job.assignedVehicles && job.assignedVehicles.length > 0 && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 }}>
+                              <Ionicons name="checkmark-circle" size={11} color={Colors.success} />
+                              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.success }}>
+                                {job.assignedVehicles.map((v: any) => [v.year, v.make, v.model].filter(Boolean).join(' ')).join(', ')}
+                              </Text>
+                            </View>
+                          )}
                         </Pressable>
                       ))}
                     </View>

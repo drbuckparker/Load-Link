@@ -70,7 +70,7 @@ export default function CalendarScreen() {
     enabled: !!user && !isContractor,
   });
 
-  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, { id: string; material: string; projectName: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> }>({
+  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, any[]> }>({
     queryKey: ['/api/contractor/calendar-capacity', `?month=${currentMonth + 1}&year=${currentYear}`],
     enabled: !!user && isContractor,
   });
@@ -488,19 +488,21 @@ export default function CalendarScreen() {
                       <View style={styles.calJobTruckRow}>
                         <View style={styles.calJobTruckStat}>
                           <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
-                          <Text style={styles.calJobTruckLabel}>{job.trucksNeeded} requested</Text>
+                          <Text style={styles.calJobTruckLabel}>{job.approved || 0}/{job.trucksNeeded} trucks</Text>
                         </View>
                         <View style={styles.calJobTruckStat}>
                           <Ionicons name="people" size={16} color={job.applied > 0 ? Colors.info : Colors.textMuted} />
                           <Text style={[styles.calJobTruckLabel, job.applied > 0 && { color: Colors.info }]}>{job.applied} applied</Text>
                         </View>
-                        {job.approved > 0 && (
-                          <View style={styles.calJobTruckStat}>
-                            <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
-                            <Text style={[styles.calJobTruckLabel, { color: Colors.success }]}>{job.approved} approved</Text>
-                          </View>
-                        )}
                       </View>
+                      {job.assignedVehicles && job.assignedVehicles.length > 0 && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, paddingLeft: 2, flexWrap: 'wrap' }}>
+                          <Ionicons name="checkmark-circle" size={12} color={Colors.success} />
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.success }} numberOfLines={1}>
+                            {job.assignedVehicles.map((v: any) => `${v.driverName || ''} - ${[v.year, v.make].filter(Boolean).join(' ')}`).join(', ')}
+                          </Text>
+                        </View>
+                      )}
 
                       <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 12, top: '50%' }} />
                     </Pressable>

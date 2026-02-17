@@ -153,6 +153,10 @@ export default function JobDetailScreen() {
     queryKey: ['/api/vehicles'],
     enabled: truckSelectVisible,
   });
+  const { data: conflictsData } = useQuery<any>({
+    queryKey: [`/api/jobs/${id}/vehicle-conflicts`],
+    enabled: truckSelectVisible && !!id,
+  });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -306,6 +310,14 @@ export default function JobDetailScreen() {
     if (selectedVehicleIds.includes(vehicleId)) {
       setSelectedVehicleIds(prev => prev.filter(id => id !== vehicleId));
       setTruckWarning(null);
+      return;
+    }
+
+    const vehicleConflict = conflictsData?.vehicleConflicts?.[vehicleId];
+    if (vehicleConflict?.blocked) {
+      showTruckWarning(
+        `This truck is already booked for a full-day job on ${vehicleConflict.conflictDates[0]} (${vehicleConflict.conflictJobs[0]}). It cannot be double-booked.`
+      );
       return;
     }
 
@@ -961,23 +973,37 @@ export default function JobDetailScreen() {
                   const isSelected = selectedVehicleIds.includes(vId);
                   const truckLabel = [v.year, v.make, v.model].filter(Boolean).join(' ');
                   const truckTypeLabel = v.truck_type ? formatTruckType(v.truck_type) : '';
+                  const conflict = conflictsData?.vehicleConflicts?.[vId];
+                  const isBlocked = conflict?.blocked === true;
                   return (
                     <Pressable
                       key={vId}
-                      style={[styles.truckOption, isSelected && styles.truckOptionSelected]}
+                      style={[
+                        styles.truckOption,
+                        isSelected && styles.truckOptionSelected,
+                        isBlocked && styles.truckOptionBlocked,
+                      ]}
                       onPress={() => {
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         toggleVehicleSelection(vId);
                       }}
                     >
-                      <View style={[styles.truckCheckbox, isSelected && styles.truckCheckboxSelected]}>
+                      <View style={[styles.truckCheckbox, isSelected && styles.truckCheckboxSelected, isBlocked && styles.truckCheckboxBlocked]}>
                         {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        {isBlocked && !isSelected && <Ionicons name="close" size={14} color="#cc3300" />}
                       </View>
-                      <MaterialCommunityIcons name="dump-truck" size={24} color={isSelected ? Colors.primary : Colors.textMuted} />
+                      <MaterialCommunityIcons name="dump-truck" size={24} color={isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }]}>
-                          {truckLabel || 'Unnamed Truck'}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }, isBlocked && { color: Colors.textMuted }]}>
+                            {truckLabel || 'Unnamed Truck'}
+                          </Text>
+                          {isBlocked && (
+                            <View style={styles.bookedBadge}>
+                              <Text style={styles.bookedBadgeText}>BOOKED</Text>
+                            </View>
+                          )}
+                        </View>
                         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
                           {truckTypeLabel ? (
                             <Text style={styles.truckOptionMeta}>{truckTypeLabel}</Text>
@@ -992,6 +1018,11 @@ export default function JobDetailScreen() {
                             <Text style={styles.truckOptionMeta}>{v.max_capacity_tons}T</Text>
                           ) : null}
                         </View>
+                        {isBlocked && conflict.conflictDates?.length > 0 && (
+                          <Text style={styles.truckConflictInfo}>
+                            Busy on {conflict.conflictDates.slice(0, 2).join(', ')}{conflict.conflictDates.length > 2 ? ` +${conflict.conflictDates.length - 2} more` : ''}
+                          </Text>
+                        )}
                       </View>
                     </Pressable>
                   );
@@ -1850,6 +1881,11 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
     backgroundColor: 'rgba(255, 153, 0, 0.08)',
   },
+  truckOptionBlocked: {
+    borderColor: 'rgba(204, 51, 0, 0.3)',
+    backgroundColor: 'rgba(204, 51, 0, 0.05)',
+    opacity: 0.7,
+  },
   truckCheckbox: {
     width: 24,
     height: 24,
@@ -1863,6 +1899,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
+  truckCheckboxBlocked: {
+    borderColor: '#cc3300',
+  },
   truckOptionName: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 15,
@@ -1872,6 +1911,24 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
     color: Colors.textMuted,
+  },
+  truckConflictInfo: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    color: '#cc3300',
+    marginTop: 4,
+  },
+  bookedBadge: {
+    backgroundColor: '#cc3300',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  bookedBadgeText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 9,
+    color: '#fff',
+    letterSpacing: 0.5,
   },
   confirmAcceptBtn: {
     flexDirection: 'row',

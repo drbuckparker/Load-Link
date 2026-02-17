@@ -26,6 +26,72 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const resetTokens = new Map<string, { email: string; expiresAt: number }>();
 
+function getJobDateRange(job: { scheduled_date: Date | null; estimated_days: string | null; includes_weekends: boolean | null }): string[] {
+  if (!job.scheduled_date) return [];
+  const startDate = new Date(job.scheduled_date);
+  const days = Math.ceil(parseFloat(job.estimated_days || '1') || 1);
+  const dates: string[] = [];
+  let current = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate()));
+  let added = 0;
+  while (added < days) {
+    const dow = current.getUTCDay();
+    if (job.includes_weekends || (dow !== 0 && dow !== 6)) {
+      const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
+      dates.push(key);
+      added++;
+    }
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+async function getVehicleConflicts(
+  vehicleId: string,
+  jobDates: string[],
+  newJobIsFullDay: boolean,
+  excludeJobId?: string
+): Promise<{ date: string; jobMaterial: string; jobType: string; jobId: string }[]> {
+  const existingAssignments = await db
+    .select({
+      job_id: jobAssignments.job_id,
+      vehicle_id: jobAssignments.vehicle_id,
+    })
+    .from(jobAssignments)
+    .where(
+      and(
+        eq(jobAssignments.vehicle_id, vehicleId),
+        or(
+          eq(jobAssignments.status, 'accepted'),
+          eq(jobAssignments.status, 'approved')
+        )!
+      )
+    );
+
+  const conflicts: { date: string; jobMaterial: string; jobType: string; jobId: string }[] = [];
+  for (const a of existingAssignments) {
+    if (!a.job_id || a.job_id === excludeJobId) continue;
+    const [existingJob] = await db.select().from(jobs).where(eq(jobs.id, a.job_id)).limit(1);
+    if (!existingJob || existingJob.status === 'cancelled' || existingJob.status === 'completed') continue;
+
+    const existingIsFullDay = existingJob.job_type === 'full_day';
+    const blocksDate = existingIsFullDay || newJobIsFullDay;
+    if (!blocksDate) continue;
+
+    const existingDates = getJobDateRange(existingJob);
+    for (const d of existingDates) {
+      if (jobDates.includes(d)) {
+        conflicts.push({
+          date: d,
+          jobMaterial: existingJob.material || 'Unknown',
+          jobType: existingJob.job_type || 'single_load',
+          jobId: existingJob.id,
+        });
+      }
+    }
+  }
+  return conflicts;
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [token, data] of resetTokens) {
@@ -449,12 +515,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!job) return res.status(404).json({ message: "Job not found" });
       if (job.status !== "open") return res.status(400).json({ message: "Job is not available" });
 
+      const vIds = Array.isArray(vehicleIds) ? vehicleIds : [];
+      const jobDates = getJobDateRange(job);
+      const newJobIsFullDay = job.job_type === 'full_day';
+
+      if (vIds.length > 0 && jobDates.length > 0) {
+        for (const vehicleId of vIds) {
+          const conflicts = await getVehicleConflicts(vehicleId, jobDates, newJobIsFullDay, id);
+          if (conflicts.length > 0) {
+            const [v] = await db.select().from(driverVehicles).where(eq(driverVehicles.id, vehicleId)).limit(1);
+            const truckLabel = v ? [v.year, v.make, v.model].filter(Boolean).join(' ') : 'This truck';
+            return res.status(409).json({
+              message: `${truckLabel} is already booked for a full-day job on ${conflicts[0].date}. Remove it or pick a different truck.`,
+              conflicts,
+              vehicleId,
+            });
+          }
+        }
+      }
+
       await db
         .update(jobs)
         .set({ driver_id: userId, status: "accepted", updated_at: new Date() })
         .where(eq(jobs.id, id));
 
-      const vIds = Array.isArray(vehicleIds) ? vehicleIds : [];
       if (vIds.length > 0) {
         for (const vehicleId of vIds) {
           await db.insert(jobAssignments).values({
@@ -483,6 +567,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ ok: true });
     } catch (err) {
       console.error("Accept job error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/jobs/:id/vehicle-conflicts", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id } = req.params;
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+
+      const jobDates = getJobDateRange(job);
+      const newJobIsFullDay = job.job_type === 'full_day';
+
+      const userVehicles = await db
+        .select()
+        .from(driverVehicles)
+        .where(eq(driverVehicles.driver_id, userId));
+
+      const vehicleConflicts: Record<string, { blocked: boolean; conflictDates: string[]; conflictJobs: string[] }> = {};
+      for (const v of userVehicles) {
+        if (jobDates.length === 0) {
+          vehicleConflicts[v.id] = { blocked: false, conflictDates: [], conflictJobs: [] };
+          continue;
+        }
+        const conflicts = await getVehicleConflicts(v.id, jobDates, newJobIsFullDay, id);
+        if (conflicts.length > 0) {
+          const uniqueDates = [...new Set(conflicts.map(c => c.date))];
+          const uniqueJobs = [...new Set(conflicts.map(c => c.jobMaterial))];
+          vehicleConflicts[v.id] = { blocked: true, conflictDates: uniqueDates, conflictJobs: uniqueJobs };
+        } else {
+          vehicleConflicts[v.id] = { blocked: false, conflictDates: [], conflictJobs: [] };
+        }
+      }
+
+      return res.json({
+        jobType: job.job_type || 'single_load',
+        jobDates,
+        vehicleConflicts,
+      });
+    } catch (err) {
+      console.error("Vehicle conflicts error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -914,13 +1041,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           const jobIds = dayJobs.map(j => j.id);
           let appliedCount: Record<string, number> = {};
+          let assignedCount: Record<string, number> = {};
+          let assignedVehicles: Record<string, any[]> = {};
           if (jobIds.length > 0) {
             const assigns = await db
-              .select({ job_id: jobAssignments.job_id })
+              .select({
+                job_id: jobAssignments.job_id,
+                status: jobAssignments.status,
+                vehicle_id: jobAssignments.vehicle_id,
+                vehicle_make: driverVehicles.make,
+                vehicle_model: driverVehicles.model,
+                vehicle_year: driverVehicles.year,
+                vehicle_plate: driverVehicles.license_plate,
+                driver_name: users.full_name,
+              })
               .from(jobAssignments)
+              .leftJoin(driverVehicles, eq(jobAssignments.vehicle_id, driverVehicles.id))
+              .leftJoin(users, eq(jobAssignments.driver_id, users.id))
               .where(inArray(jobAssignments.job_id, jobIds));
             for (const a of assigns) {
-              if (a.job_id) appliedCount[a.job_id] = (appliedCount[a.job_id] || 0) + 1;
+              if (a.job_id) {
+                appliedCount[a.job_id] = (appliedCount[a.job_id] || 0) + 1;
+                if (a.status === 'accepted' || a.status === 'approved') {
+                  assignedCount[a.job_id] = (assignedCount[a.job_id] || 0) + 1;
+                  if (a.vehicle_id) {
+                    if (!assignedVehicles[a.job_id]) assignedVehicles[a.job_id] = [];
+                    assignedVehicles[a.job_id].push({
+                      make: a.vehicle_make,
+                      model: a.vehicle_model,
+                      year: a.vehicle_year,
+                      plate: a.vehicle_plate,
+                      driverName: a.driver_name,
+                    });
+                  }
+                }
+              }
             }
           }
 
@@ -935,6 +1090,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               projectName: j.project_name || '',
               trucksNeeded: j.trucks_needed || 1,
               applied: appliedCount[j.id] || 0,
+              assigned: assignedCount[j.id] || 0,
+              assignedVehicles: assignedVehicles[j.id] || [],
               status: j.status || 'open',
             })),
           });
@@ -1592,12 +1749,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(and(...conditions))
         .orderBy(desc(jobs.created_at));
 
+      const jobIds = result.map(r => r.job.id);
+      let assignmentsByJob: Record<string, any[]> = {};
+      if (jobIds.length > 0) {
+        const allAssignments = await db
+          .select({
+            assignment: jobAssignments,
+            vehicle_make: driverVehicles.make,
+            vehicle_model: driverVehicles.model,
+            vehicle_year: driverVehicles.year,
+            vehicle_plate: driverVehicles.license_plate,
+            vehicle_truck_type: driverVehicles.truck_type,
+            vehicle_truck_number: driverVehicles.truck_number,
+            driver_name: users.full_name,
+          })
+          .from(jobAssignments)
+          .leftJoin(driverVehicles, eq(jobAssignments.vehicle_id, driverVehicles.id))
+          .leftJoin(users, eq(jobAssignments.driver_id, users.id))
+          .where(inArray(jobAssignments.job_id, jobIds));
+
+        for (const a of allAssignments) {
+          const jid = a.assignment.job_id!;
+          if (!assignmentsByJob[jid]) assignmentsByJob[jid] = [];
+          assignmentsByJob[jid].push({
+            id: a.assignment.id,
+            status: a.assignment.status,
+            driverName: a.driver_name || 'Unknown',
+            vehicle: a.assignment.vehicle_id ? {
+              make: a.vehicle_make,
+              model: a.vehicle_model,
+              year: a.vehicle_year,
+              licensePlate: a.vehicle_plate,
+              truckType: a.vehicle_truck_type,
+              truckNumber: a.vehicle_truck_number,
+            } : null,
+          });
+        }
+      }
+
       const formattedJobs = result.map((r) => ({
         ...r.job,
         driver_name: r.driver_name || null,
         driver_company: r.driver_company || null,
         driver_phone: r.driver_phone || null,
         project_name: r.project_name || null,
+        assignments: assignmentsByJob[r.job.id] || [],
+        trucksAssigned: (assignmentsByJob[r.job.id] || []).filter((a: any) => a.status === 'accepted' || a.status === 'approved').length,
       }));
 
       return res.json(formattedJobs);
@@ -1656,26 +1853,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const jobIds = contractorJobs.map(j => j.id);
       let approvedByJob: Record<string, number> = {};
       let appliedByJob: Record<string, number> = {};
+      let vehiclesByJob: Record<string, any[]> = {};
       if (jobIds.length > 0) {
         const assignments = await db
           .select({
             job_id: jobAssignments.job_id,
             status: jobAssignments.status,
+            vehicle_id: jobAssignments.vehicle_id,
+            vehicle_make: driverVehicles.make,
+            vehicle_model: driverVehicles.model,
+            vehicle_year: driverVehicles.year,
+            vehicle_plate: driverVehicles.license_plate,
+            driver_name: users.full_name,
           })
           .from(jobAssignments)
+          .leftJoin(driverVehicles, eq(jobAssignments.vehicle_id, driverVehicles.id))
+          .leftJoin(users, eq(jobAssignments.driver_id, users.id))
           .where(inArray(jobAssignments.job_id, jobIds));
         for (const a of assignments) {
           if (a.job_id) {
             appliedByJob[a.job_id] = (appliedByJob[a.job_id] || 0) + 1;
             if (a.status === 'approved' || a.status === 'accepted') {
               approvedByJob[a.job_id] = (approvedByJob[a.job_id] || 0) + 1;
+              if (a.vehicle_id) {
+                if (!vehiclesByJob[a.job_id]) vehiclesByJob[a.job_id] = [];
+                vehiclesByJob[a.job_id].push({
+                  make: a.vehicle_make,
+                  model: a.vehicle_model,
+                  year: a.vehicle_year,
+                  plate: a.vehicle_plate,
+                  driverName: a.driver_name,
+                });
+              }
             }
           }
         }
       }
 
       const dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> = {};
-      const dailyJobs: Record<string, { id: string; material: string; projectName: string; trucksNeeded: number; applied: number; approved: number; status: string; pickup: string; dropoff: string }[]> = {};
+      const dailyJobs: Record<string, any[]> = {};
       for (const job of contractorJobs) {
         if (!job.scheduled_date) continue;
         const d = new Date(job.scheduled_date);
@@ -1694,6 +1910,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           trucksNeeded: job.trucks_needed || 1,
           applied: appliedByJob[job.id] || 0,
           approved: approvedByJob[job.id] || 0,
+          assignedVehicles: vehiclesByJob[job.id] || [],
           status: job.status || 'open',
           pickup: job.origin_address || '',
           dropoff: job.destination_address || '',
