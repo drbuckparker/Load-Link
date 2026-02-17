@@ -47,6 +47,9 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `POST /api/auth/reset-password` - Verifies code and updates password
 - `POST /api/auth/set-password` - Sets password for accounts that used Replit auth on web
 
+### Calendar
+- `GET /api/calendar/jobs` - Driver's assigned jobs with truck info by month (query params: month, year)
+
 ### Jobs (Driver)
 - `GET /api/jobs` - List jobs (query params: status, truck_type, search, driver_id)
 - `GET /api/jobs/:id` - Job detail with contractor info, runs, assignments
