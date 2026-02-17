@@ -135,7 +135,7 @@ export default function JobDetailScreen() {
   const pendingAssignments = assignments.filter(a => a.status === 'pending');
   const approvedAssignments = assignments.filter(a => a.status === 'approved');
 
-  const [jobStatus, setJobStatus] = useState<string>('open');
+  const [jobStatus, setJobStatus] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [selectedDriver, setSelectedDriver] = useState<Assignment | null>(null);
@@ -357,7 +357,7 @@ export default function JobDetailScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: (canAccept || (canStart && !isRunning && jobStatus !== 'completed') || isRunning) ? 100 : (Platform.OS === 'web' ? 34 : insets.bottom + 24) }]} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 24 }]} showsVerticalScrollIndicator={false}>
         {isRunning && (
           <View style={styles.timerCard}>
             <Text style={styles.timerLabel}>ACTIVE JOB TIMER</Text>
@@ -613,55 +613,50 @@ export default function JobDetailScreen() {
           </Pressable>
         )}
 
-      </ScrollView>
+        {canAccept && (
+          <View style={styles.acceptRow}>
+            <Pressable
+              style={({ pressed }) => [styles.counterBidBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setCounterBidRate(job.rate?.toString() || '');
+                setCounterBidNote('');
+                setCounterBidVisible(true);
+              }}
+            >
+              <Ionicons name="swap-horizontal" size={20} color={Colors.primary} />
+              <Text style={styles.counterBidBtnText}>COUNTER OFFER</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.acceptBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+              onPress={handleAccept}
+            >
+              <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
+              <Text style={styles.acceptBtnText}>ACCEPT JOB</Text>
+            </Pressable>
+          </View>
+        )}
 
-      {canAccept && (
-        <View style={[styles.stickyBottomBar, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 8 }]}>
+        {canStart && !isRunning && jobStatus !== 'completed' && (
           <Pressable
-            style={({ pressed }) => [styles.counterBidBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-            onPress={() => {
-              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setCounterBidRate(job.rate?.toString() || '');
-              setCounterBidNote('');
-              setCounterBidVisible(true);
-            }}
-          >
-            <Ionicons name="swap-horizontal" size={20} color={Colors.primary} />
-            <Text style={styles.counterBidBtnText}>COUNTER</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.acceptBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-            onPress={handleAccept}
-          >
-            <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
-            <Text style={styles.acceptBtnText}>ACCEPT JOB</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {canStart && !isRunning && jobStatus !== 'completed' && (
-        <View style={[styles.stickyBottomBar, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 8 }]}>
-          <Pressable
-            style={({ pressed }) => [styles.startBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+            style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
             onPress={handleStartJob}
           >
             <Ionicons name="play-circle" size={20} color="#fff" />
             <Text style={styles.startBtnText}>CLOCK IN</Text>
           </Pressable>
-        </View>
-      )}
+        )}
 
-      {isRunning && (
-        <View style={[styles.stickyBottomBar, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 8 }]}>
+        {isRunning && (
           <Pressable
-            style={({ pressed }) => [styles.stopBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+            style={({ pressed }) => [styles.stopBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
             onPress={handleStopJob}
           >
             <Ionicons name="stop-circle" size={20} color="#fff" />
             <Text style={styles.stopBtnText}>CLOCK OUT</Text>
           </Pressable>
-        </View>
-      )}
+        )}
+      </ScrollView>
 
       <Modal
         visible={selectedDriver !== null}
