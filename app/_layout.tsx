@@ -55,6 +55,7 @@ function RootLayoutNav() {
         }}
       />
       <Stack.Screen name="jobs-browse" options={{ headerShown: false }} />
+      <Stack.Screen name="review" options={{ headerShown: false, presentation: 'modal' }} />
     </Stack>
   );
 }

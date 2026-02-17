@@ -26,7 +26,7 @@ function getNotifIcon(type: string): keyof typeof Ionicons.glyphMap {
     case 'load_accepted': return 'checkmark-circle';
     case 'load_approved': return 'checkmark-done';
     case 'load_rejected': return 'close-circle';
-    case 'load_completed': return 'flag';
+    case 'load_completed': return 'star';
     case 'message': return 'chatbubble';
     case 'job_expired': return 'time';
     default: return 'notifications';
@@ -67,7 +67,9 @@ export default function NotificationsScreen() {
 
   function handleNotifPress(notif: Notification) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (notif.jobId) {
+    if (notif.type === 'load_completed' && notif.jobId) {
+      router.push({ pathname: '/review', params: { jobId: notif.jobId } });
+    } else if (notif.jobId) {
       router.push({ pathname: '/job/[id]', params: { id: notif.jobId } });
     }
   }

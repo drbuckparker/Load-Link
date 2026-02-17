@@ -20,6 +20,48 @@ function mapConversation(c: any): Conversation {
   };
 }
 
+function PendingReviewsBanner() {
+  const { data: pendingReviews } = useQuery<any[]>({
+    queryKey: ['/api/reviews/pending'],
+  });
+
+  const items = pendingReviews || [];
+  if (items.length === 0) return null;
+
+  return (
+    <View style={msgStyles.reviewBanner}>
+      <View style={msgStyles.reviewBannerIcon}>
+        <Ionicons name="star" size={18} color={Colors.primary} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={msgStyles.reviewBannerTitle}>
+          {items.length} review{items.length > 1 ? 's' : ''} pending
+        </Text>
+        <Text style={msgStyles.reviewBannerText}>Rate your recent job experience</Text>
+      </View>
+      <Pressable
+        style={msgStyles.reviewBannerBtn}
+        onPress={() => {
+          if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          const first = items[0];
+          router.push({
+            pathname: '/review',
+            params: {
+              jobId: first.jobId,
+              revieweeId: first.reviewee?.id || '',
+              revieweeName: first.reviewee?.full_name || first.reviewee?.company || '',
+              material: first.material || '',
+            },
+          });
+        }}
+      >
+        <Text style={msgStyles.reviewBannerBtnText}>Review</Text>
+        <Ionicons name="chevron-forward" size={14} color="#000" />
+      </Pressable>
+    </View>
+  );
+}
+
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
 
@@ -34,6 +76,8 @@ export default function MessagesScreen() {
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <Text style={styles.headerTitle}>MESSAGES</Text>
       </View>
+
+      <PendingReviewsBanner />
 
       <FlatList
         data={conversations}
@@ -218,5 +262,53 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 13,
     color: Colors.textMuted,
+  },
+});
+
+const msgStyles = StyleSheet.create({
+  reviewBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 153, 0, 0.08)',
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 153, 0, 0.25)',
+  },
+  reviewBannerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewBannerTitle: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: Colors.text,
+  },
+  reviewBannerText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textSecondary,
+  },
+  reviewBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 2,
+  },
+  reviewBannerBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: '#000',
   },
 });
