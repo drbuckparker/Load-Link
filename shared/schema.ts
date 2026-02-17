@@ -377,6 +377,15 @@ export const reviews = pgTable("reviews", {
   created_at: timestamp("created_at").defaultNow(),
 });
 
+export const contractorFavoriteDrivers = pgTable("contractor_favorite_drivers", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  contractor_id: varchar("contractor_id").references(() => users.id),
+  driver_id: varchar("driver_id").references(() => users.id),
+  created_at: timestamp("created_at").defaultNow(),
+});
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,
