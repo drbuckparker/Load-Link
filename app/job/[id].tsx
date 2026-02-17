@@ -146,6 +146,8 @@ export default function JobDetailScreen() {
   const [truckSelectVisible, setTruckSelectVisible] = useState(false);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
   const [acceptingJob, setAcceptingJob] = useState(false);
+  const [truckWarning, setTruckWarning] = useState<string | null>(null);
+  const truckWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -269,6 +271,7 @@ export default function JobDetailScreen() {
 
   function handleAccept() {
     setSelectedVehicleIds([]);
+    setTruckWarning(null);
     setTruckSelectVisible(true);
   }
 
@@ -293,12 +296,30 @@ export default function JobDetailScreen() {
     setAcceptingJob(false);
   }
 
+  function showTruckWarning(msg: string) {
+    if (truckWarningTimeout.current) clearTimeout(truckWarningTimeout.current);
+    setTruckWarning(msg);
+    truckWarningTimeout.current = setTimeout(() => setTruckWarning(null), 4000);
+  }
+
   function toggleVehicleSelection(vehicleId: string) {
-    setSelectedVehicleIds(prev =>
-      prev.includes(vehicleId)
-        ? prev.filter(id => id !== vehicleId)
-        : [...prev, vehicleId]
-    );
+    if (selectedVehicleIds.includes(vehicleId)) {
+      setSelectedVehicleIds(prev => prev.filter(id => id !== vehicleId));
+      setTruckWarning(null);
+      return;
+    }
+
+    const vehicle = vehiclesData?.find((v: any) => v.id === vehicleId);
+    if (vehicle && job) {
+      const jobType = (job.truckType || '').toLowerCase().replace(/[\s_-]/g, '');
+      const vType = (vehicle.truck_type || '').toLowerCase().replace(/[\s_-]/g, '');
+      if (jobType && vType && jobType !== vType) {
+        showTruckWarning(
+          `This truck does not meet the requirements for this job. The job requires a ${formatTruckType(job.truckType)} but this truck is a ${formatTruckType(vehicle.truck_type)}.`
+        );
+      }
+    }
+    setSelectedVehicleIds(prev => [...prev, vehicleId]);
   }
 
   async function handleCounterBid() {
@@ -903,6 +924,16 @@ export default function JobDetailScreen() {
                 ? `This job needs ${job.trucksNeeded} trucks. Select which to assign.`
                 : 'Choose which truck to assign to this job.'}
             </Text>
+
+            {truckWarning && (
+              <View style={styles.truckWarningBanner}>
+                <Ionicons name="warning" size={20} color="#fff" />
+                <Text style={styles.truckWarningText}>{truckWarning}</Text>
+                <Pressable onPress={() => setTruckWarning(null)} hitSlop={8}>
+                  <Ionicons name="close" size={18} color="rgba(255,255,255,0.7)" />
+                </Pressable>
+              </View>
+            )}
 
             {!vehiclesData ? (
               <View style={{ padding: 32, alignItems: 'center' }}>
@@ -1738,6 +1769,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Colors.primaryForeground,
     letterSpacing: 1,
+  },
+  truckWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#cc3300',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    gap: 10,
+  },
+  truckWarningText: {
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: '#fff',
+    lineHeight: 18,
   },
   truckSelectSheet: {
     backgroundColor: Colors.card,
