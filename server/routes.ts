@@ -14,6 +14,7 @@ import {
   jobAssignments,
   contractorProjects,
   reviews,
+  contractorFavoriteDrivers,
 } from "@shared/schema";
 import bcrypt from "bcrypt";
 import session from "express-session";
@@ -534,10 +535,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      await db
-        .update(jobs)
-        .set({ driver_id: userId, status: "accepted", updated_at: new Date() })
-        .where(eq(jobs.id, id));
+      const isFavorite = job.contractor_id ? await db
+        .select()
+        .from(contractorFavoriteDrivers)
+        .where(and(
+          eq(contractorFavoriteDrivers.contractor_id, job.contractor_id),
+          eq(contractorFavoriteDrivers.driver_id, userId)
+        ))
+        .limit(1)
+        .then(r => r.length > 0) : false;
+
+      const assignmentStatus = isFavorite ? "approved" : "pending";
+
+      if (isFavorite) {
+        await db
+          .update(jobs)
+          .set({ driver_id: userId, status: "accepted", updated_at: new Date() })
+          .where(eq(jobs.id, id));
+      }
 
       if (vIds.length > 0) {
         for (const vehicleId of vIds) {
@@ -545,26 +560,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
             job_id: id,
             driver_id: userId,
             vehicle_id: vehicleId,
-            status: "accepted",
+            status: assignmentStatus,
+            ...(isFavorite ? { approved_at: new Date() } : {}),
           });
         }
       } else {
         await db.insert(jobAssignments).values({
           job_id: id,
           driver_id: userId,
-          status: "accepted",
+          status: assignmentStatus,
+          ...(isFavorite ? { approved_at: new Date() } : {}),
         });
       }
 
+      const [driverUser] = await db.select({ full_name: users.full_name }).from(users).where(eq(users.id, userId)).limit(1);
+      const driverName = driverUser?.full_name || 'A driver';
+
       await db.insert(notifications).values({
         user_id: job.contractor_id!,
-        type: "load_accepted",
-        title: "Job Accepted",
-        message: `A driver has accepted your ${job.material} job`,
+        type: isFavorite ? "load_accepted" : "driver_applied",
+        title: isFavorite ? "Favorite Driver Assigned" : "New Driver Application",
+        message: isFavorite
+          ? `${driverName} (favorite) has been auto-assigned to your ${job.material} job`
+          : `${driverName} would like to work on your ${job.material} job`,
         job_id: id,
       });
 
-      return res.json({ ok: true });
+      return res.json({
+        ok: true,
+        isFavorite,
+        assignmentStatus,
+        message: isFavorite
+          ? "You are assigned to this job! You're a favorite driver for this company."
+          : "The company has been notified that you'd like to work on this job. You'll be notified when they respond.",
+      });
     } catch (err) {
       console.error("Accept job error:", err);
       return res.status(500).json({ message: "Server error" });
@@ -2089,7 +2118,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eq(jobAssignments.driver_id, userId),
             or(
               eq(jobAssignments.status, 'approved'),
-              eq(jobAssignments.status, 'accepted')
+              eq(jobAssignments.status, 'accepted'),
+              eq(jobAssignments.status, 'pending')
             )!,
             gte(jobs.scheduled_date, monthStart),
             lte(jobs.scheduled_date, monthEnd),

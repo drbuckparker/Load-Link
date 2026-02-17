@@ -125,6 +125,9 @@ export default function JobDetailScreen() {
 
   const job = jobData ? mapJob(jobData) : null;
   const isMyPostedJob = isContractor && job?.contractorId === user?.id;
+  const myAssignment = (jobData?.assignments || []).find((a: any) => a.driver_id === user?.id);
+  const hasApplied = !!myAssignment;
+  const myAssignmentStatus = myAssignment?.status || null;
 
   const { data: assignmentsData } = useQuery<any[]>({
     queryKey: [`/api/jobs/${id}/assignments`],
@@ -148,6 +151,8 @@ export default function JobDetailScreen() {
   const [acceptingJob, setAcceptingJob] = useState(false);
   const [truckWarning, setTruckWarning] = useState<string | null>(null);
   const truckWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [acceptBannerVisible, setAcceptBannerVisible] = useState(false);
+  const [acceptBannerData, setAcceptBannerData] = useState<{ isFavorite: boolean; message: string } | null>(null);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -204,7 +209,7 @@ export default function JobDetailScreen() {
   const statusColor = getStatusColor(jobStatus);
   const jobTypeColor = getJobTypeColor(job.jobType);
   const isMyJob = job.driverId === user?.id;
-  const canAccept = jobStatus === 'open' || jobStatus === 'pending';
+  const canAccept = (jobStatus === 'open' || jobStatus === 'pending') && !hasApplied && !isContractor;
   const canStart = (jobStatus === 'accepted' || jobStatus === 'in_progress') && isMyJob;
 
   function formatElapsed(sec: number) {
@@ -286,14 +291,25 @@ export default function JobDetailScreen() {
     }
     setAcceptingJob(true);
     try {
-      await apiRequest('POST', `/api/jobs/${id}/accept`, {
+      const res = await apiRequest('POST', `/api/jobs/${id}/accept`, {
         vehicleIds: selectedVehicleIds,
       });
+      const result = await res.json();
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setTruckSelectVisible(false);
-      setJobStatus('accepted');
+      if (result.isFavorite) {
+        setJobStatus('accepted');
+      }
+      setAcceptBannerData({
+        isFavorite: result.isFavorite ?? false,
+        message: result.message || (result.isFavorite
+          ? "You are assigned to this job!"
+          : "The company has been notified."),
+      });
+      setAcceptBannerVisible(true);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to accept job');
     }
@@ -676,6 +692,34 @@ export default function JobDetailScreen() {
           </Pressable>
         )}
 
+        {hasApplied && !isContractor && (
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', gap: 10,
+            backgroundColor: myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted'
+              ? 'rgba(34,197,94,0.1)' : 'rgba(255,153,0,0.1)',
+            borderRadius: 12, padding: 14, marginHorizontal: 16,
+            borderWidth: 1,
+            borderColor: myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted'
+              ? 'rgba(34,197,94,0.3)' : 'rgba(255,153,0,0.3)',
+          }}>
+            <Ionicons
+              name={myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted' ? "checkmark-circle" : "time"}
+              size={22}
+              color={myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted' ? Colors.success : Colors.primary}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.text, letterSpacing: 0.5 }}>
+                {myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted' ? 'YOU ARE ASSIGNED' : 'APPLICATION PENDING'}
+              </Text>
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginTop: 2 }}>
+                {myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted'
+                  ? 'You are confirmed for this job. Check your calendar for details.'
+                  : 'The company has been notified. You will be notified when they respond.'}
+              </Text>
+            </View>
+          </View>
+        )}
+
         {canAccept && (
           <View style={styles.acceptRow}>
             <Pressable
@@ -1053,6 +1097,56 @@ export default function JobDetailScreen() {
                 )}
               </Pressable>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={acceptBannerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAcceptBannerVisible(false)}
+      >
+        <Pressable style={[styles.modalOverlay, { justifyContent: 'center', alignItems: 'center' }]} onPress={() => setAcceptBannerVisible(false)}>
+          <Pressable style={styles.acceptBannerSheet} onPress={() => {}}>
+            <View style={{
+              width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: acceptBannerData?.isFavorite ? 'rgba(34,197,94,0.15)' : 'rgba(255,153,0,0.15)',
+              marginBottom: 16, alignSelf: 'center',
+            }}>
+              <Ionicons
+                name={acceptBannerData?.isFavorite ? "checkmark-circle" : "time"}
+                size={40}
+                color={acceptBannerData?.isFavorite ? Colors.success : Colors.primary}
+              />
+            </View>
+            <Text style={styles.acceptBannerTitle}>
+              {acceptBannerData?.isFavorite ? "You're Assigned!" : "Application Sent"}
+            </Text>
+            <Text style={styles.acceptBannerMessage}>
+              {acceptBannerData?.message}
+            </Text>
+            {!acceptBannerData?.isFavorite && (
+              <View style={styles.acceptBannerPendingNote}>
+                <Ionicons name="notifications-outline" size={16} color={Colors.primary} />
+                <Text style={styles.acceptBannerPendingText}>
+                  Your calendar will show this job as pending until the company approves you.
+                </Text>
+              </View>
+            )}
+            <Pressable
+              style={({ pressed }) => [
+                styles.acceptBannerDismiss,
+                { backgroundColor: acceptBannerData?.isFavorite ? Colors.success : Colors.primary },
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => {
+                setAcceptBannerVisible(false);
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+            >
+              <Text style={styles.acceptBannerDismissText}>GOT IT</Text>
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1941,6 +2035,61 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   confirmAcceptText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.primaryForeground,
+    letterSpacing: 1,
+  },
+  acceptBannerSheet: {
+    backgroundColor: Colors.card,
+    borderRadius: 20,
+    padding: 28,
+    width: '85%',
+    maxWidth: 360,
+    alignItems: 'center',
+  },
+  acceptBannerTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 22,
+    color: Colors.text,
+    letterSpacing: 1,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  acceptBannerMessage: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  acceptBannerPendingNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: 'rgba(255,153,0,0.08)',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,153,0,0.2)',
+  },
+  acceptBannerPendingText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    flex: 1,
+    lineHeight: 17,
+  },
+  acceptBannerDismiss: {
+    borderRadius: 12,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  acceptBannerDismissText: {
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 15,
     color: Colors.primaryForeground,

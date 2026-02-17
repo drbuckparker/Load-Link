@@ -556,7 +556,7 @@ export default function CalendarScreen() {
                   {assignedJobs.map((job) => (
                     <Pressable
                       key={job.id}
-                      style={styles.calJobCard}
+                      style={[styles.calJobCard, job.assignmentStatus === 'pending' && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' }]}
                       onPress={() => {
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         router.push(`/job/${job.id}` as any);
@@ -567,14 +567,20 @@ export default function CalendarScreen() {
                       ) : null}
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
-                        <View style={[styles.calJobStatusBadge, {
-                          backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
-                            job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
-                        }]}>
-                          <Text style={[styles.calJobStatusText, {
-                            color: job.status === 'open' || job.status === 'pending' ? Colors.success :
-                              job.status === 'in_progress' ? Colors.warning : Colors.info
-                          }]}>{job.status === 'in_progress' ? 'Active' : job.status.charAt(0).toUpperCase() + job.status.slice(1)}</Text>
+                        <View style={{ flexDirection: 'row', gap: 6 }}>
+                          {job.assignmentStatus === 'pending' ? (
+                            <View style={[styles.calJobStatusBadge, { backgroundColor: Colors.warningBg }]}>
+                              <Text style={[styles.calJobStatusText, { color: Colors.warning }]}>PENDING APPROVAL</Text>
+                            </View>
+                          ) : (
+                            <View style={[styles.calJobStatusBadge, {
+                              backgroundColor: job.status === 'in_progress' ? Colors.warningBg : Colors.successBg
+                            }]}>
+                              <Text style={[styles.calJobStatusText, {
+                                color: job.status === 'in_progress' ? Colors.warning : Colors.success
+                              }]}>{job.status === 'in_progress' ? 'Active' : 'Confirmed'}</Text>
+                            </View>
+                          )}
                         </View>
                       </View>
 
