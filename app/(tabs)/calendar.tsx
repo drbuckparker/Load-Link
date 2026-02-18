@@ -75,6 +75,12 @@ export default function CalendarScreen() {
     enabled: !!user && isContractor,
   });
 
+  const vehiclesQuery = useQuery<any[]>({
+    queryKey: ['/api/vehicles'],
+    enabled: !!user && !isContractor,
+  });
+  const totalVehicles = vehiclesQuery.data?.length || 0;
+
   useEffect(() => {
     if (availQuery.data) {
       const mapped: Record<string, { status: AvailabilityStatus; name?: string; shift?: string; notes?: string; startTime?: string; endTime?: string }> = {};
@@ -105,7 +111,8 @@ export default function CalendarScreen() {
     }
   }, [availQuery.data]);
 
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const [selectedDate, setSelectedDate] = useState<string | null>(todayKey);
 
   const calendarJobsQuery = useQuery<{
     dailyJobs: Record<string, {
@@ -124,6 +131,19 @@ export default function CalendarScreen() {
     queryKey: ['/api/jobs', `?date=${selectedDate}&status=open`],
     enabled: !!user && !!selectedDate && !isContractor,
   });
+
+  const bookedVehiclesPerDay = useMemo(() => {
+    const result: Record<string, { count: number; vehicleIds: Set<string> }> = {};
+    const dailyJobs = calendarJobsQuery.data?.dailyJobs || {};
+    for (const [dateKey, dayJobs] of Object.entries(dailyJobs)) {
+      const vehicleIds = new Set<string>();
+      for (const job of dayJobs) {
+        if (job.vehicle?.id) vehicleIds.add(job.vehicle.id);
+      }
+      result[dateKey] = { count: dayJobs.length, vehicleIds };
+    }
+    return result;
+  }, [calendarJobsQuery.data]);
 
   const calendarDays = useMemo(() => {
     const firstDay = new Date(currentYear, currentMonth, 1).getDay();
@@ -374,13 +394,25 @@ export default function CalendarScreen() {
               }
 
               const assignedJobCount = calendarJobsQuery.data?.dailyJobs?.[key]?.length || 0;
+              const dayBooked = bookedVehiclesPerDay[key];
+              const bookedCount = dayBooked?.vehicleIds?.size || assignedJobCount;
+              const allTrucksBooked = totalVehicles > 0 && bookedCount >= totalVehicles;
+              const someTrucksBooked = assignedJobCount > 0 && !allTrucksBooked;
 
               return (
                 <Pressable
                   key={key}
-                  style={[styles.dayCell, isSelected && styles.dayCellSelected]}
+                  style={[
+                    styles.dayCell,
+                    isSelected && styles.dayCellSelected,
+                    allTrucksBooked && styles.dayCellAllBooked,
+                    someTrucksBooked && styles.dayCellSomeBooked,
+                  ]}
                   onPress={() => {
                     setSelectedDate(key);
+                    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
+                  onLongPress={() => {
                     openModal(day);
                   }}
                 >
@@ -388,12 +420,13 @@ export default function CalendarScreen() {
                     styles.dayNumber,
                     isToday && styles.dayNumberToday,
                     (day.status === 'committed' || assignedJobCount > 0) && { color: Colors.info },
+                    allTrucksBooked && { color: '#fff' },
                   ]}>
                     {day.date}
                   </Text>
                   {assignedJobCount > 0 ? (
                     <View style={styles.capacityDotsRow}>
-                      <View style={[styles.statusDot, { backgroundColor: Colors.info }]} />
+                      <View style={[styles.statusDot, { backgroundColor: allTrucksBooked ? '#fff' : Colors.info }]} />
                     </View>
                   ) : (
                     <>
@@ -403,7 +436,7 @@ export default function CalendarScreen() {
                     </>
                   )}
                   {assignedJobCount > 0 && (
-                    <Text style={styles.truckCountBadge}>{assignedJobCount}</Text>
+                    <Text style={[styles.truckCountBadge, allTrucksBooked && { color: '#fff' }]}>{assignedJobCount}</Text>
                   )}
                   {isToday && <View style={styles.todayIndicator} />}
                 </Pressable>
@@ -439,7 +472,11 @@ export default function CalendarScreen() {
             </View>
             <View style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
-              <Text style={styles.legendText}>Assigned</Text>
+              <Text style={styles.legendText}>Booked</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: 'rgba(59,130,246,0.25)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.4)' }} />
+              <Text style={styles.legendText}>Full</Text>
             </View>
           </View>
         )}
@@ -515,15 +552,53 @@ export default function CalendarScreen() {
 
         {!isContractor && selectedDate && (() => {
           const assignedJobs = calendarJobsQuery.data?.dailyJobs?.[selectedDate] || [];
+          const dayBookedInfo = bookedVehiclesPerDay[selectedDate];
+          const dayBookedCount = dayBookedInfo?.vehicleIds?.size || assignedJobs.length;
+          const dayAllBooked = totalVehicles > 0 && dayBookedCount >= totalVehicles;
 
           return (
             <View style={styles.detailCard}>
-              <Text style={styles.detailDate}>
-                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={styles.detailDate}>
+                  {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                </Text>
+                <Pressable
+                  style={{ padding: 6 }}
+                  onPress={() => {
+                    const dayData = calendarDays.find(d => d && `${d.year}-${String(d.month + 1).padStart(2, '0')}-${String(d.date).padStart(2, '0')}` === selectedDate);
+                    if (dayData) openModal(dayData);
+                  }}
+                >
+                  <Ionicons name="create-outline" size={20} color={Colors.primary} />
+                </Pressable>
+              </View>
+
+              {assignedJobs.length > 0 && (
+                <View style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 10,
+                  backgroundColor: dayAllBooked ? Colors.infoBg : 'rgba(59,130,246,0.08)',
+                  borderRadius: 10, padding: 12, marginTop: 4,
+                  borderWidth: 1, borderColor: dayAllBooked ? 'rgba(59,130,246,0.3)' : 'rgba(59,130,246,0.15)',
+                }}>
+                  <MaterialCommunityIcons name="dump-truck" size={22} color={Colors.info} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.info }}>
+                      {assignedJobs.length} TRUCK{assignedJobs.length !== 1 ? 'S' : ''} BOOKED
+                    </Text>
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginTop: 1 }}>
+                      {dayAllBooked ? 'All trucks committed' : `${totalVehicles > 0 ? totalVehicles - dayBookedCount : 0} of ${totalVehicles} truck${totalVehicles !== 1 ? 's' : ''} available`}
+                    </Text>
+                  </View>
+                  {dayAllBooked && (
+                    <View style={{ backgroundColor: Colors.info, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: '#fff', letterSpacing: 0.5 }}>FULL</Text>
+                    </View>
+                  )}
+                </View>
+              )}
 
               {selectedAvail && (
-                <View style={styles.detailRow}>
+                <View style={[styles.detailRow, { marginTop: assignedJobs.length > 0 ? 8 : 0 }]}>
                   <View style={[styles.detailBadge, {
                     backgroundColor: selectedAvail.status === 'committed' ? Colors.infoBg :
                       selectedAvail.status === 'available' ? Colors.successBg : Colors.destructiveBg
@@ -661,7 +736,7 @@ export default function CalendarScreen() {
         <Text style={styles.helpText}>
           {isContractor
             ? 'Tap a date to see your scheduled jobs and truck applications.'
-            : 'Tap a date to set your availability. Committed days are locked to accepted jobs.'}
+            : 'Tap a date to see your booked trucks. Long press to set availability.'}
         </Text>
       </ScrollView>
 
@@ -879,6 +954,18 @@ const styles = StyleSheet.create({
   dayCellSelected: {
     backgroundColor: Colors.primaryLight,
     borderRadius: 10,
+  },
+  dayCellAllBooked: {
+    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.4)',
+  },
+  dayCellSomeBooked: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+    borderStyle: 'dashed' as any,
   },
   dayNumber: {
     fontFamily: 'Inter_500Medium',
