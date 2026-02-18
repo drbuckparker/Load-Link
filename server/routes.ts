@@ -61,10 +61,7 @@ async function getVehicleConflicts(
     .where(
       and(
         eq(jobAssignments.vehicle_id, vehicleId),
-        or(
-          eq(jobAssignments.status, 'accepted'),
-          eq(jobAssignments.status, 'approved')
-        )!
+        sql`${jobAssignments.status}::text IN ('accepted', 'approved')`
       )
     );
 
@@ -1995,11 +1992,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(
           and(
             eq(jobAssignments.driver_id, userId),
-            or(
-              eq(jobAssignments.status, 'approved'),
-              eq(jobAssignments.status, 'accepted'),
-              eq(jobAssignments.status, 'pending')
-            )!,
+            sql`${jobAssignments.status}::text IN ('approved', 'accepted', 'pending')`,
             ...statusFilter
           )
         )
@@ -2116,20 +2109,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(
           and(
             eq(jobAssignments.driver_id, userId),
-            or(
-              eq(jobAssignments.status, 'approved'),
-              eq(jobAssignments.status, 'accepted'),
-              eq(jobAssignments.status, 'pending')
-            )!,
+            sql`${jobAssignments.status}::text IN ('approved', 'accepted', 'pending')`,
             gte(jobs.scheduled_date, monthStart),
             lte(jobs.scheduled_date, monthEnd),
-            or(
-              eq(jobs.status, 'open' as any),
-              eq(jobs.status, 'pending' as any),
-              eq(jobs.status, 'accepted' as any),
-              eq(jobs.status, 'in_progress' as any),
-              eq(jobs.status, 'completed' as any)
-            )!
+            sql`${jobs.status}::text IN ('open', 'pending', 'accepted', 'in_progress', 'completed')`
           )
         );
 
