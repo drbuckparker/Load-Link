@@ -82,6 +82,8 @@ export default function CalendarScreen() {
   });
   const totalVehicles = vehiclesQuery.data?.length || 0;
 
+  const [cleanupDone, setCleanupDone] = useState(false);
+
   useEffect(() => {
     if (availQuery.data) {
       const mapped: Record<string, { status: AvailabilityStatus; name?: string; shift?: string; notes?: string; startTime?: string; endTime?: string }> = {};
@@ -132,6 +134,23 @@ export default function CalendarScreen() {
     queryKey: ['/api/jobs', `?date=${selectedDate}&status=open`],
     enabled: !!user && !!selectedDate && !isContractor,
   });
+
+  useEffect(() => {
+    if (cleanupDone || isContractor || !calendarJobsQuery.data || !vehiclesQuery.data) return;
+    const dailyJobs = calendarJobsQuery.data.dailyJobs || {};
+    const fleet = vehiclesQuery.data.length || 1;
+    let hasConflict = false;
+    for (const [, dayJobs] of Object.entries(dailyJobs)) {
+      if (dayJobs.length > fleet) { hasConflict = true; break; }
+    }
+    if (hasConflict) {
+      setCleanupDone(true);
+      apiRequest('POST', '/api/cleanup-duplicate-assignments').then(() => {
+        queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+      }).catch(() => {});
+    }
+  }, [calendarJobsQuery.data, vehiclesQuery.data, isContractor, cleanupDone]);
 
   const bookedVehiclesPerDay = useMemo(() => {
     const result: Record<string, { count: number; vehicleIds: Set<string> }> = {};
@@ -590,10 +609,10 @@ export default function CalendarScreen() {
                     <MaterialCommunityIcons name="dump-truck" size={22} color={Colors.info} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.info }}>
-                        {assignedJobs.length} TRUCK{assignedJobs.length !== 1 ? 'S' : ''} BOOKED
+                        {assignedJobs.length} JOB{assignedJobs.length !== 1 ? 'S' : ''} BOOKED
                       </Text>
                       <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginTop: 1 }}>
-                        {dayAllBooked ? 'All trucks committed' : `${totalVehicles > 0 ? totalVehicles - dayBookedCount : 0} of ${totalVehicles} truck${totalVehicles !== 1 ? 's' : ''} available`}
+                        {dayAllBooked ? 'All trucks committed' : `${dayBookedCount} of ${totalVehicles} truck${totalVehicles !== 1 ? 's' : ''} assigned`}
                       </Text>
                     </View>
                     {dayAllBooked && (
@@ -606,9 +625,9 @@ export default function CalendarScreen() {
 
                   {trucksExpanded && (
                     <View style={{ gap: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
-                      {assignedJobs.map((job) => (
+                      {assignedJobs.map((job, idx) => (
                         <Pressable
-                          key={job.id}
+                          key={`${job.id}-${idx}`}
                           style={[styles.calJobCard, job.assignmentStatus === 'pending' && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' as any }]}
                           onPress={() => {
                             if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

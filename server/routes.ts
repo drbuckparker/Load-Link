@@ -532,6 +532,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      if (jobDates.length > 0) {
+        const driverTrucks = await db
+          .select()
+          .from(driverVehicles)
+          .where(
+            and(
+              eq(driverVehicles.driver_id, userId),
+              eq(driverVehicles.is_active, true),
+              ...(job.truck_type ? [eq(driverVehicles.truck_type, job.truck_type)] : [])
+            )
+          );
+
+        if (driverTrucks.length === 0 && vIds.length === 0) {
+          const truckTypeName = job.truck_type ? job.truck_type.replace(/_/g, ' ') : 'any';
+          return res.status(409).json({
+            message: `You don't have any active ${truckTypeName} trucks in your fleet to accept this job.`,
+          });
+        }
+
+        const existingAssignmentsOnDates = await db
+          .select({
+            job_id: jobAssignments.job_id,
+            vehicle_id: jobAssignments.vehicle_id,
+          })
+          .from(jobAssignments)
+          .where(
+            and(
+              eq(jobAssignments.driver_id, userId),
+              sql`${jobAssignments.status}::text IN ('accepted', 'approved', 'pending')`,
+              sql`${jobAssignments.job_id} != ${id}`
+            )
+          );
+
+        const bookedVehiclesByDate: Record<string, Set<string>> = {};
+        for (const a of existingAssignmentsOnDates) {
+          if (!a.job_id) continue;
+          const [existingJob] = await db.select().from(jobs).where(eq(jobs.id, a.job_id)).limit(1);
+          if (!existingJob || existingJob.status === 'cancelled' || existingJob.status === 'completed') continue;
+          const eDates = getJobDateRange(existingJob);
+          for (const d of eDates) {
+            if (jobDates.includes(d)) {
+              if (!bookedVehiclesByDate[d]) bookedVehiclesByDate[d] = new Set();
+              if (a.vehicle_id) {
+                bookedVehiclesByDate[d].add(a.vehicle_id);
+              } else {
+                bookedVehiclesByDate[d].add(`no_vehicle_${a.job_id}`);
+              }
+            }
+          }
+        }
+
+        for (const d of jobDates) {
+          const bookedCount = bookedVehiclesByDate[d]?.size || 0;
+          if (bookedCount >= driverTrucks.length) {
+            const dateStr = new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            return res.status(409).json({
+              message: `All ${driverTrucks.length} of your qualifying truck${driverTrucks.length !== 1 ? 's are' : ' is'} already booked on ${dateStr}. You need an available truck to accept this job.`,
+            });
+          }
+        }
+      }
+
       const isFavorite = job.contractor_id ? await db
         .select()
         .from(contractorFavoriteDrivers)
@@ -700,6 +762,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
 
       await db
+        .delete(jobAssignments)
+        .where(and(eq(jobAssignments.job_id, id), eq(jobAssignments.driver_id, userId)));
+
+      await db
         .update(jobs)
         .set({ driver_id: null, status: "open", updated_at: new Date() })
         .where(and(eq(jobs.id, id), eq(jobs.driver_id, userId)));
@@ -707,6 +773,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ ok: true });
     } catch (err) {
       console.error("Withdraw error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/cleanup-duplicate-assignments", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+
+      const allAssignments = await db
+        .select({
+          id: jobAssignments.id,
+          job_id: jobAssignments.job_id,
+          vehicle_id: jobAssignments.vehicle_id,
+          status: jobAssignments.status,
+          created_at: jobAssignments.created_at,
+        })
+        .from(jobAssignments)
+        .where(
+          and(
+            eq(jobAssignments.driver_id, userId),
+            sql`${jobAssignments.status}::text IN ('accepted', 'approved', 'pending')`
+          )
+        )
+        .orderBy(jobAssignments.created_at);
+
+      const jobDatesMap: Record<string, { assignmentId: string; dates: string[]; createdAt: Date | null }[]> = {};
+
+      for (const a of allAssignments) {
+        if (!a.job_id) continue;
+        const [job] = await db.select().from(jobs).where(eq(jobs.id, a.job_id)).limit(1);
+        if (!job || job.status === 'cancelled' || job.status === 'completed') continue;
+
+        const dates = getJobDateRange(job);
+        for (const d of dates) {
+          if (!jobDatesMap[d]) jobDatesMap[d] = [];
+          jobDatesMap[d].push({ assignmentId: a.id, dates, createdAt: a.created_at });
+        }
+      }
+
+      const userVehicles = await db
+        .select()
+        .from(driverVehicles)
+        .where(and(eq(driverVehicles.driver_id, userId), eq(driverVehicles.is_active, true)));
+
+      const fleetSize = userVehicles.length || 1;
+      const assignmentsToRemove = new Set<string>();
+
+      for (const [date, dateAssignments] of Object.entries(jobDatesMap)) {
+        if (dateAssignments.length > fleetSize) {
+          const sorted = dateAssignments.sort((a, b) =>
+            (a.createdAt?.getTime() || 0) - (b.createdAt?.getTime() || 0)
+          );
+          for (let i = fleetSize; i < sorted.length; i++) {
+            assignmentsToRemove.add(sorted[i].assignmentId);
+          }
+        }
+      }
+
+      let removedCount = 0;
+      for (const assignmentId of assignmentsToRemove) {
+        const [removed] = await db
+          .delete(jobAssignments)
+          .where(eq(jobAssignments.id, assignmentId))
+          .returning();
+        if (removed) {
+          removedCount++;
+          if (removed.job_id) {
+            const otherAssignments = await db
+              .select()
+              .from(jobAssignments)
+              .where(eq(jobAssignments.job_id, removed.job_id))
+              .limit(1);
+            if (otherAssignments.length === 0) {
+              await db
+                .update(jobs)
+                .set({ driver_id: null, status: "open", updated_at: new Date() })
+                .where(eq(jobs.id, removed.job_id));
+            }
+          }
+        }
+      }
+
+      return res.json({ ok: true, removedCount, message: `Removed ${removedCount} conflicting assignment(s)` });
+    } catch (err) {
+      console.error("Cleanup error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });
