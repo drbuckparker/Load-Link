@@ -387,7 +387,7 @@ export default function CalendarScreen() {
                   <Text style={[
                     styles.dayNumber,
                     isToday && styles.dayNumberToday,
-                    day.status === 'committed' && { color: Colors.info },
+                    (day.status === 'committed' || assignedJobCount > 0) && { color: Colors.info },
                   ]}>
                     {day.date}
                   </Text>
