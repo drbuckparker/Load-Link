@@ -1131,11 +1131,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ))
             .then(r => r[0]);
 
+          const driverDayAssignments = await db
+            .select({
+              job_id: jobAssignments.job_id,
+              status: jobAssignments.status,
+              vehicle_id: jobAssignments.vehicle_id,
+            })
+            .from(jobAssignments)
+            .innerJoin(jobs, eq(jobAssignments.job_id, jobs.id))
+            .where(and(
+              eq(jobAssignments.driver_id, userId),
+              sql`${jobAssignments.status}::text IN ('accepted', 'approved', 'pending')`,
+              gte(jobs.scheduled_date, dayStart),
+              lte(jobs.scheduled_date, dayEnd)
+            ));
+
+          let driverDayJobs: any[] = [];
+          if (driverDayAssignments.length > 0) {
+            const assignedJobIds = driverDayAssignments.map(a => a.job_id!);
+            const jobsData = await db
+              .select({
+                id: jobs.id,
+                material: jobs.material,
+                status: jobs.status,
+                trucks_needed: jobs.trucks_needed,
+                project_name: contractorProjects.name,
+                contractor_name: users.full_name,
+              })
+              .from(jobs)
+              .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
+              .leftJoin(users, eq(jobs.contractor_id, users.id))
+              .where(inArray(jobs.id, assignedJobIds));
+
+            driverDayJobs = jobsData.map(j => {
+              const assignment = driverDayAssignments.find(a => a.job_id === j.id);
+              return {
+                id: j.id,
+                material: j.material || 'Unknown',
+                projectName: j.project_name || '',
+                contractorName: j.contractor_name || '',
+                trucksNeeded: j.trucks_needed || 1,
+                status: j.status || 'open',
+                assignmentStatus: assignment?.status || 'pending',
+                vehicleId: assignment?.vehicle_id || null,
+              };
+            });
+          }
+
           upcoming5Days.push({
             date: dateStr,
             dayName: dayNames[d.getDay()],
             dayNum: d.getDate(),
-            status: avail?.status || 'available',
+            status: driverDayJobs.length > 0 ? 'has_jobs' : (avail?.status || 'available'),
+            jobs: driverDayJobs.length > 0 ? driverDayJobs : undefined,
           });
         }
       }
