@@ -23,7 +23,7 @@ interface DashboardData {
   quickJob: { material: string; address: string } | null;
   earnings: { total: number; awaiting: number; thisMonth: number; thisWeek: number };
   location: { lat: number | null; lng: number | null; address: string | null };
-  upcomingDays: { date: string; dayName: string; dayNum: number; status: string; jobs?: { id: string; material: string; projectName: string; trucksNeeded: number; applied: number; status: string }[] }[];
+  upcomingDays: { date: string; dayName: string; dayNum: number; status: string; jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[] }[];
   recentActivity: { id: string; type: string; title: string; message: string; createdAt: string; isRead: boolean }[];
 }
 
@@ -321,22 +321,46 @@ export default function DashboardScreen() {
                           ) : null}
                           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Text style={styles.weekJobMaterial} numberOfLines={1}>{job.material}</Text>
-                            <View style={[styles.weekJobStatusBadge, {
-                              backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
-                                job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
-                            }]}>
-                              <Text style={[styles.weekJobStatusText, {
-                                color: job.status === 'open' || job.status === 'pending' ? Colors.success :
-                                  job.status === 'in_progress' ? Colors.warning : Colors.info
-                              }]}>{job.status === 'in_progress' ? 'ACTIVE' : job.status.toUpperCase()}</Text>
+                            {contractor ? (
+                              <View style={[styles.weekJobStatusBadge, {
+                                backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
+                                  job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
+                              }]}>
+                                <Text style={[styles.weekJobStatusText, {
+                                  color: job.status === 'open' || job.status === 'pending' ? Colors.success :
+                                    job.status === 'in_progress' ? Colors.warning : Colors.info
+                                }]}>{job.status === 'in_progress' ? 'ACTIVE' : job.status.toUpperCase()}</Text>
+                              </View>
+                            ) : (
+                              <View style={[styles.weekJobStatusBadge, {
+                                backgroundColor: job.assignmentStatus === 'pending' ? Colors.warningBg :
+                                  job.status === 'in_progress' ? Colors.warningBg : Colors.successBg
+                              }]}>
+                                <Text style={[styles.weekJobStatusText, {
+                                  color: job.assignmentStatus === 'pending' ? Colors.warning :
+                                    job.status === 'in_progress' ? Colors.warning : Colors.success
+                                }]}>
+                                  {job.assignmentStatus === 'pending' ? 'PENDING' :
+                                    job.status === 'in_progress' ? 'ACTIVE' : 'CONFIRMED'}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                          {contractor ? (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                              <MaterialCommunityIcons name="dump-truck" size={13} color={Colors.primary} />
+                              <Text style={styles.weekJobStat}>{job.assigned || 0}/{job.trucksNeeded} trucks</Text>
+                              <Ionicons name="people" size={13} color={(job.applied || 0) > 0 ? Colors.info : Colors.textMuted} />
+                              <Text style={[styles.weekJobStat, (job.applied || 0) > 0 && { color: Colors.info }]}>{job.applied || 0} applied</Text>
                             </View>
-                          </View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                            <MaterialCommunityIcons name="dump-truck" size={13} color={Colors.primary} />
-                            <Text style={styles.weekJobStat}>{job.assigned || 0}/{job.trucksNeeded} trucks</Text>
-                            <Ionicons name="people" size={13} color={job.applied > 0 ? Colors.info : Colors.textMuted} />
-                            <Text style={[styles.weekJobStat, job.applied > 0 && { color: Colors.info }]}>{job.applied} applied</Text>
-                          </View>
+                          ) : (
+                            job.contractorName ? (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Ionicons name="business-outline" size={13} color={Colors.textSecondary} />
+                                <Text style={styles.weekJobStat} numberOfLines={1}>{job.contractorName}</Text>
+                              </View>
+                            ) : null
+                          )}
                           {job.assignedVehicles && job.assignedVehicles.length > 0 && (
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 }}>
                               <Ionicons name="checkmark-circle" size={11} color={Colors.success} />
