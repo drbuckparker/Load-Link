@@ -62,6 +62,7 @@ export default function CalendarScreen() {
   const [modalNotes, setModalNotes] = useState('');
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [trucksExpanded, setTrucksExpanded] = useState(true);
 
   const isContractor = user?.role ? isContractorRole(user.role) : false;
 
@@ -575,23 +576,113 @@ export default function CalendarScreen() {
 
               {assignedJobs.length > 0 && (
                 <View style={{
-                  flexDirection: 'row', alignItems: 'center', gap: 10,
                   backgroundColor: dayAllBooked ? Colors.infoBg : 'rgba(59,130,246,0.08)',
-                  borderRadius: 10, padding: 12, marginTop: 4,
+                  borderRadius: 12, marginTop: 4, overflow: 'hidden',
                   borderWidth: 1, borderColor: dayAllBooked ? 'rgba(59,130,246,0.3)' : 'rgba(59,130,246,0.15)',
                 }}>
-                  <MaterialCommunityIcons name="dump-truck" size={22} color={Colors.info} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.info }}>
-                      {assignedJobs.length} TRUCK{assignedJobs.length !== 1 ? 'S' : ''} BOOKED
-                    </Text>
-                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginTop: 1 }}>
-                      {dayAllBooked ? 'All trucks committed' : `${totalVehicles > 0 ? totalVehicles - dayBookedCount : 0} of ${totalVehicles} truck${totalVehicles !== 1 ? 's' : ''} available`}
-                    </Text>
-                  </View>
-                  {dayAllBooked && (
-                    <View style={{ backgroundColor: Colors.info, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
-                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: '#fff', letterSpacing: 0.5 }}>FULL</Text>
+                  <Pressable
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12 }}
+                    onPress={() => {
+                      setTrucksExpanded(!trucksExpanded);
+                      if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }}
+                  >
+                    <MaterialCommunityIcons name="dump-truck" size={22} color={Colors.info} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.info }}>
+                        {assignedJobs.length} TRUCK{assignedJobs.length !== 1 ? 'S' : ''} BOOKED
+                      </Text>
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginTop: 1 }}>
+                        {dayAllBooked ? 'All trucks committed' : `${totalVehicles > 0 ? totalVehicles - dayBookedCount : 0} of ${totalVehicles} truck${totalVehicles !== 1 ? 's' : ''} available`}
+                      </Text>
+                    </View>
+                    {dayAllBooked && (
+                      <View style={{ backgroundColor: Colors.info, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                        <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: '#fff', letterSpacing: 0.5 }}>FULL</Text>
+                      </View>
+                    )}
+                    <Ionicons name={trucksExpanded ? "chevron-up" : "chevron-down"} size={18} color={Colors.info} />
+                  </Pressable>
+
+                  {trucksExpanded && (
+                    <View style={{ gap: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
+                      {assignedJobs.map((job) => (
+                        <Pressable
+                          key={job.id}
+                          style={[styles.calJobCard, job.assignmentStatus === 'pending' && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' as any }]}
+                          onPress={() => {
+                            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            router.push(`/job/${job.id}` as any);
+                          }}
+                        >
+                          {job.projectName ? (
+                            <Text style={styles.calJobProject} numberOfLines={1}>{job.projectName.toUpperCase()}</Text>
+                          ) : null}
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
+                            <View style={{ flexDirection: 'row', gap: 6 }}>
+                              {job.assignmentStatus === 'pending' ? (
+                                <View style={[styles.calJobStatusBadge, { backgroundColor: Colors.warningBg }]}>
+                                  <Text style={[styles.calJobStatusText, { color: Colors.warning }]}>PENDING</Text>
+                                </View>
+                              ) : (
+                                <View style={[styles.calJobStatusBadge, {
+                                  backgroundColor: job.status === 'in_progress' ? Colors.warningBg : Colors.successBg
+                                }]}>
+                                  <Text style={[styles.calJobStatusText, {
+                                    color: job.status === 'in_progress' ? Colors.warning : Colors.success
+                                  }]}>{job.status === 'in_progress' ? 'Active' : 'Confirmed'}</Text>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+
+                          {job.contractorName ? (
+                            <View style={styles.calJobTruckStat}>
+                              <Ionicons name="business-outline" size={14} color={Colors.textSecondary} />
+                              <Text style={styles.calJobTruckLabel}>{job.contractorName}</Text>
+                            </View>
+                          ) : null}
+
+                          {job.vehicle ? (
+                            <View style={styles.truckAssignmentRow}>
+                              <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
+                              <Text style={styles.truckAssignmentText}>
+                                {job.vehicle.year} {job.vehicle.make} {job.vehicle.model}
+                              </Text>
+                              {job.vehicle.licensePlate ? (
+                                <View style={styles.licensePlateBadge}>
+                                  <Text style={styles.licensePlateText}>{job.vehicle.licensePlate}</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          ) : (
+                            <View style={styles.calJobTruckStat}>
+                              <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.textMuted} />
+                              <Text style={[styles.calJobTruckLabel, { color: Colors.textMuted, fontStyle: 'italic' }]}>No truck assigned</Text>
+                            </View>
+                          )}
+
+                          {(job.pickup || job.dropoff) ? (
+                            <View style={{ gap: 4 }}>
+                              {job.pickup ? (
+                                <View style={styles.calJobTruckStat}>
+                                  <Ionicons name="location" size={14} color={Colors.success} />
+                                  <Text style={styles.calJobTruckLabel} numberOfLines={1}>{job.pickup}</Text>
+                                </View>
+                              ) : null}
+                              {job.dropoff ? (
+                                <View style={styles.calJobTruckStat}>
+                                  <Ionicons name="flag" size={14} color={Colors.destructive} />
+                                  <Text style={styles.calJobTruckLabel} numberOfLines={1}>{job.dropoff}</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          ) : null}
+
+                          <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 12, top: '50%' }} />
+                        </Pressable>
+                      ))}
                     </View>
                   )}
                 </View>
@@ -615,96 +706,6 @@ export default function CalendarScreen() {
                       {SHIFTS.find(s => s.key === selectedAvail.shift)?.label || selectedAvail.shift}
                     </Text>
                   )}
-                </View>
-              )}
-
-              {selectedAvail?.name && (
-                <Text style={styles.detailCompany}>{selectedAvail.name}</Text>
-              )}
-              {selectedAvail?.notes ? (
-                <Text style={styles.detailNotes}>{selectedAvail.notes}</Text>
-              ) : null}
-
-              {assignedJobs.length > 0 && (
-                <View style={{ gap: 10, marginTop: 4 }}>
-                  <Text style={styles.assignedJobsTitle}>ASSIGNED JOBS</Text>
-                  {assignedJobs.map((job) => (
-                    <Pressable
-                      key={job.id}
-                      style={[styles.calJobCard, job.assignmentStatus === 'pending' && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' }]}
-                      onPress={() => {
-                        if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        router.push(`/job/${job.id}` as any);
-                      }}
-                    >
-                      {job.projectName ? (
-                        <Text style={styles.calJobProject} numberOfLines={1}>{job.projectName.toUpperCase()}</Text>
-                      ) : null}
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
-                        <View style={{ flexDirection: 'row', gap: 6 }}>
-                          {job.assignmentStatus === 'pending' ? (
-                            <View style={[styles.calJobStatusBadge, { backgroundColor: Colors.warningBg }]}>
-                              <Text style={[styles.calJobStatusText, { color: Colors.warning }]}>PENDING APPROVAL</Text>
-                            </View>
-                          ) : (
-                            <View style={[styles.calJobStatusBadge, {
-                              backgroundColor: job.status === 'in_progress' ? Colors.warningBg : Colors.successBg
-                            }]}>
-                              <Text style={[styles.calJobStatusText, {
-                                color: job.status === 'in_progress' ? Colors.warning : Colors.success
-                              }]}>{job.status === 'in_progress' ? 'Active' : 'Confirmed'}</Text>
-                            </View>
-                          )}
-                        </View>
-                      </View>
-
-                      {job.contractorName ? (
-                        <View style={styles.calJobTruckStat}>
-                          <Ionicons name="business-outline" size={14} color={Colors.textSecondary} />
-                          <Text style={styles.calJobTruckLabel}>{job.contractorName}</Text>
-                        </View>
-                      ) : null}
-
-                      {job.vehicle ? (
-                        <View style={styles.truckAssignmentRow}>
-                          <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
-                          <Text style={styles.truckAssignmentText}>
-                            {job.vehicle.year} {job.vehicle.make} {job.vehicle.model}
-                          </Text>
-                          {job.vehicle.licensePlate ? (
-                            <View style={styles.licensePlateBadge}>
-                              <Text style={styles.licensePlateText}>{job.vehicle.licensePlate}</Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      ) : (
-                        <View style={styles.calJobTruckStat}>
-                          <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.textMuted} />
-                          <Text style={[styles.calJobTruckLabel, { color: Colors.textMuted, fontStyle: 'italic' }]}>No truck assigned</Text>
-                        </View>
-                      )}
-
-                      {(job.pickup || job.dropoff) && (
-                        <View style={{ gap: 4 }}>
-                          {job.pickup ? (
-                            <View style={styles.calJobTruckStat}>
-                              <Ionicons name="location" size={14} color={Colors.success} />
-                              <Text style={styles.calJobTruckLabel} numberOfLines={1}>{job.pickup}</Text>
-                            </View>
-                          ) : null}
-                          {job.dropoff ? (
-                            <View style={styles.calJobTruckStat}>
-                              <Ionicons name="flag" size={14} color={Colors.destructive} />
-                              <Text style={styles.calJobTruckLabel} numberOfLines={1}>{job.dropoff}</Text>
-                            </View>
-                          ) : null}
-                        </View>
-                      )}
-
-                      <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 12, top: '50%' }} />
-                    </Pressable>
-                  ))}
                 </View>
               )}
 
