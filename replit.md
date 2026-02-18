@@ -152,3 +152,9 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Submitted reviews update user's average rating in users table
 - Moved Earnings from tab bar to Profile screen (as Earnings sub-tab)
 - Replaced Earnings tab with Jobs tab showing driver's assigned jobs with vehicle assignment
+- Added truck availability validation on job accept: drivers can't accept more jobs than qualifying trucks per date
+- Cleanup endpoint `/api/cleanup-duplicate-assignments` removes excess assignments when driver has more jobs than trucks on a date (keeps earliest accepted)
+- Calendar auto-detects conflicting assignments and triggers cleanup on load
+- Fixed withdraw endpoint to also delete job_assignments (not just reset job status)
+- Calendar "X TRUCKS BOOKED" label changed to "X JOBS BOOKED" for accuracy
+- Dashboard shows role-aware job info: drivers see contractor name + assignment status, contractors see truck counts
