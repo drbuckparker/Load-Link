@@ -1,6 +1,7 @@
 import { View, Text, Pressable, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Colors from '@/constants/colors';
+import { getApiUrl } from '@/lib/query-client';
 
 interface RouteMapViewProps {
   oLat: number;
@@ -19,22 +20,33 @@ interface RouteMapViewProps {
 }
 
 export default function RouteMapView(props: RouteMapViewProps) {
-  const dest = props.hasDest ? `${props.dLat},${props.dLng}` : `${props.oLat},${props.oLng}`;
   const origin = props.hasOrigin ? `${props.oLat},${props.oLng}` : '';
+  const dest = props.hasDest ? `${props.dLat},${props.dLng}` : `${props.oLat},${props.oLng}`;
+  const baseUrl = getApiUrl();
+  const mapUrl = `${baseUrl}/api/map-embed?oLat=${props.oLat}&oLng=${props.oLng}&dLat=${props.dLat}&dLng=${props.dLng}&hasOrigin=${props.hasOrigin}&hasDest=${props.hasDest}`;
 
   return (
-    <View style={{ flex: 1, backgroundColor: Colors.cardBg, alignItems: 'center', justifyContent: 'center' }}>
-      <Ionicons name="map" size={64} color={Colors.textMuted} />
-      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 16, color: Colors.textSecondary, marginTop: 12 }}>
-        Map view available on mobile
-      </Text>
-      <Pressable
-        onPress={() => Linking.openURL(`https://www.google.com/maps/dir/${origin}/${dest}`)}
-        style={{ marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.primary, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12 }}
-      >
-        <Ionicons name="open-outline" size={18} color="#fff" />
-        <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: '#fff' }}>OPEN IN GOOGLE MAPS</Text>
-      </Pressable>
+    <View style={{ flex: 1 }}>
+      <iframe
+        src={mapUrl}
+        style={{ width: '100%', height: '100%', border: 'none' } as any}
+        allowFullScreen
+      />
+      <View style={{
+        position: 'absolute', bottom: 50, right: 16,
+      }}>
+        <Pressable
+          onPress={() => Linking.openURL(`https://www.google.com/maps/dir/${origin}/${dest}`)}
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 6,
+            backgroundColor: Colors.primary, borderRadius: 10,
+            paddingHorizontal: 14, paddingVertical: 10,
+          }}
+        >
+          <Ionicons name="open-outline" size={16} color="#fff" />
+          <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: '#fff' }}>GOOGLE MAPS</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

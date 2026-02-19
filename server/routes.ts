@@ -2959,6 +2959,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/map-embed", async (req: Request, res: Response) => {
+    try {
+      const { oLat, oLng, dLat, dLng, hasOrigin, hasDest } = req.query;
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) return res.status(500).send("Map API not configured");
+
+      const originLat = parseFloat(oLat as string) || 0;
+      const originLng = parseFloat(oLng as string) || 0;
+      const destLat = parseFloat(dLat as string) || 0;
+      const destLng = parseFloat(dLng as string) || 0;
+      const showOrigin = hasOrigin === 'true';
+      const showDest = hasDest === 'true';
+
+      const centerLat = showOrigin && showDest ? (originLat + destLat) / 2 : showOrigin ? originLat : destLat;
+      const centerLng = showOrigin && showDest ? (originLng + destLng) / 2 : showOrigin ? originLng : destLng;
+
+      const html = `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body,#map{margin:0;padding:0;width:100%;height:100%;}</style>
+</head><body>
+<div id="map"></div>
+<script>
+function initMap(){
+  const map=new google.maps.Map(document.getElementById('map'),{
+    center:{lat:${centerLat},lng:${centerLng}},zoom:11,
+    mapTypeControl:false,streetViewControl:false,fullscreenControl:false,
+    styles:[{elementType:'geometry',stylers:[{color:'#1d2c4d'}]},{elementType:'labels.text.fill',stylers:[{color:'#8ec3b9'}]},{elementType:'labels.text.stroke',stylers:[{color:'#1a3646'}]},{featureType:'road',elementType:'geometry',stylers:[{color:'#304a7d'}]},{featureType:'road',elementType:'geometry.stroke',stylers:[{color:'#255d7a'}]},{featureType:'water',elementType:'geometry',stylers:[{color:'#17263c'}]}]
+  });
+  ${showOrigin ? `new google.maps.Marker({position:{lat:${originLat},lng:${originLng}},map,title:'Pickup',icon:{path:google.maps.SymbolPath.CIRCLE,fillColor:'#22c55e',fillOpacity:1,strokeColor:'#fff',strokeWeight:2,scale:10}});` : ''}
+  ${showDest ? `new google.maps.Marker({position:{lat:${destLat},lng:${destLng}},map,title:'Dropoff',icon:{path:google.maps.SymbolPath.CIRCLE,fillColor:'#FF9900',fillOpacity:1,strokeColor:'#fff',strokeWeight:2,scale:10}});` : ''}
+  ${showOrigin && showDest ? `
+  const ds=new google.maps.DirectionsService();
+  const dr=new google.maps.DirectionsRenderer({suppressMarkers:true,polylineOptions:{strokeColor:'#3b82f6',strokeWeight:4}});
+  dr.setMap(map);
+  ds.route({origin:{lat:${originLat},lng:${originLng}},destination:{lat:${destLat},lng:${destLng}},travelMode:'DRIVING'},function(r,s){
+    if(s==='OK'){dr.setDirections(r);const b=new google.maps.LatLngBounds();b.extend({lat:${originLat},lng:${originLng}});b.extend({lat:${destLat},lng:${destLng}});map.fitBounds(b,60);}
+  });` : ''}
+}
+</script>
+<script src="https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initMap" async defer></script>
+</body></html>`;
+
+      res.setHeader('Content-Type', 'text/html');
+      return res.send(html);
+    } catch (err) {
+      console.error("Map embed error:", err);
+      return res.status(500).send("Error loading map");
+    }
+  });
+
   app.get("/api/directions/polyline", requireAuth, async (req: Request, res: Response) => {
     try {
       const { origin_lat, origin_lng, dest_lat, dest_lng } = req.query;
