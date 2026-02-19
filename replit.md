@@ -158,3 +158,6 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Fixed withdraw endpoint to also delete job_assignments (not just reset job status)
 - Calendar "X TRUCKS BOOKED" label changed to "X JOBS BOOKED" for accuracy
 - Dashboard shows role-aware job info: drivers see contractor name + assignment status, contractors see truck counts
+- Fixed react-native-maps web compatibility: split into platform-specific files (RouteMapView.native.tsx / RouteMapView.web.tsx)
+- Web map view uses Google Maps JavaScript API via /api/map-embed iframe with dark theme, route directions, and markers
+- Native map view uses react-native-maps with MapView, Marker, and Polyline components
