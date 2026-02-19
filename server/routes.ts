@@ -2959,6 +2959,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/directions/polyline", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { origin_lat, origin_lng, dest_lat, dest_lng } = req.query;
+      if (!origin_lat || !origin_lng || !dest_lat || !dest_lng) {
+        return res.status(400).json({ message: "Origin and destination coordinates required" });
+      }
+
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) return res.status(500).json({ message: "Google Maps API key not configured" });
+
+      const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
+      url.searchParams.set("origin", `${origin_lat},${origin_lng}`);
+      url.searchParams.set("destination", `${dest_lat},${dest_lng}`);
+      url.searchParams.set("key", apiKey);
+
+      const response = await fetch(url.toString());
+      const data = await response.json();
+
+      if (data.routes && data.routes.length > 0) {
+        const route = data.routes[0];
+        const encodedPolyline = route.overview_polyline?.points || '';
+        const points: { lat: number; lng: number }[] = [];
+
+        if (encodedPolyline) {
+          let index = 0, lat = 0, lng = 0;
+          while (index < encodedPolyline.length) {
+            let b, shift = 0, result = 0;
+            do { b = encodedPolyline.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+            lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+            shift = 0; result = 0;
+            do { b = encodedPolyline.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+            lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+            points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+          }
+        }
+
+        return res.json({ points });
+      }
+      return res.json({ points: [] });
+    } catch (err) {
+      console.error("Polyline directions error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   // ============ REVIEWS ============
 
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {

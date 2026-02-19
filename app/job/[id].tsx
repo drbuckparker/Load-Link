@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -8,11 +8,13 @@ import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor } from '@/lib/mock-data';
-import { apiRequest, queryClient } from '@/lib/query-client';
+import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
+import RouteMapView from '@/components/RouteMapView';
 
 function isContractorRole(role: string): boolean {
   return role.includes('contractor');
 }
+
 
 interface VehicleInfo {
   id: string;
@@ -153,6 +155,8 @@ export default function JobDetailScreen() {
   const truckWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [acceptBannerVisible, setAcceptBannerVisible] = useState(false);
   const [acceptBannerData, setAcceptBannerData] = useState<{ isFavorite: boolean; message: string } | null>(null);
+  const [mapVisible, setMapVisible] = useState(false);
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -320,6 +324,57 @@ export default function JobDetailScreen() {
     if (truckWarningTimeout.current) clearTimeout(truckWarningTimeout.current);
     setTruckWarning(msg);
     truckWarningTimeout.current = setTimeout(() => setTruckWarning(null), 4000);
+  }
+
+  async function openRouteMap() {
+    if (!job) return;
+    const oLat = Number(job.originLat);
+    const oLng = Number(job.originLng);
+    const dLat = Number(job.destinationLat);
+    const dLng = Number(job.destinationLng);
+    if (!oLat && !oLng && !dLat && !dLng) {
+      Alert.alert('No Coordinates', 'Location coordinates are not available for this job.');
+      return;
+    }
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRouteCoords([]);
+    setMapVisible(true);
+
+    if (oLat && oLng && dLat && dLng) {
+      try {
+        const url = new URL('/api/directions/polyline', getApiUrl());
+        url.searchParams.set('origin_lat', String(oLat));
+        url.searchParams.set('origin_lng', String(oLng));
+        url.searchParams.set('dest_lat', String(dLat));
+        url.searchParams.set('dest_lng', String(dLng));
+        const res = await fetch(url.toString(), { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.points && data.points.length > 0) {
+            setRouteCoords(data.points.map((p: any) => ({ latitude: p.lat, longitude: p.lng })));
+          }
+        }
+      } catch {
+        setRouteCoords([]);
+      }
+    }
+  }
+
+  function openInMapsApp() {
+    if (!job) return;
+    const oLat = Number(job.originLat);
+    const oLng = Number(job.originLng);
+    const dLat = Number(job.destinationLat);
+    const dLng = Number(job.destinationLng);
+    const dest = dLat && dLng ? `${dLat},${dLng}` : `${oLat},${oLng}`;
+    const origin = oLat && oLng ? `${oLat},${oLng}` : '';
+    if (Platform.OS === 'ios') {
+      Linking.openURL(`maps://?saddr=${origin}&daddr=${dest}`);
+    } else if (Platform.OS === 'android') {
+      Linking.openURL(`google.navigation:q=${dest}`);
+    } else {
+      Linking.openURL(`https://www.google.com/maps/dir/${origin}/${dest}`);
+    }
   }
 
   function toggleVehicleSelection(vehicleId: string) {
@@ -499,13 +554,14 @@ export default function JobDetailScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>ROUTE</Text>
-          <View style={styles.routeCard}>
+          <Pressable style={styles.routeCard} onPress={openRouteMap}>
             <View style={styles.routeRow}>
               <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />
               <View style={styles.routeTextBlock}>
                 <Text style={styles.routeLabel}>PICKUP</Text>
                 <Text style={styles.routeAddress}>{job.originAddress}</Text>
               </View>
+              <Ionicons name="map-outline" size={18} color={Colors.textMuted} />
             </View>
             <View style={styles.routeLine} />
             <View style={styles.routeRow}>
@@ -520,8 +576,12 @@ export default function JobDetailScreen() {
                 <Ionicons name="navigate" size={14} color={Colors.primary} />
                 <Text style={styles.routeStatText}>{job.distance} miles</Text>
               </View>
+              <View style={styles.routeStatItem}>
+                <Ionicons name="map" size={14} color={Colors.info} />
+                <Text style={[styles.routeStatText, { color: Colors.info }]}>View Map</Text>
+              </View>
             </View>
-          </View>
+          </Pressable>
         </View>
 
         <View style={styles.section}>
@@ -1149,6 +1209,94 @@ export default function JobDetailScreen() {
             </Pressable>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      <Modal
+        visible={mapVisible}
+        animationType="slide"
+        onRequestClose={() => { setMapVisible(false); setRouteCoords([]); }}
+      >
+        <View style={{ flex: 1, backgroundColor: Colors.background }}>
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+            paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8, paddingHorizontal: 16, paddingBottom: 12,
+            backgroundColor: Colors.surface, borderBottomWidth: 1, borderBottomColor: Colors.border,
+          }}>
+            <Pressable onPress={() => { setMapVisible(false); setRouteCoords([]); }} style={{ padding: 6 }}>
+              <Ionicons name="close" size={26} color={Colors.text} />
+            </Pressable>
+            <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 16, color: Colors.text, letterSpacing: 1 }}>ROUTE MAP</Text>
+            <Pressable onPress={openInMapsApp} style={{ padding: 6 }}>
+              <Ionicons name="navigate-outline" size={22} color={Colors.primary} />
+            </Pressable>
+          </View>
+
+          {job && (() => {
+            const oLat = Number(job.originLat);
+            const oLng = Number(job.originLng);
+            const dLat = Number(job.destinationLat);
+            const dLng = Number(job.destinationLng);
+            const hasOrigin = !!(oLat && oLng);
+            const hasDest = !!(dLat && dLng);
+            const midLat = hasOrigin && hasDest ? (oLat + dLat) / 2 : hasOrigin ? oLat : dLat;
+            const midLng = hasOrigin && hasDest ? (oLng + dLng) / 2 : hasOrigin ? oLng : dLng;
+            const latDelta = hasOrigin && hasDest ? Math.abs(oLat - dLat) * 1.6 + 0.05 : 0.1;
+            const lngDelta = hasOrigin && hasDest ? Math.abs(oLng - dLng) * 1.6 + 0.05 : 0.1;
+
+            return (
+              <View style={{ flex: 1 }}>
+                <RouteMapView
+                  oLat={oLat} oLng={oLng} dLat={dLat} dLng={dLng}
+                  hasOrigin={hasOrigin} hasDest={hasDest}
+                  midLat={midLat} midLng={midLng} latDelta={latDelta} lngDelta={lngDelta}
+                  originAddress={job.originAddress} destinationAddress={job.destinationAddress}
+                  routeCoords={routeCoords}
+                />
+
+                <View style={{
+                  position: 'absolute', bottom: Platform.OS === 'web' ? 34 : insets.bottom + 8,
+                  left: 16, right: 16,
+                  backgroundColor: Colors.surface, borderRadius: 16, padding: 16,
+                  borderWidth: 1, borderColor: Colors.border,
+                  gap: 10,
+                }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#22c55e' }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.success, letterSpacing: 1 }}>PICKUP</Text>
+                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text }} numberOfLines={2}>{job.originAddress}</Text>
+                    </View>
+                  </View>
+                  <View style={{ height: 1, backgroundColor: Colors.border, marginLeft: 20 }} />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.primary }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.primary, letterSpacing: 1 }}>DROPOFF</Text>
+                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text }} numberOfLines={2}>{job.destinationAddress}</Text>
+                    </View>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="navigate" size={14} color={Colors.primary} />
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.textSecondary }}>{job.distance} miles</Text>
+                    </View>
+                    <Pressable
+                      onPress={openInMapsApp}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row', alignItems: 'center', gap: 6,
+                        backgroundColor: Colors.primary, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8,
+                        opacity: pressed ? 0.85 : 1,
+                      })}
+                    >
+                      <Ionicons name="navigate" size={16} color="#fff" />
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: '#fff', letterSpacing: 0.5 }}>DIRECTIONS</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            );
+          })()}
+        </View>
       </Modal>
     </View>
   );
