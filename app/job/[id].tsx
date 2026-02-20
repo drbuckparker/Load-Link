@@ -385,9 +385,16 @@ export default function JobDetailScreen() {
     }
 
     const vehicleConflict = conflictsData?.vehicleConflicts?.[vehicleId];
+    if (vehicleConflict?.wrongType) {
+      const requiredType = conflictsData?.requiredTruckType?.replace(/_/g, ' ') || 'matching';
+      showTruckWarning(
+        `This truck doesn't match the required type for this job. This job needs a ${requiredType} truck.`
+      );
+      return;
+    }
     if (vehicleConflict?.blocked) {
       showTruckWarning(
-        `This truck is already booked for a full-day job on ${vehicleConflict.conflictDates[0]} (${vehicleConflict.conflictJobs[0]}). It cannot be double-booked.`
+        `This truck is already booked on ${vehicleConflict.conflictDates[0]} (${vehicleConflict.conflictJobs[0]}). It cannot be double-booked.`
       );
       return;
     }
@@ -1079,6 +1086,7 @@ export default function JobDetailScreen() {
                   const truckTypeLabel = v.truck_type ? formatTruckType(v.truck_type) : '';
                   const conflict = conflictsData?.vehicleConflicts?.[vId];
                   const isBlocked = conflict?.blocked === true;
+                  const isWrongType = conflict?.wrongType === true;
                   return (
                     <Pressable
                       key={vId}
@@ -1102,7 +1110,12 @@ export default function JobDetailScreen() {
                           <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }, isBlocked && { color: Colors.textMuted }]}>
                             {truckLabel || 'Unnamed Truck'}
                           </Text>
-                          {isBlocked && (
+                          {isWrongType && (
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>WRONG TYPE</Text>
+                            </View>
+                          )}
+                          {isBlocked && !isWrongType && (
                             <View style={styles.bookedBadge}>
                               <Text style={styles.bookedBadgeText}>BOOKED</Text>
                             </View>
