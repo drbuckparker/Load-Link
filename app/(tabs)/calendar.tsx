@@ -417,7 +417,14 @@ export default function CalendarScreen() {
               const dayBooked = bookedVehiclesPerDay[key];
               const bookedCount = dayBooked?.vehicleIds?.size || assignedJobCount;
               const allTrucksBooked = totalVehicles > 0 && bookedCount >= totalVehicles;
-              const someTrucksBooked = assignedJobCount > 0 && !allTrucksBooked;
+              const hasJobs = assignedJobCount > 0;
+
+              const dotColor = hasJobs
+                ? (allTrucksBooked ? '#fff' : Colors.info)
+                : day.status === 'available' ? Colors.success
+                : day.status === 'unavailable' ? Colors.destructive
+                : day.status === 'committed' ? Colors.info
+                : null;
 
               return (
                 <Pressable
@@ -426,7 +433,6 @@ export default function CalendarScreen() {
                     styles.dayCell,
                     isSelected && styles.dayCellSelected,
                     allTrucksBooked && styles.dayCellAllBooked,
-                    someTrucksBooked && styles.dayCellSomeBooked,
                   ]}
                   onPress={() => {
                     setSelectedDate(key);
@@ -439,23 +445,17 @@ export default function CalendarScreen() {
                   <Text style={[
                     styles.dayNumber,
                     isToday && styles.dayNumberToday,
-                    (day.status === 'committed' || assignedJobCount > 0) && { color: Colors.info },
+                    hasJobs && { color: Colors.info },
                     allTrucksBooked && { color: '#fff' },
                   ]}>
                     {day.date}
                   </Text>
-                  {assignedJobCount > 0 ? (
+                  {dotColor && (
                     <View style={styles.capacityDotsRow}>
-                      <View style={[styles.statusDot, { backgroundColor: allTrucksBooked ? '#fff' : Colors.info }]} />
+                      <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
                     </View>
-                  ) : (
-                    <>
-                      {day.status === 'available' && <View style={[styles.statusDot, { backgroundColor: Colors.success }]} />}
-                      {day.status === 'unavailable' && <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />}
-                      {day.status === 'committed' && <View style={[styles.statusDot, { backgroundColor: Colors.info }]} />}
-                    </>
                   )}
-                  {assignedJobCount > 0 && (
+                  {hasJobs && (
                     <Text style={[styles.truckCountBadge, allTrucksBooked && { color: '#fff' }]}>{assignedJobCount}</Text>
                   )}
                   {isToday && <View style={styles.todayIndicator} />}
@@ -640,6 +640,11 @@ export default function CalendarScreen() {
                           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
                             <View style={{ flexDirection: 'row', gap: 6 }}>
+                              {job.isMultiDay && (
+                                <View style={[styles.calJobStatusBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                                  <Text style={[styles.calJobStatusText, { color: '#8b5cf6' }]}>DAY {job.dayNumber}/{job.totalDays}</Text>
+                                </View>
+                              )}
                               {job.assignmentStatus === 'pending' ? (
                                 <View style={[styles.calJobStatusBadge, { backgroundColor: Colors.warningBg }]}>
                                   <Text style={[styles.calJobStatusText, { color: Colors.warning }]}>PENDING</Text>

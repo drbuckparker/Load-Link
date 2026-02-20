@@ -2284,6 +2284,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const monthStart = new Date(Date.UTC(y, m - 1, 1));
       const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
 
+      const maxJobDays = 30;
+      const extendedStart = new Date(Date.UTC(y, m - 1, 1));
+      extendedStart.setUTCDate(extendedStart.getUTCDate() - maxJobDays);
+
       const assignedJobs = await db
         .select({
           job_id: jobs.id,
@@ -2297,6 +2301,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           trucks_needed: jobs.trucks_needed,
           rate: jobs.rate,
           rate_type: jobs.rate_type,
+          estimated_days: jobs.estimated_days,
+          listed_days: jobs.listed_days,
           project_name: contractorProjects.name,
           assignment_status: jobAssignments.status,
           vehicle_id: jobAssignments.vehicle_id,
@@ -2309,7 +2315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           and(
             eq(jobAssignments.driver_id, userId),
             sql`${jobAssignments.status}::text IN ('approved', 'accepted', 'pending')`,
-            gte(jobs.scheduled_date, monthStart),
+            gte(jobs.scheduled_date, extendedStart),
             lte(jobs.scheduled_date, monthEnd),
             sql`${jobs.status}::text IN ('open', 'pending', 'accepted', 'in_progress', 'completed')`
           )
@@ -2332,14 +2338,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       for (const job of assignedJobs) {
         if (!job.scheduled_date) continue;
-        const d = new Date(job.scheduled_date);
-        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        if (!dailyJobs[key]) dailyJobs[key] = [];
-        if (!jobDates.includes(key)) jobDates.push(key);
+        const startDate = new Date(job.scheduled_date);
+
+        const durationDays = Math.max(1, Math.ceil(parseFloat(job.listed_days as string || job.estimated_days as string || '1')));
 
         const vehicle = job.vehicle_id ? vehicleMap[job.vehicle_id] : null;
-
-        dailyJobs[key].push({
+        const jobData = {
           id: job.job_id,
           material: job.material || 'Unknown',
           projectName: job.project_name || '',
@@ -2352,6 +2356,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           contractorName: job.contractor_name || '',
           rate: job.rate,
           rateType: job.rate_type,
+          durationDays,
           vehicle: vehicle ? {
             id: vehicle.id,
             make: vehicle.make,
@@ -2360,7 +2365,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
             licensePlate: vehicle.license_plate,
             truckType: vehicle.truck_type,
           } : null,
-        });
+        };
+
+        for (let dayOffset = 0; dayOffset < durationDays; dayOffset++) {
+          const d = new Date(startDate);
+          d.setUTCDate(d.getUTCDate() + dayOffset);
+
+          if (d < monthStart || d > monthEnd) continue;
+
+          const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+          if (!dailyJobs[key]) dailyJobs[key] = [];
+          if (!jobDates.includes(key)) jobDates.push(key);
+
+          const isDayN = dayOffset > 0;
+          dailyJobs[key].push({ ...jobData, isMultiDay: durationDays > 1, dayNumber: dayOffset + 1, totalDays: durationDays, isContinuation: isDayN });
+        }
       }
 
       return res.json({ dailyJobs, jobDates });
