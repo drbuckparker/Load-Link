@@ -97,24 +97,61 @@ setInterval(() => {
 const PgStore = pgSession(session);
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  app.use(
-    session({
-      store: new PgStore({
-        pool: pool,
-        tableName: "sessions",
-        createTableIfMissing: false,
-      }),
-      secret: process.env.SESSION_SECRET || "loadlink-mobile-secret",
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-        secure: false,
-        httpOnly: true,
-        sameSite: "lax",
-      },
-    })
-  );
+  async function warmupDatabase(retries = 5, delay = 3000) {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const client = await pool.connect();
+        await client.query("SELECT 1");
+        client.release();
+        console.log("Database connection established successfully");
+        return true;
+      } catch (err: any) {
+        console.log(`Database warmup attempt ${i + 1}/${retries} failed: ${err.message}`);
+        if (i < retries - 1) {
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+    console.error("WARNING: Could not connect to database after all retries");
+    return false;
+  }
+
+  await warmupDatabase();
+
+  const pgStore = new PgStore({
+    pool: pool,
+    tableName: "sessions",
+    createTableIfMissing: false,
+    errorLog: (err: Error) => {
+      console.error("Session store error:", err.message);
+    },
+  });
+
+  const sessionMiddleware = session({
+    store: pgStore,
+    secret: process.env.SESSION_SECRET || "loadlink-mobile-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      secure: false,
+      httpOnly: true,
+      sameSite: "lax",
+    },
+  });
+
+  app.use((req, res, next) => {
+    sessionMiddleware(req, res, (err) => {
+      if (err) {
+        console.error("Session middleware error:", err.message);
+        if (err.message?.includes("endpoint has been disabled") || err.message?.includes("endpoint is disabled")) {
+          return res.status(503).json({ message: "Database is starting up, please try again in a moment." });
+        }
+        return res.status(500).json({ message: "Server error, please try again." });
+      }
+      next();
+    });
+  });
 
   function requireAuth(req: Request, res: Response, next: Function) {
     if (!(req.session as any).userId) {
