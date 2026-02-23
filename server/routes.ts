@@ -125,6 +125,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ AUTH ============
 
+  async function dbRetry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        const isNeonSleep = err?.message?.includes("endpoint has been disabled") || err?.message?.includes("endpoint is disabled");
+        if (isNeonSleep && i < retries - 1) {
+          console.log(`Database waking up, retrying in ${delay}ms (attempt ${i + 2}/${retries})...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("Database unavailable after retries");
+  }
+
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
@@ -132,11 +149,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Email and password required" });
       }
 
-      const [user] = await db
+      const [user] = await dbRetry(() => db
         .select()
         .from(users)
         .where(eq(users.email, email))
-        .limit(1);
+        .limit(1));
 
       if (!user) {
         console.log("Login: No user found for email:", email);
@@ -159,9 +176,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { password: _, ...safeUser } = user;
       return res.json({ user: safeUser });
-    } catch (err) {
+    } catch (err: any) {
       console.error("Login error:", err);
-      return res.status(500).json({ message: "Server error" });
+      const msg = err?.message?.includes("endpoint") ? "Database is waking up, please try again in a few seconds." : "Server error";
+      return res.status(500).json({ message: msg });
     }
   });
 
@@ -261,11 +279,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Not authenticated" });
       }
 
-      const [user] = await db
+      const [user] = await dbRetry(() => db
         .select()
         .from(users)
         .where(eq(users.id, userId))
-        .limit(1);
+        .limit(1));
 
       if (!user) {
         return res.status(401).json({ message: "User not found" });
@@ -273,9 +291,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { password: _, ...safeUser } = user;
       return res.json({ user: safeUser });
-    } catch (err) {
+    } catch (err: any) {
       console.error("Auth check error:", err);
-      return res.status(500).json({ message: "Server error" });
+      const msg = err?.message?.includes("endpoint") ? "Database is waking up, please try again in a few seconds." : "Server error";
+      return res.status(500).json({ message: msg });
     }
   });
 
