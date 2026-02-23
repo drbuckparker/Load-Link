@@ -264,16 +264,22 @@ export default function JobDetailScreen() {
   async function handleCancelJob() {
     const doCancel = async () => {
       try {
-        await apiRequest('DELETE', `/api/jobs/${id}`);
+        const res = await apiRequest('DELETE', `/api/jobs/${id}`);
+        const result = await res.json();
+        if (!result.ok) throw new Error('Cancel failed');
         if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        queryClient.invalidateQueries({ queryKey: ['/api/contractor/jobs'] });
+        await queryClient.invalidateQueries({ queryKey: ['/api/contractor/jobs'] });
+        queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+        queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
         router.back();
       } catch (e: any) {
         Alert.alert('Error', e.message || 'Failed to cancel job');
       }
     };
     if (Platform.OS === 'web') {
-      doCancel();
+      if (window.confirm('Are you sure you want to cancel this job? This cannot be undone.')) {
+        doCancel();
+      }
       return;
     }
     Alert.alert('Cancel Job', 'Are you sure you want to cancel this job? This cannot be undone.', [
@@ -750,13 +756,22 @@ export default function JobDetailScreen() {
         )}
 
         {isMyPostedJob && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
-          <Pressable
-            style={({ pressed }) => [styles.cancelJobBtn, pressed && { opacity: 0.85 }]}
-            onPress={handleCancelJob}
-          >
-            <Ionicons name="close-circle" size={20} color={Colors.destructive} />
-            <Text style={styles.cancelJobBtnText}>CANCEL JOB</Text>
-          </Pressable>
+          <View style={{ gap: 10, marginHorizontal: 16, marginTop: 10 }}>
+            <Pressable
+              style={({ pressed }) => [styles.editJobBtn, pressed && { opacity: 0.85 }]}
+              onPress={() => router.push(`/edit-job/${id}`)}
+            >
+              <Ionicons name="create-outline" size={20} color={Colors.primary} />
+              <Text style={styles.editJobBtnText}>EDIT JOB</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.cancelJobBtn, pressed && { opacity: 0.85 }]}
+              onPress={handleCancelJob}
+            >
+              <Ionicons name="close-circle" size={20} color={Colors.destructive} />
+              <Text style={styles.cancelJobBtnText}>CANCEL JOB</Text>
+            </Pressable>
+          </View>
         )}
 
         {hasApplied && !isContractor && (
@@ -1785,6 +1800,23 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase' as const,
     marginBottom: 1,
   },
+  editJobBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,153,0,0.1)',
+    borderRadius: 12,
+    height: 48,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,153,0,0.3)',
+  },
+  editJobBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
   cancelJobBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1793,7 +1825,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     height: 48,
     gap: 8,
-    marginTop: 8,
     borderWidth: 1,
     borderColor: 'rgba(239, 68, 68, 0.3)',
   },
