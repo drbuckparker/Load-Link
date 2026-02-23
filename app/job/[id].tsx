@@ -264,13 +264,12 @@ export default function JobDetailScreen() {
   async function handleCancelJob() {
     const doCancel = async () => {
       try {
-        const res = await apiRequest('DELETE', `/api/jobs/${id}`);
-        const result = await res.json();
-        if (!result.ok) throw new Error('Cancel failed');
+        await apiRequest('DELETE', `/api/jobs/${id}`);
         if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await queryClient.invalidateQueries({ queryKey: ['/api/contractor/jobs'] });
-        queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
-        queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+        queryClient.removeQueries({ predicate: (q) => {
+          const key = q.queryKey.join('/');
+          return key.includes('/api/jobs') || key.includes('/api/contractor');
+        }});
         router.back();
       } catch (e: any) {
         Alert.alert('Error', e.message || 'Failed to cancel job');
