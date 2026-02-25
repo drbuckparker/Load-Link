@@ -63,6 +63,7 @@ export default function CalendarScreen() {
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
   const [trucksExpanded, setTrucksExpanded] = useState(true);
+  const [savingQuick, setSavingQuick] = useState<string | null>(null);
 
   const isContractor = user?.role ? isContractorRole(user.role) : false;
 
@@ -314,6 +315,84 @@ export default function CalendarScreen() {
 
     queryClient.invalidateQueries({ queryKey: ['/api/availability'] });
     setModalVisible(false);
+  }
+
+  async function quickSetAvailability(dateKey: string, isAvailable: boolean) {
+    setSavingQuick(isAvailable ? 'available' : 'unavailable');
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await apiRequest('POST', '/api/availability', {
+        date: dateKey,
+        isAvailable,
+        startTime: '06:00',
+        endTime: '18:00',
+        shift: 'day',
+        recurrence: 'none',
+      });
+      setAvailability(prev => ({
+        ...prev,
+        [dateKey]: {
+          status: isAvailable ? 'available' : 'unavailable',
+          shift: 'day',
+          startTime: '06:00',
+          endTime: '18:00',
+        },
+      }));
+      queryClient.invalidateQueries({ queryKey: ['/api/availability'] });
+    } catch (e) {
+      console.log('Failed to set availability:', e);
+    } finally {
+      setSavingQuick(null);
+    }
+  }
+
+  async function bulkSetAvailability(type: 'weekdays' | 'weekends', isAvailable: boolean) {
+    setSavingQuick(type);
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const dates: string[] = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateObj = new Date(currentYear, currentMonth, d);
+      const dayOfWeek = dateObj.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      if ((type === 'weekdays' && !isWeekend) || (type === 'weekends' && isWeekend)) {
+        const key = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const existing = availability[key];
+        if (!existing || existing.status !== 'committed') {
+          dates.push(key);
+        }
+      }
+    }
+    try {
+      const promises = dates.map(date =>
+        apiRequest('POST', '/api/availability', {
+          date,
+          isAvailable,
+          startTime: '06:00',
+          endTime: '18:00',
+          shift: 'day',
+          recurrence: 'none',
+        })
+      );
+      await Promise.all(promises);
+      setAvailability(prev => {
+        const updated = { ...prev };
+        for (const date of dates) {
+          updated[date] = {
+            status: isAvailable ? 'available' : 'unavailable',
+            shift: 'day',
+            startTime: '06:00',
+            endTime: '18:00',
+          };
+        }
+        return updated;
+      });
+      queryClient.invalidateQueries({ queryKey: ['/api/availability'] });
+    } catch (e) {
+      console.log('Failed to bulk set availability:', e);
+    } finally {
+      setSavingQuick(null);
+    }
   }
 
   function navigateMonth(dir: number) {
@@ -575,6 +654,9 @@ export default function CalendarScreen() {
           const dayBookedInfo = bookedVehiclesPerDay[selectedDate];
           const dayBookedCount = dayBookedInfo?.vehicleIds?.size || assignedJobs.length;
           const dayAllBooked = totalVehicles > 0 && dayBookedCount >= totalVehicles;
+          const currentDayAvail = availability[selectedDate];
+          const isCurrentlyAvailable = currentDayAvail?.status === 'available';
+          const isCurrentlyUnavailable = currentDayAvail?.status === 'unavailable';
 
           return (
             <View style={styles.detailCard}>
@@ -582,15 +664,17 @@ export default function CalendarScreen() {
                 <Text style={styles.detailDate}>
                   {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                 </Text>
-                <Pressable
-                  style={{ padding: 6 }}
-                  onPress={() => {
-                    const dayData = calendarDays.find(d => d && `${d.year}-${String(d.month + 1).padStart(2, '0')}-${String(d.date).padStart(2, '0')}` === selectedDate);
-                    if (dayData) openModal(dayData);
-                  }}
-                >
-                  <Ionicons name="create-outline" size={20} color={Colors.primary} />
-                </Pressable>
+                {currentDayAvail && currentDayAvail.status !== 'committed' && (
+                  <View style={[styles.detailBadge, {
+                    backgroundColor: isCurrentlyAvailable ? Colors.successBg : Colors.destructiveBg
+                  }]}>
+                    <Text style={[styles.detailBadgeText, {
+                      color: isCurrentlyAvailable ? Colors.success : Colors.destructive
+                    }]}>
+                      {currentDayAvail.status?.toUpperCase()}
+                    </Text>
+                  </View>
+                )}
               </View>
 
               {assignedJobs.length > 0 && (
@@ -712,32 +796,91 @@ export default function CalendarScreen() {
                 </View>
               )}
 
-              {selectedAvail && (
-                <View style={[styles.detailRow, { marginTop: assignedJobs.length > 0 ? 8 : 0 }]}>
-                  <View style={[styles.detailBadge, {
-                    backgroundColor: selectedAvail.status === 'committed' ? Colors.infoBg :
-                      selectedAvail.status === 'available' ? Colors.successBg : Colors.destructiveBg
-                  }]}>
-                    <Text style={[styles.detailBadgeText, {
-                      color: selectedAvail.status === 'committed' ? Colors.info :
-                        selectedAvail.status === 'available' ? Colors.success : Colors.destructive
-                    }]}>
-                      {selectedAvail.status?.toUpperCase()}
-                    </Text>
-                  </View>
-                  {selectedAvail.shift && (
-                    <Text style={styles.detailShift}>
-                      {SHIFTS.find(s => s.key === selectedAvail.shift)?.label || selectedAvail.shift}
-                    </Text>
-                  )}
-                </View>
-              )}
-
-              {assignedJobs.length === 0 && !selectedAvail && (
-                <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+              {assignedJobs.length === 0 && !currentDayAvail && (
+                <View style={{ paddingVertical: 4, alignItems: 'center' }}>
                   <Text style={{ color: Colors.textMuted, fontSize: 13, fontFamily: 'Inter_400Regular' }}>No jobs or availability set</Text>
                 </View>
               )}
+
+              <View style={styles.quickAvailRow}>
+                <Pressable
+                  style={[
+                    styles.quickAvailBtn,
+                    { borderColor: Colors.success },
+                    isCurrentlyAvailable && styles.quickAvailBtnActiveGreen,
+                  ]}
+                  onPress={() => quickSetAvailability(selectedDate, true)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'available' ? (
+                    <ActivityIndicator size="small" color={Colors.success} />
+                  ) : (
+                    <>
+                      <Ionicons name={isCurrentlyAvailable ? "checkmark-circle" : "checkmark-circle-outline"} size={18} color={isCurrentlyAvailable ? '#fff' : Colors.success} />
+                      <Text style={[styles.quickAvailBtnText, { color: isCurrentlyAvailable ? '#fff' : Colors.success }]}>
+                        {isCurrentlyAvailable ? 'Available' : 'Mark Available'}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.quickAvailBtn,
+                    { borderColor: Colors.destructive },
+                    isCurrentlyUnavailable && styles.quickAvailBtnActiveRed,
+                  ]}
+                  onPress={() => quickSetAvailability(selectedDate, false)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'unavailable' ? (
+                    <ActivityIndicator size="small" color={Colors.destructive} />
+                  ) : (
+                    <>
+                      <Ionicons name={isCurrentlyUnavailable ? "close-circle" : "close-circle-outline"} size={18} color={isCurrentlyUnavailable ? '#fff' : Colors.destructive} />
+                      <Text style={[styles.quickAvailBtnText, { color: isCurrentlyUnavailable ? '#fff' : Colors.destructive }]}>
+                        {isCurrentlyUnavailable ? 'Unavailable' : 'Mark Unavailable'}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+
+              <View style={styles.bulkDivider}>
+                <View style={styles.bulkDividerLine} />
+                <Text style={styles.bulkDividerText}>BULK ACTIONS</Text>
+                <View style={styles.bulkDividerLine} />
+              </View>
+
+              <View style={styles.bulkRow}>
+                <Pressable
+                  style={[styles.bulkBtn, savingQuick === 'weekdays' && { opacity: 0.6 }]}
+                  onPress={() => bulkSetAvailability('weekdays', true)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'weekdays' ? (
+                    <ActivityIndicator size="small" color={Colors.success} />
+                  ) : (
+                    <>
+                      <Ionicons name="briefcase-outline" size={16} color={Colors.success} />
+                      <Text style={styles.bulkBtnText}>All Weekdays Available</Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={[styles.bulkBtn, savingQuick === 'weekends' && { opacity: 0.6 }]}
+                  onPress={() => bulkSetAvailability('weekends', true)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'weekends' ? (
+                    <ActivityIndicator size="small" color={Colors.success} />
+                  ) : (
+                    <>
+                      <Ionicons name="sunny-outline" size={16} color={Colors.success} />
+                      <Text style={styles.bulkBtnText}>All Weekends Available</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
 
               <Pressable
                 style={styles.detailJobsBtn}
@@ -761,7 +904,7 @@ export default function CalendarScreen() {
         <Text style={styles.helpText}>
           {isContractor
             ? 'Tap a date to see your scheduled jobs and truck applications.'
-            : 'Tap a date to see your booked trucks. Long press to set availability.'}
+            : 'Tap a date to set availability. Use bulk actions for weekdays or weekends.'}
         </Text>
       </ScrollView>
 
@@ -1096,6 +1239,73 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     color: Colors.primary,
+  },
+  quickAvailRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  quickAvailBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    minHeight: 44,
+  },
+  quickAvailBtnActiveGreen: {
+    backgroundColor: Colors.success,
+    borderColor: Colors.success,
+  },
+  quickAvailBtnActiveRed: {
+    backgroundColor: Colors.destructive,
+    borderColor: Colors.destructive,
+  },
+  quickAvailBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+  },
+  bulkDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 8,
+  },
+  bulkDividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.border,
+  },
+  bulkDividerText: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 10,
+    color: Colors.textMuted,
+    letterSpacing: 1,
+  },
+  bulkRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  bulkBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(34, 197, 94, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.2)',
+    minHeight: 44,
+  },
+  bulkBtnText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    color: Colors.success,
   },
   helpText: {
     fontFamily: 'Inter_400Regular',

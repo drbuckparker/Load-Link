@@ -161,3 +161,6 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Fixed react-native-maps web compatibility: split into platform-specific files (RouteMapView.native.tsx / RouteMapView.web.tsx)
 - Web map view uses Google Maps JavaScript API via /api/map-embed iframe with dark theme, route directions, and markers
 - Native map view uses react-native-maps with MapView, Marker, and Polyline components
+- Calendar day popup: direct "Mark Available" / "Mark Unavailable" toggle buttons (no more long-press-only modal)
+- Bulk availability actions: "All Weekdays Available" and "All Weekends Available" buttons in day popup
+- Individual day overrides: tap any day after bulk action to toggle that specific day's availability
