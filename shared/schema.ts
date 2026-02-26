@@ -341,8 +341,6 @@ export const jobAssignments = pgTable("job_assignments", {
   approved_at: timestamp("approved_at"),
   created_at: timestamp("created_at").defaultNow(),
   fleet_truck_id: varchar("fleet_truck_id"),
-  counter_bid_rate: numeric("counter_bid_rate", { precision: 10, scale: 2 }),
-  counter_bid_note: text("counter_bid_note"),
 });
 
 export const contractorProjects = pgTable("contractor_projects", {

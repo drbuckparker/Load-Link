@@ -788,8 +788,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await db
           .update(jobAssignments)
           .set({
-            counter_bid_rate: String(rate),
-            counter_bid_note: note || null,
             status: "counter_bid",
           })
           .where(eq(jobAssignments.id, existing[0].id));
@@ -798,8 +796,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           job_id: id,
           driver_id: userId,
           status: "counter_bid",
-          counter_bid_rate: String(rate),
-          counter_bid_note: note || null,
         });
       }
 
