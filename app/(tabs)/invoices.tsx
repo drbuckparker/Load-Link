@@ -20,12 +20,19 @@ interface Invoice {
 }
 
 function mapInvoice(inv: any): Invoice {
+  let month = inv.periodMonth ?? 1;
+  let year = inv.periodYear ?? 2026;
+  if (inv.period_month && typeof inv.period_month === 'string') {
+    const d = new Date(inv.period_month);
+    month = d.getUTCMonth() + 1;
+    year = d.getUTCFullYear();
+  }
   return {
     id: inv.id,
     contractorId: inv.contractor_id ?? inv.contractorId ?? '',
     driverId: inv.driver_id ?? inv.driverId ?? '',
-    periodMonth: inv.period_month ?? inv.periodMonth ?? 1,
-    periodYear: inv.period_year ?? inv.periodYear ?? 2026,
+    periodMonth: month,
+    periodYear: year,
     totalAmount: Number(inv.total_amount ?? inv.totalAmount) || 0,
     status: inv.status ?? 'draft',
     contractorName: inv.contractor_name ?? inv.contractorName ?? '',
@@ -135,7 +142,7 @@ export default function InvoicesScreen() {
     return (
       <Pressable
         style={({ pressed }) => [styles.invoiceCard, pressed && styles.invoiceCardPressed]}
-        onPress={() => router.push({ pathname: '/job/[id]', params: { id: item.id } })}
+        onPress={() => router.push({ pathname: '/invoice/[id]', params: { id: item.id } })}
       >
         <View style={styles.invoiceLeft}>
           <View style={styles.invoiceIcon}>

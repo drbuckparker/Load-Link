@@ -105,6 +105,7 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - **notifications**: Notification center
 - **create-job**: Contractor job creation form
 - **vehicles**: Vehicle management (add/edit/delete)
+- **invoice/[id]**: Invoice detail with amount, contractor/driver info, and linked jobs
 - **review**: Review submission screen (star rating + comment)
 
 ## Key Files
