@@ -2,9 +2,13 @@ import { Pool, PoolConfig } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 
+const connectionString = process.env.EXTERNAL_DATABASE_URL || process.env.DATABASE_URL;
+
+const isNeonOrExternal = connectionString?.includes('neon.tech') || connectionString?.includes('amazonaws.com');
+
 const poolConfig: PoolConfig = {
-  connectionString: process.env.EXTERNAL_DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+  connectionString,
+  ...(isNeonOrExternal ? { ssl: { rejectUnauthorized: false } } : {}),
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
