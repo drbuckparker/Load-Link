@@ -63,12 +63,13 @@ export default function CalendarScreen() {
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const [saving, setSaving] = useState(false);
   const [trucksExpanded, setTrucksExpanded] = useState(true);
+  const [savingQuick, setSavingQuick] = useState<string | null>(null);
 
   const isContractor = user?.role ? isContractorRole(user.role) : false;
 
   const availQuery = useQuery<any[]>({
     queryKey: ['/api/availability', `?month=${currentMonth + 1}&year=${currentYear}`],
-    enabled: !!user && !isContractor,
+    enabled: !!user,
   });
 
   const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, any[]> }>({
@@ -316,6 +317,84 @@ export default function CalendarScreen() {
     setModalVisible(false);
   }
 
+  async function quickSetAvailability(dateKey: string, isAvailable: boolean) {
+    setSavingQuick(isAvailable ? 'available' : 'unavailable');
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await apiRequest('POST', '/api/availability', {
+        date: dateKey,
+        isAvailable,
+        startTime: '06:00',
+        endTime: '18:00',
+        shift: 'day',
+        recurrence: 'none',
+      });
+      setAvailability(prev => ({
+        ...prev,
+        [dateKey]: {
+          status: isAvailable ? 'available' : 'unavailable',
+          shift: 'day',
+          startTime: '06:00',
+          endTime: '18:00',
+        },
+      }));
+      queryClient.invalidateQueries({ queryKey: ['/api/availability'] });
+    } catch (e) {
+      console.log('Failed to set availability:', e);
+    } finally {
+      setSavingQuick(null);
+    }
+  }
+
+  async function bulkSetAvailability(type: 'weekdays' | 'weekends', isAvailable: boolean) {
+    setSavingQuick(type);
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const dates: string[] = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateObj = new Date(currentYear, currentMonth, d);
+      const dayOfWeek = dateObj.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      if ((type === 'weekdays' && !isWeekend) || (type === 'weekends' && isWeekend)) {
+        const key = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const existing = availability[key];
+        if (!existing || existing.status !== 'committed') {
+          dates.push(key);
+        }
+      }
+    }
+    try {
+      const promises = dates.map(date =>
+        apiRequest('POST', '/api/availability', {
+          date,
+          isAvailable,
+          startTime: '06:00',
+          endTime: '18:00',
+          shift: 'day',
+          recurrence: 'none',
+        })
+      );
+      await Promise.all(promises);
+      setAvailability(prev => {
+        const updated = { ...prev };
+        for (const date of dates) {
+          updated[date] = {
+            status: isAvailable ? 'available' : 'unavailable',
+            shift: 'day',
+            startTime: '06:00',
+            endTime: '18:00',
+          };
+        }
+        return updated;
+      });
+      queryClient.invalidateQueries({ queryKey: ['/api/availability'] });
+    } catch (e) {
+      console.log('Failed to bulk set availability:', e);
+    } finally {
+      setSavingQuick(null);
+    }
+  }
+
   function navigateMonth(dir: number) {
     let m = currentMonth + dir;
     let y = currentYear;
@@ -371,6 +450,8 @@ export default function CalendarScreen() {
                 const booked = cap?.booked || 0;
                 const needed = cap?.needed || 0;
                 const jobCount = cap?.jobCount || 0;
+                const dayAvail = availability[key];
+                const isUnavailable = dayAvail?.status === 'unavailable';
                 let capacityStatus: 'full' | 'partial' | 'open' | null = null;
                 if (jobCount > 0) {
                   if (fleetSize > 0 && booked >= fleetSize) capacityStatus = 'full';
@@ -381,15 +462,21 @@ export default function CalendarScreen() {
                 return (
                   <Pressable
                     key={key}
-                    style={[styles.dayCell, isSelected && styles.dayCellSelected]}
+                    style={[styles.dayCell, isSelected && styles.dayCellSelected, isUnavailable && !isSelected && { opacity: 0.5 }]}
                     onPress={() => { setSelectedDate(key); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
                   >
                     <Text style={[
                       styles.dayNumber,
                       isToday && styles.dayNumberToday,
+                      isUnavailable && { color: Colors.destructive },
                     ]}>
                       {day.date}
                     </Text>
+                    {isUnavailable && !capacityStatus && (
+                      <View style={styles.capacityDotsRow}>
+                        <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />
+                      </View>
+                    )}
                     {capacityStatus === 'full' && (
                       <View style={styles.capacityDotsRow}>
                         <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />
@@ -477,7 +564,7 @@ export default function CalendarScreen() {
             </View>
             <View style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
-              <Text style={styles.legendText}>Full</Text>
+              <Text style={styles.legendText}>Unavail</Text>
             </View>
           </View>
         ) : (
@@ -503,19 +590,36 @@ export default function CalendarScreen() {
 
         {isContractor && selectedDate && (() => {
           const dateJobs = capacityQuery.data?.dailyJobs?.[selectedDate] || [];
+          const currentDayAvail = availability[selectedDate];
+          const isCurrentlyAvailable = currentDayAvail?.status === 'available';
+          const isCurrentlyUnavailable = currentDayAvail?.status === 'unavailable';
 
           return (
             <View style={styles.capacityCard}>
-              <Text style={styles.detailDate}>
-                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={styles.detailDate}>
+                  {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                </Text>
+                {currentDayAvail && currentDayAvail.status !== 'committed' && (
+                  <View style={[{
+                    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+                    backgroundColor: isCurrentlyAvailable ? Colors.successBg : Colors.destructiveBg
+                  }]}>
+                    <Text style={{
+                      fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.5,
+                      color: isCurrentlyAvailable ? Colors.success : Colors.destructive
+                    }}>
+                      {currentDayAvail.status?.toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+              </View>
 
-              {dateJobs.length === 0 ? (
-                <View style={{ paddingVertical: 20, alignItems: 'center' }}>
-                  <Ionicons name="calendar-outline" size={32} color={Colors.textMuted} />
-                  <Text style={{ color: Colors.textMuted, fontSize: 14, marginTop: 8 }}>No jobs scheduled for this date</Text>
+              {dateJobs.length === 0 && !currentDayAvail ? (
+                <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+                  <Text style={{ color: Colors.textMuted, fontSize: 13, fontFamily: 'Inter_400Regular' }}>No jobs scheduled for this date</Text>
                 </View>
-              ) : (
+              ) : dateJobs.length === 0 ? null : (
                 <View style={{ gap: 10, marginTop: 4 }}>
                   {dateJobs.map((job) => (
                     <Pressable
@@ -566,6 +670,94 @@ export default function CalendarScreen() {
                   ))}
                 </View>
               )}
+
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                <Pressable
+                  style={[{
+                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                    gap: 6, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, minHeight: 44,
+                    borderColor: Colors.success,
+                  }, isCurrentlyAvailable && { backgroundColor: Colors.success, borderColor: Colors.success }]}
+                  onPress={() => quickSetAvailability(selectedDate, true)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'available' ? (
+                    <ActivityIndicator size="small" color={Colors.success} />
+                  ) : (
+                    <>
+                      <Ionicons name={isCurrentlyAvailable ? "checkmark-circle" : "checkmark-circle-outline"} size={18} color={isCurrentlyAvailable ? '#fff' : Colors.success} />
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: isCurrentlyAvailable ? '#fff' : Colors.success }}>
+                        {isCurrentlyAvailable ? 'Available' : 'Mark Available'}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={[{
+                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                    gap: 6, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, minHeight: 44,
+                    borderColor: Colors.destructive,
+                  }, isCurrentlyUnavailable && { backgroundColor: Colors.destructive, borderColor: Colors.destructive }]}
+                  onPress={() => quickSetAvailability(selectedDate, false)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'unavailable' ? (
+                    <ActivityIndicator size="small" color={Colors.destructive} />
+                  ) : (
+                    <>
+                      <Ionicons name={isCurrentlyUnavailable ? "close-circle" : "close-circle-outline"} size={18} color={isCurrentlyUnavailable ? '#fff' : Colors.destructive} />
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: isCurrentlyUnavailable ? '#fff' : Colors.destructive }}>
+                        {isCurrentlyUnavailable ? 'Unavailable' : 'Mark Unavailable'}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
+                <Text style={{ fontFamily: 'ChakraPetch_600SemiBold', fontSize: 10, color: Colors.textMuted, letterSpacing: 1 }}>BULK ACTIONS</Text>
+                <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Pressable
+                  style={[{
+                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                    gap: 6, paddingVertical: 10, borderRadius: 8, minHeight: 44,
+                    backgroundColor: 'rgba(34, 197, 94, 0.08)', borderWidth: 1, borderColor: 'rgba(34, 197, 94, 0.2)',
+                  }, savingQuick === 'weekdays' && { opacity: 0.6 }]}
+                  onPress={() => bulkSetAvailability('weekdays', true)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'weekdays' ? (
+                    <ActivityIndicator size="small" color={Colors.success} />
+                  ) : (
+                    <>
+                      <Ionicons name="briefcase-outline" size={16} color={Colors.success} />
+                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.success }}>All Weekdays Available</Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={[{
+                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                    gap: 6, paddingVertical: 10, borderRadius: 8, minHeight: 44,
+                    backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.2)',
+                  }, savingQuick === 'weekends' && { opacity: 0.6 }]}
+                  onPress={() => bulkSetAvailability('weekends', false)}
+                  disabled={!!savingQuick}
+                >
+                  {savingQuick === 'weekends' ? (
+                    <ActivityIndicator size="small" color={Colors.destructive} />
+                  ) : (
+                    <>
+                      <Ionicons name="sunny-outline" size={16} color={Colors.destructive} />
+                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.destructive }}>All Weekends Unavailable</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
             </View>
           );
         })()}
@@ -760,7 +952,7 @@ export default function CalendarScreen() {
 
         <Text style={styles.helpText}>
           {isContractor
-            ? 'Tap a date to see your scheduled jobs and truck applications.'
+            ? 'Tap a date to manage availability and view scheduled jobs.'
             : 'Tap a date to see your booked trucks. Long press to set availability.'}
         </Text>
       </ScrollView>
