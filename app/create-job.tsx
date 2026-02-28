@@ -136,7 +136,9 @@ export default function CreateJobScreen() {
   const [trucksNeeded, setTrucksNeeded] = useState(1);
   const [estimatedTrips, setEstimatedTrips] = useState('');
   const [totalTonsNeeded, setTotalTonsNeeded] = useState('');
-  const [totalUnit, setTotalUnit] = useState<'tons' | 'yards'>('tons');
+  const [totalUnit, setTotalUnit] = useState<'tons' | 'yards' | 'hours'>('tons');
+  const [showTotalUnitDropdown, setShowTotalUnitDropdown] = useState(false);
+  const [showCapacityUnitDropdown, setShowCapacityUnitDropdown] = useState(false);
   const [estimatedCost, setEstimatedCost] = useState('');
   const [loadTime, setLoadTime] = useState(10);
   const [unloadTime, setUnloadTime] = useState(10);
@@ -500,6 +502,7 @@ export default function CreateJobScreen() {
   const totalInTons = (() => {
     const val = parseFloat(totalTonsNeeded) || 0;
     if (val <= 0) return 0;
+    if (totalUnit === 'hours') return 0;
     if (totalUnit === 'yards') return val * getMaterialWeightPerYard(material);
     return val;
   })();
@@ -611,7 +614,11 @@ export default function CreateJobScreen() {
       }
       if (calculatedTrips > 0) body.estimated_trips = calculatedTrips;
       else if (estimatedTrips) body.estimated_trips = parseInt(estimatedTrips, 10);
-      if (totalInTons > 0) body.total_tons_needed = totalInTons;
+      if (totalUnit === 'hours' && parseFloat(totalTonsNeeded) > 0) {
+        body.total_hours = parseFloat(totalTonsNeeded);
+      } else if (totalInTons > 0) {
+        body.total_tons_needed = totalInTons;
+      }
       if (calculatedCost > 0) body.estimated_cost = calculatedCost;
       else if (estimatedCost) body.estimated_cost = parseFloat(estimatedCost);
       if (truckCapacity) {
@@ -1167,19 +1174,31 @@ export default function CreateJobScreen() {
                 onChangeText={setTotalTonsNeeded}
                 keyboardType="numeric"
               />
-              <View style={styles.unitToggle}>
+              <View style={{ position: 'relative' }}>
                 <Pressable
-                  style={[styles.unitBtn, totalUnit === 'tons' && styles.unitBtnActive]}
-                  onPress={() => setTotalUnit('tons')}
+                  style={styles.unitDropdownBtn}
+                  onPress={() => { setShowTotalUnitDropdown(!showTotalUnitDropdown); setShowCapacityUnitDropdown(false); }}
                 >
-                  <Text style={[styles.unitBtnText, totalUnit === 'tons' && styles.unitBtnTextActive]}>Tons</Text>
+                  <Text style={styles.unitDropdownBtnText}>
+                    {totalUnit === 'tons' ? 'Tons' : totalUnit === 'yards' ? 'Yards' : 'Hours'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={14} color={Colors.primary} />
                 </Pressable>
-                <Pressable
-                  style={[styles.unitBtn, totalUnit === 'yards' && styles.unitBtnActive]}
-                  onPress={() => setTotalUnit('yards')}
-                >
-                  <Text style={[styles.unitBtnText, totalUnit === 'yards' && styles.unitBtnTextActive]}>Yards</Text>
-                </Pressable>
+                {showTotalUnitDropdown && (
+                  <View style={styles.unitDropdownMenu}>
+                    {(['tons', 'yards', 'hours'] as const).map((u) => (
+                      <Pressable
+                        key={u}
+                        style={[styles.unitDropdownItem, totalUnit === u && styles.unitDropdownItemActive]}
+                        onPress={() => { setTotalUnit(u); setShowTotalUnitDropdown(false); }}
+                      >
+                        <Text style={[styles.unitDropdownItemText, totalUnit === u && styles.unitDropdownItemTextActive]}>
+                          {u === 'tons' ? 'Tons' : u === 'yards' ? 'Yards' : 'Hours'}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
               </View>
             </View>
             {totalUnit === 'yards' && parseFloat(totalTonsNeeded) > 0 && (
@@ -1188,35 +1207,51 @@ export default function CreateJobScreen() {
               </Text>
             )}
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity</Text>
-            <View style={styles.capacityRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="e.g. 20"
-                placeholderTextColor={Colors.textMuted}
-                value={truckCapacity}
-                onChangeText={setTruckCapacity}
-                keyboardType="numeric"
-              />
-              <View style={styles.unitToggle}>
-                <Pressable
-                  style={[styles.unitBtn, capacityUnit === 'tons' && styles.unitBtnActive]}
-                  onPress={() => setCapacityUnit('tons')}
-                >
-                  <Text style={[styles.unitBtnText, capacityUnit === 'tons' && styles.unitBtnTextActive]}>Tons</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.unitBtn, capacityUnit === 'yards' && styles.unitBtnActive]}
-                  onPress={() => setCapacityUnit('yards')}
-                >
-                  <Text style={[styles.unitBtnText, capacityUnit === 'yards' && styles.unitBtnTextActive]}>Yards</Text>
-                </Pressable>
-              </View>
-            </View>
-            {capacityUnit === 'yards' && parseFloat(truckCapacity) > 0 && (
-              <Text style={styles.yardConversionNote}>
-                ≈ {capacityInTons.toFixed(1)} tons per load ({getMaterialWeightPerYard(material)} t/yd³ for {material || 'default'})
-              </Text>
+            {totalUnit !== 'hours' && (
+              <>
+                <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity</Text>
+                <View style={styles.capacityRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    placeholder="e.g. 20"
+                    placeholderTextColor={Colors.textMuted}
+                    value={truckCapacity}
+                    onChangeText={setTruckCapacity}
+                    keyboardType="numeric"
+                  />
+                  <View style={{ position: 'relative' }}>
+                    <Pressable
+                      style={styles.unitDropdownBtn}
+                      onPress={() => { setShowCapacityUnitDropdown(!showCapacityUnitDropdown); setShowTotalUnitDropdown(false); }}
+                    >
+                      <Text style={styles.unitDropdownBtnText}>
+                        {capacityUnit === 'tons' ? 'Tons' : 'Yards'}
+                      </Text>
+                      <Ionicons name="chevron-down" size={14} color={Colors.primary} />
+                    </Pressable>
+                    {showCapacityUnitDropdown && (
+                      <View style={styles.unitDropdownMenu}>
+                        {(['tons', 'yards'] as const).map((u) => (
+                          <Pressable
+                            key={u}
+                            style={[styles.unitDropdownItem, capacityUnit === u && styles.unitDropdownItemActive]}
+                            onPress={() => { setCapacityUnit(u); setShowCapacityUnitDropdown(false); }}
+                          >
+                            <Text style={[styles.unitDropdownItemText, capacityUnit === u && styles.unitDropdownItemTextActive]}>
+                              {u === 'tons' ? 'Tons' : 'Yards'}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                </View>
+                {capacityUnit === 'yards' && parseFloat(truckCapacity) > 0 && (
+                  <Text style={styles.yardConversionNote}>
+                    ≈ {capacityInTons.toFixed(1)} tons per load ({getMaterialWeightPerYard(material)} t/yd³ for {material || 'default'})
+                  </Text>
+                )}
+              </>
             )}
 
             {(parseFloat(totalTonsNeeded) > 0 && parseFloat(truckCapacity) > 0) ? (
@@ -2088,6 +2123,59 @@ const styles = StyleSheet.create({
   },
   unitBtnTextActive: {
     color: Colors.primary,
+  },
+  unitDropdownBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(255,153,0,0.1)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    minWidth: 90,
+    justifyContent: 'center' as const,
+  },
+  unitDropdownBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.primary,
+  },
+  unitDropdownMenu: {
+    position: 'absolute' as const,
+    top: 50,
+    right: 0,
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: 'hidden' as const,
+    zIndex: 100,
+    minWidth: 110,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  unitDropdownItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  unitDropdownItemActive: {
+    backgroundColor: 'rgba(255,153,0,0.12)',
+  },
+  unitDropdownItemText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  unitDropdownItemTextActive: {
+    color: Colors.primary,
+    fontFamily: 'Inter_600SemiBold',
   },
   yardConversionNote: {
     fontFamily: 'Inter_400Regular',
