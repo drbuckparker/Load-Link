@@ -89,6 +89,9 @@ export default function CreateJobScreen() {
   const [estimatedTrips, setEstimatedTrips] = useState('');
   const [totalTonsNeeded, setTotalTonsNeeded] = useState('');
   const [estimatedCost, setEstimatedCost] = useState('');
+  const [loadTime, setLoadTime] = useState(10);
+  const [unloadTime, setUnloadTime] = useState(10);
+  const [truckCapacity, setTruckCapacity] = useState('');
   const [requiresTarp, setRequiresTarp] = useState(false);
   const [requiresWeightTickets, setRequiresWeightTickets] = useState(false);
   const [urgent, setUrgent] = useState(false);
@@ -384,15 +387,34 @@ export default function CreateJobScreen() {
     }
   }, [originLat, originLng, destLat, destLng]);
 
+  const oneWayMinutes = routeInfo ? routeInfo.truck_duration_seconds / 60 : 0;
+  const roundTripMinutes = routeInfo ? (oneWayMinutes * 2) + loadTime + unloadTime : 0;
+
+  const calculatedTrips = (() => {
+    const tons = parseFloat(totalTonsNeeded) || 0;
+    const cap = parseFloat(truckCapacity) || 0;
+    if (tons > 0 && cap > 0) return Math.ceil(tons / cap);
+    return parseInt(estimatedTrips, 10) || 0;
+  })();
+
+  const calculatedCost = (() => {
+    const r = parseFloat(rate) || 0;
+    if (r <= 0) return 0;
+    if (rateType === 'per_load') return r * (calculatedTrips || 1);
+    if (rateType === 'per_ton') return r * (parseFloat(totalTonsNeeded) || 0);
+    if (rateType === 'per_hour' && roundTripMinutes > 0 && calculatedTrips > 0) {
+      const totalHours = (roundTripMinutes * calculatedTrips) / 60;
+      return r * totalHours * trucksNeeded;
+    }
+    if (rateType === 'flat_rate') return r;
+    return 0;
+  })();
+
   function getEstimatedDaysText() {
     if (!routeInfo) return null;
     if (jobType === 'single_load') return 'Less than 1 day';
-    const roundTripMinutes = (routeInfo.truck_duration_seconds * 2) / 60;
-    const tons = parseFloat(totalTonsNeeded) || 0;
-    const truckCap = 20;
-    if (tons <= 0) return 'Enter total tons for estimate';
-    const loads = Math.ceil(tons / truckCap);
-    const totalMinutes = loads * roundTripMinutes;
+    if (calculatedTrips <= 0) return 'Enter tons & capacity';
+    const totalMinutes = calculatedTrips * roundTripMinutes;
     const workDayMinutes = 10 * 60;
     const days = totalMinutes / workDayMinutes;
     if (days < 1) return 'Less than 1 day';
@@ -456,10 +478,13 @@ export default function CreateJobScreen() {
         if (estimatedDays) body.estimated_days = parseInt(estimatedDays, 10);
         body.includes_weekends = includesWeekends;
       }
-      if (estimatedTrips) body.estimated_trips = parseInt(estimatedTrips, 10);
+      if (calculatedTrips > 0) body.estimated_trips = calculatedTrips;
+      else if (estimatedTrips) body.estimated_trips = parseInt(estimatedTrips, 10);
       if (totalTonsNeeded) body.total_tons_needed = parseFloat(totalTonsNeeded);
-      if (estimatedCost) body.estimated_cost = parseFloat(estimatedCost);
-      if (capacityNeeded) body.capacity_needed = capacityNeeded.trim();
+      if (calculatedCost > 0) body.estimated_cost = calculatedCost;
+      else if (estimatedCost) body.estimated_cost = parseFloat(estimatedCost);
+      if (truckCapacity) body.capacity_needed = truckCapacity.trim();
+      else if (capacityNeeded) body.capacity_needed = capacityNeeded.trim();
 
       await apiRequest('POST', '/api/jobs', body);
 
@@ -760,7 +785,7 @@ export default function CreateJobScreen() {
             <View style={styles.routeCard}>
               <View style={styles.routeCardHeader}>
                 <Ionicons name="speedometer-outline" size={18} color={Colors.primary} />
-                <Text style={styles.routeCardTitle}>ESTIMATED DURATION</Text>
+                <Text style={styles.routeCardTitle}>TRIP ESTIMATOR</Text>
               </View>
               {fetchingRoute ? (
                 <ActivityIndicator color={Colors.primary} style={{ paddingVertical: 12 }} />
@@ -769,23 +794,80 @@ export default function CreateJobScreen() {
                   <View style={styles.routeStatsRow}>
                     <View style={styles.routeStat}>
                       <Text style={styles.routeStatValue}>{routeInfo.truck_duration_text}</Text>
-                      <Text style={styles.routeStatLabel}>Per trip</Text>
+                      <Text style={styles.routeStatLabel}>One-way</Text>
                     </View>
                     <View style={[styles.routeDivider]} />
                     <View style={styles.routeStat}>
                       <Text style={styles.routeStatValue}>{routeInfo.distance_miles} mi</Text>
                       <Text style={styles.routeStatLabel}>Distance</Text>
                     </View>
-                    <View style={[styles.routeDivider]} />
-                    <View style={styles.routeStat}>
-                      <Text style={styles.routeStatValue}>{getEstimatedDaysText()}</Text>
-                      <Text style={styles.routeStatLabel}>Est. Days</Text>
+                  </View>
+
+                  <View style={styles.timeAdjustRow}>
+                    <View style={styles.timeAdjustItem}>
+                      <Text style={styles.timeAdjustLabel}>Load Time</Text>
+                      <View style={styles.timeAdjustControls}>
+                        <Pressable style={styles.timeAdjustBtn} onPress={() => setLoadTime(Math.max(0, loadTime - 5))} hitSlop={8}>
+                          <Ionicons name="remove" size={16} color={Colors.text} />
+                        </Pressable>
+                        <Text style={styles.timeAdjustValue}>{loadTime} min</Text>
+                        <Pressable style={styles.timeAdjustBtn} onPress={() => setLoadTime(loadTime + 5)} hitSlop={8}>
+                          <Ionicons name="add" size={16} color={Colors.text} />
+                        </Pressable>
+                      </View>
+                    </View>
+                    <View style={styles.timeAdjustItem}>
+                      <Text style={styles.timeAdjustLabel}>Unload Time</Text>
+                      <View style={styles.timeAdjustControls}>
+                        <Pressable style={styles.timeAdjustBtn} onPress={() => setUnloadTime(Math.max(0, unloadTime - 5))} hitSlop={8}>
+                          <Ionicons name="remove" size={16} color={Colors.text} />
+                        </Pressable>
+                        <Text style={styles.timeAdjustValue}>{unloadTime} min</Text>
+                        <Pressable style={styles.timeAdjustBtn} onPress={() => setUnloadTime(unloadTime + 5)} hitSlop={8}>
+                          <Ionicons name="add" size={16} color={Colors.text} />
+                        </Pressable>
+                      </View>
                     </View>
                   </View>
-                  <Text style={styles.routeNote}>Based on 10-hour workdays. Travel time adjusted for dump truck speeds (1.4x).</Text>
-                  {jobType === 'single_load' && (
-                    <Text style={styles.routeHint}>Need to haul multiple loads? Switch to "Full Day" or "Multi-Day" above for full duration estimates.</Text>
+
+                  <View style={styles.roundTripSummary}>
+                    <Ionicons name="repeat" size={16} color={Colors.primary} />
+                    <Text style={styles.roundTripText}>
+                      Round Trip: <Text style={{ color: Colors.primary, fontFamily: 'Inter_700Bold' }}>
+                        {roundTripMinutes < 60 
+                          ? `${Math.round(roundTripMinutes)} min`
+                          : `${Math.floor(roundTripMinutes / 60)}h ${Math.round(roundTripMinutes % 60)}m`
+                        }
+                      </Text>
+                    </Text>
+                  </View>
+
+                  {calculatedTrips > 0 && (
+                    <View style={styles.tripCalcRow}>
+                      <View style={styles.tripCalcItem}>
+                        <Text style={styles.tripCalcValue}>{calculatedTrips}</Text>
+                        <Text style={styles.tripCalcLabel}>Trips</Text>
+                      </View>
+                      <View style={styles.routeDivider} />
+                      <View style={styles.tripCalcItem}>
+                        <Text style={styles.tripCalcValue}>{getEstimatedDaysText()}</Text>
+                        <Text style={styles.tripCalcLabel}>Duration</Text>
+                      </View>
+                      {calculatedCost > 0 && (
+                        <>
+                          <View style={styles.routeDivider} />
+                          <View style={styles.tripCalcItem}>
+                            <Text style={[styles.tripCalcValue, { color: Colors.success }]}>
+                              ${calculatedCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                            <Text style={styles.tripCalcLabel}>Est. Cost</Text>
+                          </View>
+                        </>
+                      )}
+                    </View>
                   )}
+
+                  <Text style={styles.routeNote}>Travel time adjusted for dump truck speeds (1.4x). 10-hour workdays.</Text>
                 </>
               ) : null}
             </View>
@@ -941,16 +1023,6 @@ export default function CreateJobScreen() {
               </Pressable>
             </View>
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Estimated Trips</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="0"
-              placeholderTextColor={Colors.textMuted}
-              value={estimatedTrips}
-              onChangeText={setEstimatedTrips}
-              keyboardType="numeric"
-            />
-
             <Text style={[styles.label, { marginTop: 14 }]}>Total Tons Needed</Text>
             <TextInput
               style={styles.input}
@@ -961,15 +1033,47 @@ export default function CreateJobScreen() {
               keyboardType="numeric"
             />
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Estimated Cost</Text>
+            <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity (tons)</Text>
             <TextInput
               style={styles.input}
-              placeholder="0.00"
+              placeholder="e.g. 20"
               placeholderTextColor={Colors.textMuted}
-              value={estimatedCost}
-              onChangeText={setEstimatedCost}
+              value={truckCapacity}
+              onChangeText={setTruckCapacity}
               keyboardType="numeric"
             />
+
+            {(parseFloat(totalTonsNeeded) > 0 && parseFloat(truckCapacity) > 0) ? (
+              <View style={styles.autoCalcRow}>
+                <Ionicons name="calculator-outline" size={16} color={Colors.primary} />
+                <Text style={styles.autoCalcText}>
+                  {calculatedTrips} trip{calculatedTrips !== 1 ? 's' : ''} needed
+                  {calculatedCost > 0 && ` · Est. $${calculatedCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                </Text>
+              </View>
+            ) : (
+              <>
+                <Text style={[styles.label, { marginTop: 14 }]}>Estimated Trips</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0"
+                  placeholderTextColor={Colors.textMuted}
+                  value={estimatedTrips}
+                  onChangeText={setEstimatedTrips}
+                  keyboardType="numeric"
+                />
+
+                <Text style={[styles.label, { marginTop: 14 }]}>Estimated Cost</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0.00"
+                  placeholderTextColor={Colors.textMuted}
+                  value={estimatedCost}
+                  onChangeText={setEstimatedCost}
+                  keyboardType="numeric"
+                />
+              </>
+            )}
           </View>
         </View>
 
@@ -1595,6 +1699,99 @@ const styles = StyleSheet.create({
     marginTop: 10,
     textAlign: 'center',
     lineHeight: 17,
+  },
+  timeAdjustRow: {
+    flexDirection: 'row' as const,
+    gap: 12,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+  },
+  timeAdjustItem: {
+    flex: 1,
+    alignItems: 'center' as const,
+    gap: 6,
+  },
+  timeAdjustLabel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  timeAdjustControls: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  timeAdjustBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  timeAdjustValue: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.text,
+    minWidth: 50,
+    textAlign: 'center' as const,
+  },
+  roundTripSummary: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+  },
+  roundTripText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  tripCalcRow: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-around' as const,
+    alignItems: 'center' as const,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+  },
+  tripCalcItem: {
+    alignItems: 'center' as const,
+    flex: 1,
+  },
+  tripCalcValue: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    color: Colors.primary,
+  },
+  tripCalcLabel: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  autoCalcRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,153,0,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,153,0,0.15)',
+  },
+  autoCalcText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: Colors.primary,
   },
   calendarContainer: {
     backgroundColor: Colors.card,
