@@ -1174,32 +1174,15 @@ export default function CreateJobScreen() {
                 onChangeText={setTotalTonsNeeded}
                 keyboardType="numeric"
               />
-              <View style={{ position: 'relative' }}>
-                <Pressable
-                  style={styles.unitDropdownBtn}
-                  onPress={() => { setShowTotalUnitDropdown(!showTotalUnitDropdown); setShowCapacityUnitDropdown(false); }}
-                >
-                  <Text style={styles.unitDropdownBtnText}>
-                    {totalUnit === 'tons' ? 'Tons' : totalUnit === 'yards' ? 'Yards' : 'Hours'}
-                  </Text>
-                  <Ionicons name="chevron-down" size={14} color={Colors.primary} />
-                </Pressable>
-                {showTotalUnitDropdown && (
-                  <View style={styles.unitDropdownMenu}>
-                    {(['tons', 'yards', 'hours'] as const).map((u) => (
-                      <Pressable
-                        key={u}
-                        style={[styles.unitDropdownItem, totalUnit === u && styles.unitDropdownItemActive]}
-                        onPress={() => { setTotalUnit(u); setShowTotalUnitDropdown(false); }}
-                      >
-                        <Text style={[styles.unitDropdownItemText, totalUnit === u && styles.unitDropdownItemTextActive]}>
-                          {u === 'tons' ? 'Tons' : u === 'yards' ? 'Yards' : 'Hours'}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                )}
-              </View>
+              <Pressable
+                style={styles.unitDropdownBtn}
+                onPress={() => { setShowTotalUnitDropdown(true); setShowCapacityUnitDropdown(false); }}
+              >
+                <Text style={styles.unitDropdownBtnText}>
+                  {totalUnit === 'tons' ? 'Tons' : totalUnit === 'yards' ? 'Yards' : 'Hours'}
+                </Text>
+                <Ionicons name="chevron-down" size={14} color={Colors.primary} />
+              </Pressable>
             </View>
             {totalUnit === 'yards' && parseFloat(totalTonsNeeded) > 0 && (
               <Text style={styles.yardConversionNote}>
@@ -1219,32 +1202,15 @@ export default function CreateJobScreen() {
                     onChangeText={setTruckCapacity}
                     keyboardType="numeric"
                   />
-                  <View style={{ position: 'relative' }}>
-                    <Pressable
-                      style={styles.unitDropdownBtn}
-                      onPress={() => { setShowCapacityUnitDropdown(!showCapacityUnitDropdown); setShowTotalUnitDropdown(false); }}
-                    >
-                      <Text style={styles.unitDropdownBtnText}>
-                        {capacityUnit === 'tons' ? 'Tons' : 'Yards'}
-                      </Text>
-                      <Ionicons name="chevron-down" size={14} color={Colors.primary} />
-                    </Pressable>
-                    {showCapacityUnitDropdown && (
-                      <View style={styles.unitDropdownMenu}>
-                        {(['tons', 'yards'] as const).map((u) => (
-                          <Pressable
-                            key={u}
-                            style={[styles.unitDropdownItem, capacityUnit === u && styles.unitDropdownItemActive]}
-                            onPress={() => { setCapacityUnit(u); setShowCapacityUnitDropdown(false); }}
-                          >
-                            <Text style={[styles.unitDropdownItemText, capacityUnit === u && styles.unitDropdownItemTextActive]}>
-                              {u === 'tons' ? 'Tons' : 'Yards'}
-                            </Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                    )}
-                  </View>
+                  <Pressable
+                    style={styles.unitDropdownBtn}
+                    onPress={() => { setShowCapacityUnitDropdown(true); setShowTotalUnitDropdown(false); }}
+                  >
+                    <Text style={styles.unitDropdownBtnText}>
+                      {capacityUnit === 'tons' ? 'Tons' : 'Yards'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={14} color={Colors.primary} />
+                  </Pressable>
                 </View>
                 {capacityUnit === 'yards' && parseFloat(truckCapacity) > 0 && (
                   <Text style={styles.yardConversionNote}>
@@ -1559,6 +1525,56 @@ export default function CreateJobScreen() {
             </View>
           )}
         </View>
+      </Modal>
+
+      <Modal
+        visible={showTotalUnitDropdown}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTotalUnitDropdown(false)}
+      >
+        <Pressable style={styles.dropdownOverlay} onPress={() => setShowTotalUnitDropdown(false)}>
+          <View style={styles.dropdownSheet}>
+            <Text style={styles.dropdownSheetTitle}>UNIT TYPE</Text>
+            {(['tons', 'yards', 'hours'] as const).map((u) => (
+              <Pressable
+                key={u}
+                style={[styles.dropdownSheetItem, totalUnit === u && styles.dropdownSheetItemActive]}
+                onPress={() => { setTotalUnit(u); setShowTotalUnitDropdown(false); }}
+              >
+                <Text style={[styles.dropdownSheetItemText, totalUnit === u && styles.dropdownSheetItemTextActive]}>
+                  {u === 'tons' ? 'Tons' : u === 'yards' ? 'Yards' : 'Hours'}
+                </Text>
+                {totalUnit === u && <Ionicons name="checkmark" size={20} color={Colors.primary} />}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showCapacityUnitDropdown}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCapacityUnitDropdown(false)}
+      >
+        <Pressable style={styles.dropdownOverlay} onPress={() => setShowCapacityUnitDropdown(false)}>
+          <View style={styles.dropdownSheet}>
+            <Text style={styles.dropdownSheetTitle}>CAPACITY UNIT</Text>
+            {(['tons', 'yards'] as const).map((u) => (
+              <Pressable
+                key={u}
+                style={[styles.dropdownSheetItem, capacityUnit === u && styles.dropdownSheetItemActive]}
+                onPress={() => { setCapacityUnit(u); setShowCapacityUnitDropdown(false); }}
+              >
+                <Text style={[styles.dropdownSheetItemText, capacityUnit === u && styles.dropdownSheetItemTextActive]}>
+                  {u === 'tons' ? 'Tons' : 'Yards'}
+                </Text>
+                {capacityUnit === u && <Ionicons name="checkmark" size={20} color={Colors.primary} />}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
       </Modal>
     </View>
   );
@@ -2142,38 +2158,47 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.primary,
   },
-  unitDropdownMenu: {
-    position: 'absolute' as const,
-    top: 50,
-    right: 0,
+  dropdownOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+  },
+  dropdownSheet: {
     backgroundColor: Colors.card,
-    borderRadius: 10,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: Colors.border,
+    width: 260,
     overflow: 'hidden' as const,
-    zIndex: 100,
-    minWidth: 110,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
   },
-  unitDropdownItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+  dropdownSheetTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 12,
+    color: Colors.textMuted,
+    letterSpacing: 1.5,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 8,
   },
-  unitDropdownItemActive: {
-    backgroundColor: 'rgba(255,153,0,0.12)',
+  dropdownSheetItem: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
   },
-  unitDropdownItemText: {
+  dropdownSheetItemActive: {
+    backgroundColor: 'rgba(255,153,0,0.08)',
+  },
+  dropdownSheetItemText: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 14,
+    fontSize: 16,
     color: Colors.text,
   },
-  unitDropdownItemTextActive: {
+  dropdownSheetItemTextActive: {
     color: Colors.primary,
     fontFamily: 'Inter_600SemiBold',
   },
