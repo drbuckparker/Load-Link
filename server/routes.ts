@@ -2015,12 +2015,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           conditions.push(or(eq(jobs.status, "completed" as any), eq(jobs.status, "cancelled" as any))!);
         } else if (status === "open") {
           conditions.push(eq(jobs.status, "open" as any));
-          conditions.push(sql`${jobs.status}::text != 'cancelled'`);
         } else {
           conditions.push(eq(jobs.status, status as any));
         }
       } else if (!status || status === "all") {
-        // no status filter for "all"
+        conditions.push(not(eq(jobs.status, "cancelled" as any)));
       }
 
       if (search) {
