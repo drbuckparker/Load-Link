@@ -104,11 +104,14 @@ export default function EditJobScreen() {
       setDestLat(jobData.destination_lat ? Number(jobData.destination_lat) : null);
       setDestLng(jobData.destination_lng ? Number(jobData.destination_lng) : null);
       if (jobData.scheduled_date) {
-        const d = new Date(jobData.scheduled_date);
-        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        setScheduledDate(iso);
-        setCalendarMonth(d.getMonth());
-        setCalendarYear(d.getFullYear());
+        const raw = String(jobData.scheduled_date);
+        const iso = raw.length >= 10 ? raw.substring(0, 10) : raw;
+        const [y, m, d] = iso.split('-').map(Number);
+        if (y && m && d) {
+          setScheduledDate(`${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+          setCalendarMonth(m - 1);
+          setCalendarYear(y);
+        }
       }
       setPickupTime(jobData.pickup_time || '');
       setEstimatedDays(jobData.estimated_days ? String(jobData.estimated_days) : '');

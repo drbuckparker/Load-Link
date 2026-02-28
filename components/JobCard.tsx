@@ -76,7 +76,12 @@ export default function JobCard({ job, onPress, showStatus = false }: JobCardPro
         </View>
         <View style={styles.footerItem}>
           <Ionicons name="calendar-outline" size={13} color={Colors.textMuted} />
-          <Text style={styles.footerText}>{new Date(job.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</Text>
+          <Text style={styles.footerText}>{(() => {
+            const raw = String(job.scheduledDate);
+            const ds = raw.length >= 10 ? raw.substring(0, 10) : raw;
+            const [y, m, d] = ds.split('-').map(Number);
+            return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          })()}</Text>
         </View>
         <View style={styles.footerItem}>
           <Ionicons name="time-outline" size={13} color={Colors.textMuted} />

@@ -1911,7 +1911,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           rate,
           rate_type,
           truck_type,
-          scheduled_date: scheduled_date ? new Date(scheduled_date) : null,
+          scheduled_date: scheduled_date ? new Date(scheduled_date + 'T12:00:00Z') : null,
           pickup_time,
           urgent: urgent ?? false,
           capacity_needed,
@@ -1953,7 +1953,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       delete updates.id;
       delete updates.contractor_id;
       updates.updated_at = new Date();
-      if (updates.scheduled_date) updates.scheduled_date = new Date(updates.scheduled_date);
+      if (updates.scheduled_date) {
+        const dateStr = String(updates.scheduled_date).substring(0, 10);
+        updates.scheduled_date = new Date(dateStr + 'T12:00:00Z');
+      }
 
       const [updated] = await db
         .update(jobs)

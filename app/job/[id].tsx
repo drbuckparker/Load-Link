@@ -603,7 +603,13 @@ export default function JobDetailScreen() {
               <Ionicons name="calendar" size={16} color={Colors.textMuted} />
               <Text style={styles.detailLabel}>Date</Text>
               <Text style={styles.detailValue}>
-                {new Date(job.scheduledDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                {(() => {
+                  const raw = String(job.scheduledDate);
+                  const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
+                  const [y, m, d] = dateStr.split('-').map(Number);
+                  const dt = new Date(y, m - 1, d);
+                  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                })()}
               </Text>
             </View>
             <View style={styles.detailItem}>
