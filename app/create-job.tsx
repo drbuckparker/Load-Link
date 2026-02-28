@@ -68,6 +68,8 @@ export default function CreateJobScreen() {
   const [showDestSuggestions, setShowDestSuggestions] = useState(false);
   const [routeInfo, setRouteInfo] = useState<{ truck_duration_text: string; truck_duration_seconds: number; distance_miles: number } | null>(null);
   const [fetchingRoute, setFetchingRoute] = useState(false);
+  const [userLat, setUserLat] = useState<number | null>(null);
+  const [userLng, setUserLng] = useState<number | null>(null);
   const originDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scheduledDate, setScheduledDate] = useState('');
@@ -95,6 +97,28 @@ export default function CreateJobScreen() {
   const { data: projects = [] } = useQuery<any[]>({
     queryKey: ['/api/projects'],
   });
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      navigator.geolocation?.getCurrentPosition(
+        (pos) => { setUserLat(pos.coords.latitude); setUserLng(pos.coords.longitude); },
+        () => {},
+        { enableHighAccuracy: false, timeout: 5000 }
+      );
+    } else {
+      (async () => {
+        try {
+          const Location = await import('expo-location');
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            setUserLat(loc.coords.latitude);
+            setUserLng(loc.coords.longitude);
+          }
+        } catch {}
+      })();
+    }
+  }, []);
 
   useEffect(() => {
     if (routeParams.projectId && projects.length > 0 && !projectName) {
@@ -251,6 +275,10 @@ export default function CreateJobScreen() {
       const baseUrl = getApiUrl();
       const url = new URL('/api/places/autocomplete', baseUrl);
       url.searchParams.set('input', input);
+      if (userLat && userLng) {
+        url.searchParams.set('lat', String(userLat));
+        url.searchParams.set('lng', String(userLng));
+      }
       const res = await fetch(url.toString(), { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
@@ -258,7 +286,7 @@ export default function CreateJobScreen() {
         else { setDestSuggestions(data); setShowDestSuggestions(true); }
       }
     } catch {}
-  }, []);
+  }, [userLat, userLng]);
 
   function handleOriginTextChange(text: string) {
     setOriginAddress(text);

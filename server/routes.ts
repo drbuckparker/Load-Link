@@ -3059,11 +3059,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const apiKey = process.env.GOOGLE_MAPS_API_KEY;
       if (!apiKey) return res.status(500).json({ message: "Google Maps API key not configured" });
 
+      const lat = req.query.lat as string;
+      const lng = req.query.lng as string;
+
       const url = new URL("https://maps.googleapis.com/maps/api/place/autocomplete/json");
       url.searchParams.set("input", input);
       url.searchParams.set("key", apiKey);
       url.searchParams.set("types", "geocode|establishment");
       url.searchParams.set("components", "country:us|country:ca");
+      if (lat && lng) {
+        url.searchParams.set("location", `${lat},${lng}`);
+        url.searchParams.set("radius", "80000");
+      }
 
       const response = await fetch(url.toString());
       const data = await response.json() as any;

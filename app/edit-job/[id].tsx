@@ -59,6 +59,8 @@ export default function EditJobScreen() {
   const [destSuggestions, setDestSuggestions] = useState<any[]>([]);
   const [showOriginSuggestions, setShowOriginSuggestions] = useState(false);
   const [showDestSuggestions, setShowDestSuggestions] = useState(false);
+  const [userLat, setUserLat] = useState<number | null>(null);
+  const [userLng, setUserLng] = useState<number | null>(null);
   const originDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scheduledDate, setScheduledDate] = useState('');
@@ -91,6 +93,28 @@ export default function EditJobScreen() {
   const { data: pastMaterials = [] } = useQuery<string[]>({
     queryKey: ['/api/materials'],
   });
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      navigator.geolocation?.getCurrentPosition(
+        (pos) => { setUserLat(pos.coords.latitude); setUserLng(pos.coords.longitude); },
+        () => {},
+        { enableHighAccuracy: false, timeout: 5000 }
+      );
+    } else {
+      (async () => {
+        try {
+          const Location = await import('expo-location');
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            setUserLat(loc.coords.latitude);
+            setUserLng(loc.coords.longitude);
+          }
+        } catch {}
+      })();
+    }
+  }, []);
 
   useEffect(() => {
     if (jobData && !loaded) {
@@ -179,7 +203,9 @@ export default function EditJobScreen() {
     }
     try {
       const baseUrl = getApiUrl();
-      const res = await fetch(`${baseUrl}/api/places/autocomplete?input=${encodeURIComponent(input)}`);
+      let url = `${baseUrl}/api/places/autocomplete?input=${encodeURIComponent(input)}`;
+      if (userLat && userLng) url += `&lat=${userLat}&lng=${userLng}`;
+      const res = await fetch(url);
       const data = await res.json();
       if (data.predictions) {
         if (target === 'origin') { setOriginSuggestions(data.predictions); setShowOriginSuggestions(true); }
