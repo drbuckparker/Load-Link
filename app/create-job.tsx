@@ -368,13 +368,53 @@ export default function CreateJobScreen() {
     } catch {}
   }, [userLat, userLng]);
 
+  async function geocodeAddress(address: string, target: 'origin' | 'destination') {
+    if (address.trim().length < 3) return;
+    try {
+      const baseUrl = getApiUrl();
+      const url = new URL('/api/places/autocomplete', baseUrl);
+      url.searchParams.set('input', address);
+      if (userLat && userLng) {
+        url.searchParams.set('lat', String(userLat));
+        url.searchParams.set('lng', String(userLng));
+      }
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (!res.ok) return;
+      const suggestions = await res.json();
+      if (suggestions.length > 0) {
+        const detailUrl = new URL('/api/places/details', baseUrl);
+        detailUrl.searchParams.set('place_id', suggestions[0].place_id);
+        const detailRes = await fetch(detailUrl.toString(), { credentials: 'include' });
+        if (detailRes.ok) {
+          const detail = await detailRes.json();
+          if (target === 'origin') {
+            setOriginLat(detail.lat);
+            setOriginLng(detail.lng);
+            if (detail.address) setOriginAddress(detail.address);
+          } else {
+            setDestLat(detail.lat);
+            setDestLng(detail.lng);
+            if (detail.address) setDestinationAddress(detail.address);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  const originGeoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destGeoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   function handleOriginTextChange(text: string) {
     setOriginAddress(text);
     setOriginLat(null);
     setOriginLng(null);
     setRouteInfo(null);
     if (originDebounceRef.current) clearTimeout(originDebounceRef.current);
+    if (originGeoRef.current) clearTimeout(originGeoRef.current);
     originDebounceRef.current = setTimeout(() => fetchPlaceSuggestions(text, 'origin'), 300);
+    originGeoRef.current = setTimeout(() => {
+      if (text.trim().length >= 3) geocodeAddress(text, 'origin');
+    }, 2000);
   }
 
   function handleDestTextChange(text: string) {
@@ -383,12 +423,21 @@ export default function CreateJobScreen() {
     setDestLng(null);
     setRouteInfo(null);
     if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
+    if (destGeoRef.current) clearTimeout(destGeoRef.current);
     destDebounceRef.current = setTimeout(() => fetchPlaceSuggestions(text, 'destination'), 300);
+    destGeoRef.current = setTimeout(() => {
+      if (text.trim().length >= 3) geocodeAddress(text, 'destination');
+    }, 2000);
   }
 
   async function selectSuggestion(placeId: string, description: string, target: 'origin' | 'destination') {
-    if (target === 'origin') { setOriginAddress(description); setShowOriginSuggestions(false); setOriginSuggestions([]); }
-    else { setDestinationAddress(description); setShowDestSuggestions(false); setDestSuggestions([]); }
+    if (target === 'origin') {
+      setOriginAddress(description); setShowOriginSuggestions(false); setOriginSuggestions([]);
+      if (originGeoRef.current) clearTimeout(originGeoRef.current);
+    } else {
+      setDestinationAddress(description); setShowDestSuggestions(false); setDestSuggestions([]);
+      if (destGeoRef.current) clearTimeout(destGeoRef.current);
+    }
 
     try {
       const baseUrl = getApiUrl();
