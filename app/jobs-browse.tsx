@@ -102,6 +102,7 @@ export default function JobsBrowseScreen() {
   const [editProjectSiteAddress, setEditProjectSiteAddress] = useState('');
   const [editProjectNotes, setEditProjectNotes] = useState('');
   const [editProjectAwarded, setEditProjectAwarded] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
 
   const statusParam = useMemo(() => {
     if (activeFilter === 'All') return undefined;
@@ -133,8 +134,9 @@ export default function JobsBrowseScreen() {
     enabled: !!user && activeTab === 'jobs',
   });
 
+  const projectsQueryUrl = showArchived ? '/api/projects?include_deleted=true' : '/api/projects';
   const { data: projects = [], isLoading: projectsLoading, refetch: refetchProjects } = useQuery<ProjectItem[]>({
-    queryKey: ['/api/projects'],
+    queryKey: [projectsQueryUrl],
     enabled: !!user && isContractor,
   });
 
@@ -172,6 +174,57 @@ export default function JobsBrowseScreen() {
       Alert.alert('Error', 'Failed to update project');
     },
   });
+
+  const deleteProjectMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest('DELETE', `/api/projects/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [projectsQueryUrl] });
+      queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/projects?include_deleted=true'] });
+      setEditingProject(null);
+      setSelectedProjectFilter(null);
+      setActiveTab('projects');
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: () => {
+      Alert.alert('Error', 'Failed to delete project');
+    },
+  });
+
+  const restoreProjectMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest('POST', `/api/projects/${id}/restore`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [projectsQueryUrl] });
+      queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/projects?include_deleted=true'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: () => {
+      Alert.alert('Error', 'Failed to restore project');
+    },
+  });
+
+  const handleDeleteProject = useCallback(() => {
+    if (!editingProject) return;
+    Alert.alert(
+      'Delete Project',
+      `Are you sure you want to delete "${editingProject.name}"? All jobs in this project will be cancelled. You can restore it later from the Archived section.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => deleteProjectMutation.mutate(String(editingProject.id)),
+        },
+      ]
+    );
+  }, [editingProject]);
 
   function openEditProject(project: ProjectItem) {
     setEditingProject(project);
@@ -308,11 +361,13 @@ export default function JobsBrowseScreen() {
 
   function renderProjectCard({ item }: { item: ProjectItem }) {
     const isActive = item.status === 'active';
+    const isDeleted = item.status === 'deleted';
     return (
-      <View style={styles.projectCard}>
+      <View style={[styles.projectCard, isDeleted && { opacity: 0.6 }]}>
         <Pressable
           style={({ pressed }) => [{ flex: 1 }, pressed && styles.cardPressed]}
           onPress={() => {
+            if (isDeleted) return;
             if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             setSelectedProjectFilter(String(item.id));
             setActiveTab('jobs');
@@ -328,11 +383,11 @@ export default function JobsBrowseScreen() {
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <View style={[styles.projectStatusBadge, {
-                backgroundColor: isActive ? Colors.successBg : Colors.muted
+                backgroundColor: isDeleted ? Colors.destructiveBg : isActive ? Colors.successBg : Colors.muted
               }]}>
                 <Text style={[styles.projectStatusText, {
-                  color: isActive ? Colors.success : Colors.textMuted
-                }]}>{item.status?.toUpperCase() || 'ACTIVE'}</Text>
+                  color: isDeleted ? Colors.destructive : isActive ? Colors.success : Colors.textMuted
+                }]}>{isDeleted ? 'ARCHIVED' : (item.status?.toUpperCase() || 'ACTIVE')}</Text>
               </View>
             </View>
           </View>
@@ -362,17 +417,39 @@ export default function JobsBrowseScreen() {
         </Pressable>
 
         <View style={styles.projectCardActions}>
-          <Pressable
-            style={styles.projectEditBtn}
-            onPress={() => {
-              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              openEditProject(item);
-            }}
-            hitSlop={8}
-          >
-            <Ionicons name="create-outline" size={18} color={Colors.primary} />
-          </Pressable>
-          <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+          {isDeleted ? (
+            <Pressable
+              style={[styles.projectEditBtn, { backgroundColor: Colors.successBg }]}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                Alert.alert(
+                  'Restore Project',
+                  `Restore "${item.name}"? The project will become active again.`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Restore', onPress: () => restoreProjectMutation.mutate(String(item.id)) },
+                  ]
+                );
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="refresh" size={18} color={Colors.success} />
+            </Pressable>
+          ) : (
+            <>
+              <Pressable
+                style={styles.projectEditBtn}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  openEditProject(item);
+                }}
+                hitSlop={8}
+              >
+                <Ionicons name="create-outline" size={18} color={Colors.primary} />
+              </Pressable>
+              <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+            </>
+          )}
         </View>
       </View>
     );
@@ -581,6 +658,12 @@ export default function JobsBrowseScreen() {
                 </Pressable>
               )}
             </View>
+            <Pressable
+              style={[styles.archivedToggle, showArchived && styles.archivedToggleActive]}
+              onPress={() => setShowArchived(!showArchived)}
+            >
+              <Ionicons name="archive-outline" size={18} color={showArchived ? Colors.primary : Colors.textMuted} />
+            </Pressable>
           </View>
 
           {projectsLoading ? (
@@ -803,6 +886,21 @@ export default function JobsBrowseScreen() {
                 <>
                   <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
                   <Text style={styles.modalCreateBtnText}>Save Changes</Text>
+                </>
+              )}
+            </Pressable>
+
+            <Pressable
+              style={styles.deleteProjectBtn}
+              onPress={handleDeleteProject}
+              disabled={deleteProjectMutation.isPending}
+            >
+              {deleteProjectMutation.isPending ? (
+                <ActivityIndicator size="small" color={Colors.destructive} />
+              ) : (
+                <>
+                  <Ionicons name="trash-outline" size={18} color={Colors.destructive} />
+                  <Text style={styles.deleteProjectBtnText}>Delete Project</Text>
                 </>
               )}
             </Pressable>
@@ -1346,5 +1444,34 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 15,
     color: Colors.primaryForeground,
+  },
+  deleteProjectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.destructive,
+  },
+  deleteProjectBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.destructive,
+  },
+  archivedToggle: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  archivedToggleActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
   },
 });

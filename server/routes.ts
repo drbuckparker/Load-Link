@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { db } from "./db";
-import { eq, and, desc, or, ilike, inArray, sql, gte, lte } from "drizzle-orm";
+import { eq, and, desc, or, ilike, inArray, sql, gte, lte, not, isNull } from "drizzle-orm";
 import {
   users,
   jobs,
@@ -2888,10 +2888,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req.session as any).userId;
 
+      const includeDeleted = req.query.include_deleted === 'true';
+      const conditions: any[] = [eq(contractorProjects.contractor_id, userId)];
+      if (!includeDeleted) {
+        conditions.push(isNull(contractorProjects.deleted_at));
+      }
+
       const projects = await db
         .select()
         .from(contractorProjects)
-        .where(eq(contractorProjects.contractor_id, userId))
+        .where(and(...conditions))
         .orderBy(desc(contractorProjects.created_at));
 
       const projectIds = projects.map((p) => p.id);
@@ -2980,6 +2986,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json(updated);
     } catch (err) {
       console.error("Update project error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.delete("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const projectId = req.params.id;
+
+      const [existing] = await db
+        .select()
+        .from(contractorProjects)
+        .where(and(eq(contractorProjects.id, projectId), eq(contractorProjects.contractor_id, userId)))
+        .limit(1);
+
+      if (!existing) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      await db
+        .update(contractorProjects)
+        .set({ deleted_at: new Date(), status: "deleted", updated_at: new Date() })
+        .where(eq(contractorProjects.id, projectId));
+
+      await db
+        .update(jobs)
+        .set({ status: "cancelled", cancelled_at: new Date() })
+        .where(and(eq(jobs.project_id, projectId), eq(jobs.contractor_id, userId), not(eq(jobs.status, "cancelled"))));
+
+      return res.json({ message: "Project deleted" });
+    } catch (err) {
+      console.error("Delete project error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/projects/:id/restore", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const projectId = req.params.id;
+
+      const [existing] = await db
+        .select()
+        .from(contractorProjects)
+        .where(and(eq(contractorProjects.id, projectId), eq(contractorProjects.contractor_id, userId)))
+        .limit(1);
+
+      if (!existing) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      await db
+        .update(contractorProjects)
+        .set({ deleted_at: null, status: "active", updated_at: new Date() })
+        .where(eq(contractorProjects.id, projectId));
+
+      return res.json({ message: "Project restored" });
+    } catch (err) {
+      console.error("Restore project error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });

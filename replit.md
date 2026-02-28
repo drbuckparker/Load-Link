@@ -70,6 +70,8 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `GET /api/projects` - List contractor's projects with job counts
 - `POST /api/projects` - Create a new project (name, job_number, site_address, notes)
 - `PUT /api/projects/:id` - Update a project (name, job_number, site_address, notes, awarded_amount, status)
+- `DELETE /api/projects/:id` - Soft-delete a project (sets deleted_at, cancels associated jobs)
+- `POST /api/projects/:id/restore` - Restore a soft-deleted project
 
 ### Vehicles
 - `GET /api/vehicles` - List user's vehicles
