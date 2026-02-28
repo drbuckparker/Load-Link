@@ -40,6 +40,53 @@ const RATE_TYPES = [
   { label: 'Flat Rate', value: 'flat_rate' },
 ] as const;
 
+const MATERIAL_WEIGHT_PER_YARD: Record<string, number> = {
+  'gravel': 1.4,
+  '3/4 crush': 1.4,
+  '3/4 minus': 1.4,
+  'crushed rock': 1.4,
+  'crushed gravel': 1.4,
+  'road base': 1.5,
+  'road mix': 1.5,
+  'base course': 1.5,
+  'pit run': 1.35,
+  'sand': 1.35,
+  'fill sand': 1.35,
+  'concrete sand': 1.35,
+  'fill': 1.2,
+  'fill dirt': 1.2,
+  'dirt': 1.1,
+  'topsoil': 1.1,
+  'top soil': 1.1,
+  'clay': 1.5,
+  'concrete': 2.0,
+  'asphalt': 1.6,
+  'rip rap': 1.65,
+  'riprap': 1.65,
+  'rock': 1.5,
+  'boulders': 1.5,
+  'cobble': 1.5,
+  'drain rock': 1.3,
+  'pea gravel': 1.35,
+  'decomposed granite': 1.4,
+  'dg': 1.4,
+  'recycled concrete': 1.3,
+  'recycled asphalt': 1.3,
+  'rap': 1.3,
+  'slag': 1.5,
+  'limestone': 1.5,
+  'millings': 1.3,
+};
+
+function getMaterialWeightPerYard(mat: string): number {
+  const lower = mat.trim().toLowerCase();
+  if (MATERIAL_WEIGHT_PER_YARD[lower]) return MATERIAL_WEIGHT_PER_YARD[lower];
+  for (const key of Object.keys(MATERIAL_WEIGHT_PER_YARD)) {
+    if (lower.includes(key) || key.includes(lower)) return MATERIAL_WEIGHT_PER_YARD[key];
+  }
+  return 1.35;
+}
+
 export default function CreateJobScreen() {
   const insets = useSafeAreaInsets();
   const routeParams = useLocalSearchParams<{ projectId?: string }>();
@@ -92,10 +139,10 @@ export default function CreateJobScreen() {
   const [loadTime, setLoadTime] = useState(10);
   const [unloadTime, setUnloadTime] = useState(10);
   const [truckCapacity, setTruckCapacity] = useState('');
+  const [capacityUnit, setCapacityUnit] = useState<'tons' | 'yards'>('tons');
   const [requiresTarp, setRequiresTarp] = useState(false);
   const [requiresWeightTickets, setRequiresWeightTickets] = useState(false);
   const [urgent, setUrgent] = useState(false);
-  const [capacityNeeded, setCapacityNeeded] = useState('');
   const [showHaulDirectionModal, setShowHaulDirectionModal] = useState(false);
   const [pendingProject, setPendingProject] = useState<any>(null);
 
@@ -390,10 +437,18 @@ export default function CreateJobScreen() {
   const oneWayMinutes = routeInfo ? routeInfo.truck_duration_seconds / 60 : 0;
   const roundTripMinutes = routeInfo ? (oneWayMinutes * 2) + loadTime + unloadTime : 0;
 
+  const capacityInTons = (() => {
+    const cap = parseFloat(truckCapacity) || 0;
+    if (cap <= 0) return 0;
+    if (capacityUnit === 'yards') {
+      return cap * getMaterialWeightPerYard(material);
+    }
+    return cap;
+  })();
+
   const calculatedTrips = (() => {
     const tons = parseFloat(totalTonsNeeded) || 0;
-    const cap = parseFloat(truckCapacity) || 0;
-    if (tons > 0 && cap > 0) return Math.ceil(tons / cap);
+    if (tons > 0 && capacityInTons > 0) return Math.ceil(tons / capacityInTons);
     return parseInt(estimatedTrips, 10) || 0;
   })();
 
@@ -483,8 +538,12 @@ export default function CreateJobScreen() {
       if (totalTonsNeeded) body.total_tons_needed = parseFloat(totalTonsNeeded);
       if (calculatedCost > 0) body.estimated_cost = calculatedCost;
       else if (estimatedCost) body.estimated_cost = parseFloat(estimatedCost);
-      if (truckCapacity) body.capacity_needed = truckCapacity.trim();
-      else if (capacityNeeded) body.capacity_needed = capacityNeeded.trim();
+      if (truckCapacity) {
+        const capLabel = capacityUnit === 'yards' 
+          ? `${truckCapacity} yards (≈${capacityInTons.toFixed(1)} tons)` 
+          : `${truckCapacity} tons`;
+        body.capacity_needed = capLabel;
+      }
 
       await apiRequest('POST', '/api/jobs', body);
 
@@ -1033,15 +1092,36 @@ export default function CreateJobScreen() {
               keyboardType="numeric"
             />
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity (tons)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. 20"
-              placeholderTextColor={Colors.textMuted}
-              value={truckCapacity}
-              onChangeText={setTruckCapacity}
-              keyboardType="numeric"
-            />
+            <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity</Text>
+            <View style={styles.capacityRow}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="e.g. 20"
+                placeholderTextColor={Colors.textMuted}
+                value={truckCapacity}
+                onChangeText={setTruckCapacity}
+                keyboardType="numeric"
+              />
+              <View style={styles.unitToggle}>
+                <Pressable
+                  style={[styles.unitBtn, capacityUnit === 'tons' && styles.unitBtnActive]}
+                  onPress={() => setCapacityUnit('tons')}
+                >
+                  <Text style={[styles.unitBtnText, capacityUnit === 'tons' && styles.unitBtnTextActive]}>Tons</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.unitBtn, capacityUnit === 'yards' && styles.unitBtnActive]}
+                  onPress={() => setCapacityUnit('yards')}
+                >
+                  <Text style={[styles.unitBtnText, capacityUnit === 'yards' && styles.unitBtnTextActive]}>Yards</Text>
+                </Pressable>
+              </View>
+            </View>
+            {capacityUnit === 'yards' && parseFloat(truckCapacity) > 0 && (
+              <Text style={styles.yardConversionNote}>
+                ≈ {capacityInTons.toFixed(1)} tons per load ({getMaterialWeightPerYard(material)} t/yd³ for {material || 'default'})
+              </Text>
+            )}
 
             {(parseFloat(totalTonsNeeded) > 0 && parseFloat(truckCapacity) > 0) ? (
               <View style={styles.autoCalcRow}>
@@ -1107,14 +1187,6 @@ export default function CreateJobScreen() {
               />
             </View>
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity Minimum</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. 20 tons"
-              placeholderTextColor={Colors.textMuted}
-              value={capacityNeeded}
-              onChangeText={setCapacityNeeded}
-            />
           </View>
         </View>
 
@@ -1792,6 +1864,40 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     color: Colors.primary,
+  },
+  capacityRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+  },
+  unitToggle: {
+    flexDirection: 'row' as const,
+    borderRadius: 8,
+    overflow: 'hidden' as const,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  unitBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  unitBtnActive: {
+    backgroundColor: 'rgba(255,153,0,0.15)',
+  },
+  unitBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  unitBtnTextActive: {
+    color: Colors.primary,
+  },
+  yardConversionNote: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 6,
   },
   calendarContainer: {
     backgroundColor: Colors.card,
