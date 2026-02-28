@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
+import MapPickerView from '@/components/MapPickerView';
 import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
 
@@ -1492,21 +1493,14 @@ export default function CreateJobScreen() {
 
           <Text style={styles.mapHint}>Tap the map to drop a pin</Text>
 
-          <View style={[styles.map, styles.mapWebFallback]}>
-            <Ionicons name="map-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.mapWebText}>Tap the map area to set coordinates</Text>
-            <Text style={styles.mapWebSub}>Full map available on your mobile device via Expo Go</Text>
-            <View style={{ flexDirection: 'row', gap: 16, marginTop: 16 }}>
-              <Pressable
-                style={[styles.mapConfirmBtn, { paddingHorizontal: 20, height: 44 }]}
-                onPress={() => {
-                  setMapPin({ latitude: 37.7749, longitude: -122.4194 });
-                }}
-              >
-                <Text style={[styles.mapConfirmText, { fontSize: 13 }]}>USE DEFAULT LOCATION</Text>
-              </Pressable>
-            </View>
-          </View>
+          <MapPickerView
+            mapPin={mapPin}
+            onMapPress={handleMapPress}
+            userLat={userLat}
+            userLng={userLng}
+            originLat={originLat}
+            originLng={originLng}
+          />
 
           {mapPin && (
             <View style={[styles.mapFooter, { paddingBottom: Platform.OS === 'web' ? 20 : insets.bottom + 16 }]}>
