@@ -809,7 +809,7 @@ export default function JobsBrowseScreen() {
         onRequestClose={() => setEditingProject(null)}
       >
         <Pressable style={styles.modalOverlay} onPress={() => setEditingProject(null)}>
-          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+          <Pressable style={[styles.modalContent, { maxHeight: '85%' }]} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>EDIT PROJECT</Text>
               <Pressable onPress={() => setEditingProject(null)} hitSlop={8}>
@@ -817,93 +817,95 @@ export default function JobsBrowseScreen() {
               </Pressable>
             </View>
 
-            <View style={styles.modalField}>
-              <Text style={styles.modalLabel}>Project Name *</Text>
-              <TextInput
-                style={styles.modalInput}
-                placeholder="Project name"
-                placeholderTextColor={Colors.textMuted}
-                value={editProjectName}
-                onChangeText={setEditProjectName}
-                autoFocus
-              />
-            </View>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Project Name *</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Project name"
+                  placeholderTextColor={Colors.textMuted}
+                  value={editProjectName}
+                  onChangeText={setEditProjectName}
+                  autoFocus
+                />
+              </View>
 
-            <View style={styles.modalField}>
-              <Text style={styles.modalLabel}>Job Number</Text>
-              <TextInput
-                style={styles.modalInput}
-                placeholder="e.g. JOB-2026-001"
-                placeholderTextColor={Colors.textMuted}
-                value={editProjectJobNumber}
-                onChangeText={setEditProjectJobNumber}
-              />
-            </View>
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Job Number</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. JOB-2026-001"
+                  placeholderTextColor={Colors.textMuted}
+                  value={editProjectJobNumber}
+                  onChangeText={setEditProjectJobNumber}
+                />
+              </View>
 
-            <View style={styles.modalField}>
-              <Text style={styles.modalLabel}>Site Address</Text>
-              <TextInput
-                style={styles.modalInput}
-                placeholder="e.g. 123 Main St"
-                placeholderTextColor={Colors.textMuted}
-                value={editProjectSiteAddress}
-                onChangeText={setEditProjectSiteAddress}
-              />
-            </View>
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Site Address</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. 123 Main St"
+                  placeholderTextColor={Colors.textMuted}
+                  value={editProjectSiteAddress}
+                  onChangeText={setEditProjectSiteAddress}
+                />
+              </View>
 
-            <View style={styles.modalField}>
-              <Text style={styles.modalLabel}>Awarded Amount</Text>
-              <TextInput
-                style={styles.modalInput}
-                placeholder="e.g. 50000"
-                placeholderTextColor={Colors.textMuted}
-                value={editProjectAwarded}
-                onChangeText={setEditProjectAwarded}
-                keyboardType="numeric"
-              />
-            </View>
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Awarded Amount</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. 50000"
+                  placeholderTextColor={Colors.textMuted}
+                  value={editProjectAwarded}
+                  onChangeText={setEditProjectAwarded}
+                  keyboardType="numeric"
+                />
+              </View>
 
-            <View style={styles.modalField}>
-              <Text style={styles.modalLabel}>Notes</Text>
-              <TextInput
-                style={[styles.modalInput, { height: 72, textAlignVertical: 'top' }]}
-                placeholder="Optional project notes..."
-                placeholderTextColor={Colors.textMuted}
-                value={editProjectNotes}
-                onChangeText={setEditProjectNotes}
-                multiline
-              />
-            </View>
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Notes</Text>
+                <TextInput
+                  style={[styles.modalInput, { height: 72, textAlignVertical: 'top' }]}
+                  placeholder="Optional project notes..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={editProjectNotes}
+                  onChangeText={setEditProjectNotes}
+                  multiline
+                />
+              </View>
 
-            <Pressable
-              style={[styles.modalCreateBtn, !editProjectName.trim() && { opacity: 0.5 }]}
-              onPress={handleUpdateProject}
-              disabled={!editProjectName.trim() || updateProjectMutation.isPending}
-            >
-              {updateProjectMutation.isPending ? (
-                <ActivityIndicator size="small" color={Colors.primaryForeground} />
-              ) : (
-                <>
-                  <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
-                  <Text style={styles.modalCreateBtnText}>Save Changes</Text>
-                </>
-              )}
-            </Pressable>
+              <Pressable
+                style={[styles.modalCreateBtn, !editProjectName.trim() && { opacity: 0.5 }]}
+                onPress={handleUpdateProject}
+                disabled={!editProjectName.trim() || updateProjectMutation.isPending}
+              >
+                {updateProjectMutation.isPending ? (
+                  <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
+                    <Text style={styles.modalCreateBtnText}>Save Changes</Text>
+                  </>
+                )}
+              </Pressable>
 
-            <Pressable
-              style={styles.deleteProjectBtn}
-              onPress={handleDeleteProject}
-              disabled={deleteProjectMutation.isPending}
-            >
-              {deleteProjectMutation.isPending ? (
-                <ActivityIndicator size="small" color={Colors.destructive} />
-              ) : (
-                <>
-                  <Ionicons name="trash-outline" size={18} color={Colors.destructive} />
-                  <Text style={styles.deleteProjectBtnText}>Delete Project</Text>
-                </>
-              )}
-            </Pressable>
+              <Pressable
+                style={styles.deleteProjectBtn}
+                onPress={handleDeleteProject}
+                disabled={deleteProjectMutation.isPending}
+              >
+                {deleteProjectMutation.isPending ? (
+                  <ActivityIndicator size="small" color={Colors.destructive} />
+                ) : (
+                  <>
+                    <Ionicons name="trash-outline" size={18} color={Colors.destructive} />
+                    <Text style={styles.deleteProjectBtnText}>Delete Project</Text>
+                  </>
+                )}
+              </Pressable>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
