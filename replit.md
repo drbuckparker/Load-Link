@@ -69,6 +69,7 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 ### Projects (Contractor)
 - `GET /api/projects` - List contractor's projects with job counts
 - `POST /api/projects` - Create a new project (name, job_number, site_address, notes)
+- `PUT /api/projects/:id` - Update a project (name, job_number, site_address, notes, awarded_amount, status)
 
 ### Vehicles
 - `GET /api/vehicles` - List user's vehicles

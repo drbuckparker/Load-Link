@@ -2947,6 +2947,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const projectId = req.params.id;
+      const { name, job_number, site_address, notes, awarded_amount, status } = req.body;
+
+      const [existing] = await db
+        .select()
+        .from(contractorProjects)
+        .where(and(eq(contractorProjects.id, projectId), eq(contractorProjects.contractor_id, userId)))
+        .limit(1);
+
+      if (!existing) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const updateData: any = { updated_at: new Date() };
+      if (name !== undefined) updateData.name = name;
+      if (job_number !== undefined) updateData.job_number = job_number;
+      if (site_address !== undefined) updateData.site_address = site_address;
+      if (notes !== undefined) updateData.notes = notes;
+      if (awarded_amount !== undefined) updateData.awarded_amount = awarded_amount;
+      if (status !== undefined) updateData.status = status;
+
+      const [updated] = await db
+        .update(contractorProjects)
+        .set(updateData)
+        .where(eq(contractorProjects.id, projectId))
+        .returning();
+
+      return res.json(updated);
+    } catch (err) {
+      console.error("Update project error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/places/autocomplete", requireAuth, async (req: Request, res: Response) => {
     try {
       const input = req.query.input as string;

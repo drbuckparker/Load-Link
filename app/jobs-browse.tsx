@@ -96,6 +96,12 @@ export default function JobsBrowseScreen() {
   const [newProjectSiteAddress, setNewProjectSiteAddress] = useState('');
   const [newProjectNotes, setNewProjectNotes] = useState('');
   const [projectSearch, setProjectSearch] = useState('');
+  const [editingProject, setEditingProject] = useState<ProjectItem | null>(null);
+  const [editProjectName, setEditProjectName] = useState('');
+  const [editProjectJobNumber, setEditProjectJobNumber] = useState('');
+  const [editProjectSiteAddress, setEditProjectSiteAddress] = useState('');
+  const [editProjectNotes, setEditProjectNotes] = useState('');
+  const [editProjectAwarded, setEditProjectAwarded] = useState('');
 
   const statusParam = useMemo(() => {
     if (activeFilter === 'All') return undefined;
@@ -150,6 +156,43 @@ export default function JobsBrowseScreen() {
       Alert.alert('Error', 'Failed to create project');
     },
   });
+
+  const updateProjectMutation = useMutation({
+    mutationFn: async (data: { id: string; name?: string; job_number?: string; site_address?: string; notes?: string; awarded_amount?: string }) => {
+      const { id, ...body } = data;
+      const res = await apiRequest('PUT', `/api/projects/${id}`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
+      setEditingProject(null);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: () => {
+      Alert.alert('Error', 'Failed to update project');
+    },
+  });
+
+  function openEditProject(project: ProjectItem) {
+    setEditingProject(project);
+    setEditProjectName(project.name || '');
+    setEditProjectJobNumber(project.job_number || '');
+    setEditProjectSiteAddress(project.site_address || '');
+    setEditProjectNotes(project.notes || '');
+    setEditProjectAwarded(project.awarded_amount ? String(project.awarded_amount) : '');
+  }
+
+  const handleUpdateProject = useCallback(() => {
+    if (!editingProject || !editProjectName.trim()) return;
+    updateProjectMutation.mutate({
+      id: String(editingProject.id),
+      name: editProjectName.trim(),
+      job_number: editProjectJobNumber.trim(),
+      site_address: editProjectSiteAddress.trim(),
+      notes: editProjectNotes.trim(),
+      awarded_amount: editProjectAwarded.trim(),
+    });
+  }, [editingProject, editProjectName, editProjectJobNumber, editProjectSiteAddress, editProjectNotes, editProjectAwarded]);
 
   const jobs = useMemo(() => {
     if (!rawJobs) return [];
@@ -266,56 +309,72 @@ export default function JobsBrowseScreen() {
   function renderProjectCard({ item }: { item: ProjectItem }) {
     const isActive = item.status === 'active';
     return (
-      <Pressable
-        style={({ pressed }) => [styles.projectCard, pressed && styles.cardPressed]}
-        onPress={() => {
-          if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          setSelectedProjectFilter(String(item.id));
-          setActiveTab('jobs');
-          setActiveFilter('All');
-        }}
-      >
-        <View style={styles.projectCardHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.projectCardName} numberOfLines={1}>{item.name}</Text>
-            {item.job_number ? (
-              <Text style={styles.projectJobNumber}>#{item.job_number}</Text>
-            ) : null}
+      <View style={styles.projectCard}>
+        <Pressable
+          style={({ pressed }) => [{ flex: 1 }, pressed && styles.cardPressed]}
+          onPress={() => {
+            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setSelectedProjectFilter(String(item.id));
+            setActiveTab('jobs');
+            setActiveFilter('All');
+          }}
+        >
+          <View style={styles.projectCardHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.projectCardName} numberOfLines={1}>{item.name}</Text>
+              {item.job_number ? (
+                <Text style={styles.projectJobNumber}>#{item.job_number}</Text>
+              ) : null}
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={[styles.projectStatusBadge, {
+                backgroundColor: isActive ? Colors.successBg : Colors.muted
+              }]}>
+                <Text style={[styles.projectStatusText, {
+                  color: isActive ? Colors.success : Colors.textMuted
+                }]}>{item.status?.toUpperCase() || 'ACTIVE'}</Text>
+              </View>
+            </View>
           </View>
-          <View style={[styles.projectStatusBadge, {
-            backgroundColor: isActive ? Colors.successBg : Colors.muted
-          }]}>
-            <Text style={[styles.projectStatusText, {
-              color: isActive ? Colors.success : Colors.textMuted
-            }]}>{item.status?.toUpperCase() || 'ACTIVE'}</Text>
-          </View>
-        </View>
 
-        {item.site_address ? (
-          <View style={styles.projectDetailRow}>
-            <Ionicons name="location-outline" size={14} color={Colors.textMuted} />
-            <Text style={styles.projectDetailText} numberOfLines={1}>{item.site_address}</Text>
-          </View>
-        ) : null}
-
-        <View style={styles.projectFooter}>
-          <View style={styles.projectStat}>
-            <Ionicons name="briefcase-outline" size={15} color={Colors.primary} />
-            <Text style={styles.projectStatText}>{item.job_count} job{item.job_count !== 1 ? 's' : ''}</Text>
-          </View>
-          {item.awarded_amount && Number(item.awarded_amount) > 0 ? (
-            <View style={styles.projectStat}>
-              <Ionicons name="cash-outline" size={15} color={Colors.success} />
-              <Text style={[styles.projectStatText, { color: Colors.success }]}>
-                ${Number(item.awarded_amount).toLocaleString()}
-              </Text>
+          {item.site_address ? (
+            <View style={styles.projectDetailRow}>
+              <Ionicons name="location-outline" size={14} color={Colors.textMuted} />
+              <Text style={styles.projectDetailText} numberOfLines={1}>{item.site_address}</Text>
             </View>
           ) : null}
-          <Text style={styles.timeAgoText}>{timeAgo(item.created_at)}</Text>
-        </View>
 
-        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 14, top: '50%' }} />
-      </Pressable>
+          <View style={styles.projectFooter}>
+            <View style={styles.projectStat}>
+              <Ionicons name="briefcase-outline" size={15} color={Colors.primary} />
+              <Text style={styles.projectStatText}>{item.job_count} job{item.job_count !== 1 ? 's' : ''}</Text>
+            </View>
+            {item.awarded_amount && Number(item.awarded_amount) > 0 ? (
+              <View style={styles.projectStat}>
+                <Ionicons name="cash-outline" size={15} color={Colors.success} />
+                <Text style={[styles.projectStatText, { color: Colors.success }]}>
+                  ${Number(item.awarded_amount).toLocaleString()}
+                </Text>
+              </View>
+            ) : null}
+            <Text style={styles.timeAgoText}>{timeAgo(item.created_at)}</Text>
+          </View>
+        </Pressable>
+
+        <View style={styles.projectCardActions}>
+          <Pressable
+            style={styles.projectEditBtn}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              openEditProject(item);
+            }}
+            hitSlop={8}
+          >
+            <Ionicons name="create-outline" size={18} color={Colors.primary} />
+          </Pressable>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+        </View>
+      </View>
     );
   }
 
@@ -653,6 +712,97 @@ export default function JobsBrowseScreen() {
                 <>
                   <Ionicons name="add-circle" size={20} color={Colors.primaryForeground} />
                   <Text style={styles.modalCreateBtnText}>Create Project</Text>
+                </>
+              )}
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={!!editingProject}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingProject(null)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setEditingProject(null)}>
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>EDIT PROJECT</Text>
+              <Pressable onPress={() => setEditingProject(null)} hitSlop={8}>
+                <Ionicons name="close" size={24} color={Colors.textSecondary} />
+              </Pressable>
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Project Name *</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Project name"
+                placeholderTextColor={Colors.textMuted}
+                value={editProjectName}
+                onChangeText={setEditProjectName}
+                autoFocus
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Job Number</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. JOB-2026-001"
+                placeholderTextColor={Colors.textMuted}
+                value={editProjectJobNumber}
+                onChangeText={setEditProjectJobNumber}
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Site Address</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. 123 Main St"
+                placeholderTextColor={Colors.textMuted}
+                value={editProjectSiteAddress}
+                onChangeText={setEditProjectSiteAddress}
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Awarded Amount</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. 50000"
+                placeholderTextColor={Colors.textMuted}
+                value={editProjectAwarded}
+                onChangeText={setEditProjectAwarded}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Notes</Text>
+              <TextInput
+                style={[styles.modalInput, { height: 72, textAlignVertical: 'top' }]}
+                placeholder="Optional project notes..."
+                placeholderTextColor={Colors.textMuted}
+                value={editProjectNotes}
+                onChangeText={setEditProjectNotes}
+                multiline
+              />
+            </View>
+
+            <Pressable
+              style={[styles.modalCreateBtn, !editProjectName.trim() && { opacity: 0.5 }]}
+              onPress={handleUpdateProject}
+              disabled={!editProjectName.trim() || updateProjectMutation.isPending}
+            >
+              {updateProjectMutation.isPending ? (
+                <ActivityIndicator size="small" color={Colors.primaryForeground} />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
+                  <Text style={styles.modalCreateBtnText}>Save Changes</Text>
                 </>
               )}
             </Pressable>
@@ -1061,6 +1211,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     gap: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  projectCardActions: {
+    alignItems: 'center',
+    gap: 8,
+    paddingLeft: 10,
+  },
+  projectEditBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   projectCardHeader: {
     flexDirection: 'row',
