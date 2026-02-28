@@ -440,12 +440,12 @@ export default function JobsBrowseScreen() {
           </Text>
           <Pressable
             onPress={() => {
-              setSelectedProjectFilter(null);
-              setActiveTab('projects');
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              openEditProject(selectedProjectData);
             }}
             hitSlop={8}
           >
-            <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+            <Ionicons name="create-outline" size={20} color={Colors.primary} />
           </Pressable>
         </View>
       )}
