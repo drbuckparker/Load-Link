@@ -460,6 +460,7 @@ export default function CreateJobScreen() {
   })();
 
   const tripsPerTruck = trucksNeeded > 0 ? Math.ceil(calculatedTrips / trucksNeeded) : calculatedTrips;
+  const tripsPerDay = roundTripMinutes > 0 ? Math.floor((10 * 60) / roundTripMinutes) : 0;
 
   const calculatedCost = (() => {
     const r = parseFloat(rate) || 0;
@@ -480,6 +481,18 @@ export default function CreateJobScreen() {
     const workDayMinutes = 10 * 60;
     return totalMinutes / workDayMinutes;
   })();
+
+  useEffect(() => {
+    if (calculatedTrips > 1 && tripsPerDay > 0 && calculatedTrips > tripsPerDay && jobType === 'single_load') {
+      setJobType('multi_day');
+    }
+  }, [calculatedTrips, tripsPerDay]);
+
+  useEffect(() => {
+    if (estimatedDaysCalc > 0 && jobType === 'multi_day' && !estimatedDays) {
+      setEstimatedDays(String(Math.ceil(estimatedDaysCalc)));
+    }
+  }, [estimatedDaysCalc]);
 
   function getEstimatedDaysText() {
     if (!routeInfo) return null;
@@ -911,6 +924,11 @@ export default function CreateJobScreen() {
                           : `${Math.floor(roundTripMinutes / 60)}h ${Math.round(roundTripMinutes % 60)}m`
                         }
                       </Text>
+                      {'  ·  '}
+                      <Text style={{ color: Colors.text, fontFamily: 'Inter_700Bold' }}>
+                        {tripsPerDay} trips/day
+                      </Text>
+                      <Text style={{ color: Colors.textMuted }}> per truck</Text>
                     </Text>
                   </View>
 
@@ -918,28 +936,22 @@ export default function CreateJobScreen() {
                     <View style={styles.tripCalcRow}>
                       <View style={styles.tripCalcItem}>
                         <Text style={styles.tripCalcValue}>{calculatedTrips}</Text>
-                        <Text style={styles.tripCalcLabel}>Trips</Text>
+                        <Text style={styles.tripCalcLabel}>Total Trips</Text>
+                      </View>
+                      <View style={styles.routeDivider} />
+                      <View style={styles.tripCalcItem}>
+                        <Text style={styles.tripCalcValue}>{tripsPerTruck}</Text>
+                        <Text style={styles.tripCalcLabel}>Per Truck</Text>
                       </View>
                       <View style={styles.routeDivider} />
                       <View style={styles.tripCalcItem}>
                         <Text style={styles.tripCalcValue}>{getEstimatedDaysText()}</Text>
                         <Text style={styles.tripCalcLabel}>Duration</Text>
                       </View>
-                      {calculatedCost > 0 && (
-                        <>
-                          <View style={styles.routeDivider} />
-                          <View style={styles.tripCalcItem}>
-                            <Text style={[styles.tripCalcValue, { color: Colors.success }]}>
-                              ${calculatedCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </Text>
-                            <Text style={styles.tripCalcLabel}>Est. Cost</Text>
-                          </View>
-                        </>
-                      )}
                     </View>
                   )}
 
-                  <Text style={styles.routeNote}>Travel time adjusted for dump truck speeds (1.4x). 10-hour workdays.</Text>
+                  <Text style={styles.routeNote}>Travel time adjusted for dump truck speeds (1.4x). {tripsPerDay} trips/day based on 10-hour workdays.</Text>
                 </>
               ) : null}
             </View>
