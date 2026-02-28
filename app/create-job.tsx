@@ -571,7 +571,7 @@ export default function CreateJobScreen() {
 
     setSubmitting(true);
     try {
-      let resolvedProjectId = projectId ? parseInt(projectId, 10) : undefined;
+      let resolvedProjectId: string | undefined = projectId || undefined;
 
       if (!resolvedProjectId && projectName.trim()) {
         const newProject = await apiRequest('POST', '/api/projects', {
