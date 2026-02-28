@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest, queryClient } from '@/lib/query-client';
@@ -48,6 +49,50 @@ export default function DashboardScreen() {
   const unreadCount = (notifsData || []).filter((n: any) => !(n.is_read ?? n.isRead)).length;
 
   const [switchingRole, setSwitchingRole] = useState(false);
+  const [deviceLat, setDeviceLat] = useState<number | null>(null);
+  const [deviceLng, setDeviceLng] = useState<number | null>(null);
+  const [deviceAddress, setDeviceAddress] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        if (Platform.OS === 'web') {
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                setDeviceLat(pos.coords.latitude);
+                setDeviceLng(pos.coords.longitude);
+              },
+              () => {}
+            );
+          }
+          return;
+        }
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setDeviceLat(loc.coords.latitude);
+        setDeviceLng(loc.coords.longitude);
+        try {
+          const [geo] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          if (geo) {
+            const parts = [geo.city, geo.region].filter(Boolean);
+            setDeviceAddress(parts.join(', ') || geo.name || null);
+          }
+        } catch {}
+        try {
+          await apiRequest('PUT', '/api/profile', {
+            last_latitude: loc.coords.latitude,
+            last_longitude: loc.coords.longitude,
+          });
+        } catch {}
+      } catch {}
+    })();
+  }, []);
+
+  const mapLat = deviceLat || dashboard?.location?.lat || undefined;
+  const mapLng = deviceLng || dashboard?.location?.lng || undefined;
+  const mapAddress = deviceAddress || dashboard?.location?.address || undefined;
 
   async function handleStatusToggle(value: boolean) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -236,9 +281,9 @@ export default function DashboardScreen() {
               <Text style={styles.mapSectionTitle}>CURRENT LOCATION</Text>
             </View>
             <MapSection
-              address={dashboard?.location?.address}
-              defaultLat={dashboard?.location?.lat || undefined}
-              defaultLng={dashboard?.location?.lng || undefined}
+              address={mapAddress || null}
+              defaultLat={mapLat}
+              defaultLng={mapLng}
             />
           </View>
 
