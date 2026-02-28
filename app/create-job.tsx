@@ -93,6 +93,8 @@ export default function CreateJobScreen() {
   const [requiresWeightTickets, setRequiresWeightTickets] = useState(false);
   const [urgent, setUrgent] = useState(false);
   const [capacityNeeded, setCapacityNeeded] = useState('');
+  const [showHaulDirectionModal, setShowHaulDirectionModal] = useState(false);
+  const [pendingProject, setPendingProject] = useState<any>(null);
 
   const { data: projects = [] } = useQuery<any[]>({
     queryKey: ['/api/projects'],
@@ -126,6 +128,10 @@ export default function CreateJobScreen() {
       if (match) {
         setProjectId(String(match.id));
         setProjectName(match.name || '');
+        if (match.site_address) {
+          setPendingProject(match);
+          setShowHaulDirectionModal(true);
+        }
       }
     }
   }, [routeParams.projectId, projects]);
@@ -191,6 +197,29 @@ export default function CreateJobScreen() {
     setProjectId(id);
     setProjectName(name);
     setShowProjectDropdown(false);
+    const proj = projects.find((p: any) => String(p.id) === id);
+    if (proj?.site_address) {
+      setPendingProject(proj);
+      setShowHaulDirectionModal(true);
+    }
+  }
+
+  function applyHaulDirection(direction: 'to' | 'from') {
+    if (!pendingProject) return;
+    const addr = pendingProject.site_address || '';
+    const lat = pendingProject.site_lat ? Number(pendingProject.site_lat) : null;
+    const lng = pendingProject.site_lng ? Number(pendingProject.site_lng) : null;
+    if (direction === 'to') {
+      setDestinationAddress(addr);
+      setDestLat(lat);
+      setDestLng(lng);
+    } else {
+      setOriginAddress(addr);
+      setOriginLat(lat);
+      setOriginLng(lng);
+    }
+    setShowHaulDirectionModal(false);
+    setPendingProject(null);
   }
 
   function handleProjectNameChange(text: string) {
@@ -1001,6 +1030,46 @@ export default function CreateJobScreen() {
       </ScrollView>
 
       <Modal
+        visible={showHaulDirectionModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setShowHaulDirectionModal(false); setPendingProject(null); }}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => { setShowHaulDirectionModal(false); setPendingProject(null); }}>
+          <View style={styles.haulDirectionModal}>
+            <Text style={styles.haulDirectionTitle}>Haul Direction</Text>
+            <Text style={styles.haulDirectionSubtitle}>
+              {pendingProject?.site_address}
+            </Text>
+            <View style={styles.haulDirectionButtons}>
+              <Pressable
+                style={styles.haulDirectionBtn}
+                onPress={() => applyHaulDirection('to')}
+              >
+                <Ionicons name="arrow-forward-circle" size={28} color={Colors.primary} />
+                <Text style={styles.haulDirectionBtnText}>Haul to Job</Text>
+                <Text style={styles.haulDirectionBtnHint}>Auto-fill dropoff</Text>
+              </Pressable>
+              <Pressable
+                style={styles.haulDirectionBtn}
+                onPress={() => applyHaulDirection('from')}
+              >
+                <Ionicons name="arrow-back-circle" size={28} color={Colors.primary} />
+                <Text style={styles.haulDirectionBtnText}>Haul from Job</Text>
+                <Text style={styles.haulDirectionBtnHint}>Auto-fill pickup</Text>
+              </Pressable>
+            </View>
+            <Pressable
+              style={styles.haulDirectionSkip}
+              onPress={() => { setShowHaulDirectionModal(false); setPendingProject(null); }}
+            >
+              <Text style={styles.haulDirectionSkipText}>Skip</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
         visible={showTimePicker}
         transparent
         animationType="fade"
@@ -1803,5 +1872,73 @@ const styles = StyleSheet.create({
   },
   amPmTextActive: {
     color: Colors.primary,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  haulDirectionModal: {
+    backgroundColor: Colors.card,
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 360,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  haulDirectionTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    textAlign: 'center',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  haulDirectionSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  haulDirectionButtons: {
+    flexDirection: 'row' as const,
+    gap: 12,
+  },
+  haulDirectionBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(255,153,0,0.08)',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center' as const,
+    borderWidth: 1,
+    borderColor: 'rgba(255,153,0,0.2)',
+    gap: 8,
+  },
+  haulDirectionBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.text,
+    textAlign: 'center' as const,
+  },
+  haulDirectionBtnHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    textAlign: 'center' as const,
+  },
+  haulDirectionSkip: {
+    marginTop: 16,
+    alignItems: 'center' as const,
+    paddingVertical: 8,
+  },
+  haulDirectionSkipText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.textMuted,
   },
 });
