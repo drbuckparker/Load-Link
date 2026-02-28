@@ -135,6 +135,7 @@ export default function CreateJobScreen() {
   const [trucksNeeded, setTrucksNeeded] = useState(1);
   const [estimatedTrips, setEstimatedTrips] = useState('');
   const [totalTonsNeeded, setTotalTonsNeeded] = useState('');
+  const [totalUnit, setTotalUnit] = useState<'tons' | 'yards'>('tons');
   const [estimatedCost, setEstimatedCost] = useState('');
   const [loadTime, setLoadTime] = useState(10);
   const [unloadTime, setUnloadTime] = useState(10);
@@ -446,34 +447,46 @@ export default function CreateJobScreen() {
     return cap;
   })();
 
+  const totalInTons = (() => {
+    const val = parseFloat(totalTonsNeeded) || 0;
+    if (val <= 0) return 0;
+    if (totalUnit === 'yards') return val * getMaterialWeightPerYard(material);
+    return val;
+  })();
+
   const calculatedTrips = (() => {
-    const tons = parseFloat(totalTonsNeeded) || 0;
-    if (tons > 0 && capacityInTons > 0) return Math.ceil(tons / capacityInTons);
+    if (totalInTons > 0 && capacityInTons > 0) return Math.ceil(totalInTons / capacityInTons);
     return parseInt(estimatedTrips, 10) || 0;
   })();
+
+  const tripsPerTruck = trucksNeeded > 0 ? Math.ceil(calculatedTrips / trucksNeeded) : calculatedTrips;
 
   const calculatedCost = (() => {
     const r = parseFloat(rate) || 0;
     if (r <= 0) return 0;
     if (rateType === 'per_load') return r * (calculatedTrips || 1);
-    if (rateType === 'per_ton') return r * (parseFloat(totalTonsNeeded) || 0);
+    if (rateType === 'per_ton') return r * totalInTons;
     if (rateType === 'per_hour' && roundTripMinutes > 0 && calculatedTrips > 0) {
-      const totalHours = (roundTripMinutes * calculatedTrips) / 60;
+      const totalHours = (roundTripMinutes * tripsPerTruck) / 60;
       return r * totalHours * trucksNeeded;
     }
     if (rateType === 'flat_rate') return r;
     return 0;
   })();
 
+  const estimatedDaysCalc = (() => {
+    if (!routeInfo || calculatedTrips <= 0) return 0;
+    const totalMinutes = tripsPerTruck * roundTripMinutes;
+    const workDayMinutes = 10 * 60;
+    return totalMinutes / workDayMinutes;
+  })();
+
   function getEstimatedDaysText() {
     if (!routeInfo) return null;
     if (jobType === 'single_load') return 'Less than 1 day';
     if (calculatedTrips <= 0) return 'Enter tons & capacity';
-    const totalMinutes = calculatedTrips * roundTripMinutes;
-    const workDayMinutes = 10 * 60;
-    const days = totalMinutes / workDayMinutes;
-    if (days < 1) return 'Less than 1 day';
-    return `~${Math.ceil(days)} work day${Math.ceil(days) > 1 ? 's' : ''}`;
+    if (estimatedDaysCalc < 1) return 'Less than 1 day';
+    return `~${Math.ceil(estimatedDaysCalc)} work day${Math.ceil(estimatedDaysCalc) > 1 ? 's' : ''}`;
   }
 
   async function handleSubmit() {
@@ -535,7 +548,7 @@ export default function CreateJobScreen() {
       }
       if (calculatedTrips > 0) body.estimated_trips = calculatedTrips;
       else if (estimatedTrips) body.estimated_trips = parseInt(estimatedTrips, 10);
-      if (totalTonsNeeded) body.total_tons_needed = parseFloat(totalTonsNeeded);
+      if (totalInTons > 0) body.total_tons_needed = totalInTons;
       if (calculatedCost > 0) body.estimated_cost = calculatedCost;
       else if (estimatedCost) body.estimated_cost = parseFloat(estimatedCost);
       if (truckCapacity) {
@@ -1082,15 +1095,36 @@ export default function CreateJobScreen() {
               </Pressable>
             </View>
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Total Tons Needed</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="0"
-              placeholderTextColor={Colors.textMuted}
-              value={totalTonsNeeded}
-              onChangeText={setTotalTonsNeeded}
-              keyboardType="numeric"
-            />
+            <Text style={[styles.label, { marginTop: 14 }]}>Total Material Needed</Text>
+            <View style={styles.capacityRow}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="0"
+                placeholderTextColor={Colors.textMuted}
+                value={totalTonsNeeded}
+                onChangeText={setTotalTonsNeeded}
+                keyboardType="numeric"
+              />
+              <View style={styles.unitToggle}>
+                <Pressable
+                  style={[styles.unitBtn, totalUnit === 'tons' && styles.unitBtnActive]}
+                  onPress={() => setTotalUnit('tons')}
+                >
+                  <Text style={[styles.unitBtnText, totalUnit === 'tons' && styles.unitBtnTextActive]}>Tons</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.unitBtn, totalUnit === 'yards' && styles.unitBtnActive]}
+                  onPress={() => setTotalUnit('yards')}
+                >
+                  <Text style={[styles.unitBtnText, totalUnit === 'yards' && styles.unitBtnTextActive]}>Yards</Text>
+                </Pressable>
+              </View>
+            </View>
+            {totalUnit === 'yards' && parseFloat(totalTonsNeeded) > 0 && (
+              <Text style={styles.yardConversionNote}>
+                ≈ {totalInTons.toFixed(1)} tons ({getMaterialWeightPerYard(material)} t/yd³ for {material || 'default'})
+              </Text>
+            )}
 
             <Text style={[styles.label, { marginTop: 14 }]}>Truck Capacity</Text>
             <View style={styles.capacityRow}>
@@ -1124,12 +1158,48 @@ export default function CreateJobScreen() {
             )}
 
             {(parseFloat(totalTonsNeeded) > 0 && parseFloat(truckCapacity) > 0) ? (
-              <View style={styles.autoCalcRow}>
-                <Ionicons name="calculator-outline" size={16} color={Colors.primary} />
-                <Text style={styles.autoCalcText}>
-                  {calculatedTrips} trip{calculatedTrips !== 1 ? 's' : ''} needed
-                  {calculatedCost > 0 && ` · Est. $${calculatedCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                </Text>
+              <View style={styles.jobEstimateCard}>
+                <View style={styles.jobEstimateHeader}>
+                  <Ionicons name="calculator-outline" size={16} color={Colors.primary} />
+                  <Text style={styles.jobEstimateTitle}>JOB ESTIMATE</Text>
+                </View>
+                <View style={styles.jobEstimateGrid}>
+                  <View style={styles.jobEstimateItem}>
+                    <Text style={styles.jobEstimateValue}>{calculatedTrips}</Text>
+                    <Text style={styles.jobEstimateLabel}>Total Trips</Text>
+                  </View>
+                  <View style={styles.jobEstimateDivider} />
+                  <View style={styles.jobEstimateItem}>
+                    <Text style={styles.jobEstimateValue}>{tripsPerTruck}</Text>
+                    <Text style={styles.jobEstimateLabel}>Per Truck</Text>
+                  </View>
+                  {routeInfo && estimatedDaysCalc > 0 && (
+                    <>
+                      <View style={styles.jobEstimateDivider} />
+                      <View style={styles.jobEstimateItem}>
+                        <Text style={styles.jobEstimateValue}>
+                          {estimatedDaysCalc < 1 ? '<1' : `~${Math.ceil(estimatedDaysCalc)}`}
+                        </Text>
+                        <Text style={styles.jobEstimateLabel}>
+                          {Math.ceil(estimatedDaysCalc) === 1 ? 'Work Day' : 'Work Days'}
+                        </Text>
+                      </View>
+                    </>
+                  )}
+                </View>
+                {calculatedCost > 0 && (
+                  <View style={styles.jobEstimateCost}>
+                    <Text style={styles.jobEstimateCostLabel}>Estimated Cost</Text>
+                    <Text style={styles.jobEstimateCostValue}>
+                      ${calculatedCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Text>
+                  </View>
+                )}
+                {routeInfo && calculatedTrips > 0 && (
+                  <Text style={styles.jobEstimateNote}>
+                    {trucksNeeded} truck{trucksNeeded > 1 ? 's' : ''} × {tripsPerTruck} trip{tripsPerTruck > 1 ? 's' : ''} × {roundTripMinutes < 60 ? `${Math.round(roundTripMinutes)} min` : `${Math.floor(roundTripMinutes / 60)}h ${Math.round(roundTripMinutes % 60)}m`} round trip
+                  </Text>
+                )}
               </View>
             ) : (
               <>
@@ -1864,6 +1934,77 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 13,
     color: Colors.primary,
+  },
+  jobEstimateCard: {
+    marginTop: 16,
+    backgroundColor: 'rgba(255,153,0,0.06)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,153,0,0.2)',
+    padding: 16,
+  },
+  jobEstimateHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    marginBottom: 14,
+  },
+  jobEstimateTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
+  jobEstimateGrid: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-around' as const,
+    alignItems: 'center' as const,
+  },
+  jobEstimateItem: {
+    alignItems: 'center' as const,
+    flex: 1,
+  },
+  jobEstimateValue: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 20,
+    color: Colors.text,
+  },
+  jobEstimateLabel: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  jobEstimateDivider: {
+    width: 1,
+    height: 30,
+    backgroundColor: 'rgba(255,153,0,0.2)',
+  },
+  jobEstimateCost: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,153,0,0.15)',
+  },
+  jobEstimateCostLabel: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  jobEstimateCostValue: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 18,
+    color: Colors.success,
+  },
+  jobEstimateNote: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    textAlign: 'center' as const,
+    marginTop: 10,
   },
   capacityRow: {
     flexDirection: 'row' as const,
