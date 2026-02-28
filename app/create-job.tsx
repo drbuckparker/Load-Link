@@ -495,41 +495,43 @@ export default function CreateJobScreen() {
 
         {showProjectDropdown && (
           <View style={styles.dropdownList}>
-            {filteredProjects.length > 0 ? (
-              filteredProjects.map((p: any) => {
-                const isSelected = projectId === String(p.id);
-                return (
-                  <Pressable
-                    key={p.id}
-                    style={[styles.dropdownItem, isSelected && styles.dropdownItemActive]}
-                    onPress={() => selectProject(String(p.id), p.name)}
-                  >
-                    <Ionicons
-                      name="folder"
-                      size={18}
-                      color={isSelected ? Colors.primary : Colors.textSecondary}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextActive]}>
-                        {p.name}
-                      </Text>
-                      {p.job_count > 0 && (
-                        <Text style={styles.dropdownItemSub}>
-                          {p.job_count} job{p.job_count !== 1 ? 's' : ''}
+            <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+              {filteredProjects.length > 0 ? (
+                filteredProjects.map((p: any) => {
+                  const isSelected = projectId === String(p.id);
+                  return (
+                    <Pressable
+                      key={p.id}
+                      style={[styles.dropdownItem, isSelected && styles.dropdownItemActive]}
+                      onPress={() => selectProject(String(p.id), p.name)}
+                    >
+                      <Ionicons
+                        name="folder"
+                        size={18}
+                        color={isSelected ? Colors.primary : Colors.textSecondary}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextActive]}>
+                          {p.name}
                         </Text>
-                      )}
-                    </View>
-                    {isSelected && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                  </Pressable>
-                );
-              })
-            ) : (
-              <View style={styles.dropdownEmpty}>
-                <Text style={styles.dropdownEmptyText}>
-                  {projectName.trim() ? 'No matching projects' : 'No projects yet'}
-                </Text>
-              </View>
-            )}
+                        {p.job_count > 0 && (
+                          <Text style={styles.dropdownItemSub}>
+                            {p.job_count} job{p.job_count !== 1 ? 's' : ''}
+                          </Text>
+                        )}
+                      </View>
+                      {isSelected && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
+                    </Pressable>
+                  );
+                })
+              ) : (
+                <View style={styles.dropdownEmpty}>
+                  <Text style={styles.dropdownEmptyText}>
+                    {projectName.trim() ? 'No matching projects' : 'No projects yet'}
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
           </View>
         )}
       </View>
@@ -562,15 +564,17 @@ export default function CreateJobScreen() {
               </View>
               {showMaterialDropdown && filteredMaterials.length > 0 && (
                 <View style={styles.materialDropdown}>
-                  {filteredMaterials.map((m) => (
-                    <Pressable
-                      key={m}
-                      style={styles.materialDropdownItem}
-                      onPress={() => { setMaterial(m); setShowMaterialDropdown(false); }}
-                    >
-                      <Text style={styles.materialDropdownText}>{m}</Text>
-                    </Pressable>
-                  ))}
+                  <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+                    {filteredMaterials.map((m) => (
+                      <Pressable
+                        key={m}
+                        style={styles.materialDropdownItem}
+                        onPress={() => { setMaterial(m); setShowMaterialDropdown(false); }}
+                      >
+                        <Text style={styles.materialDropdownText}>{m}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
                 </View>
               )}
             </View>
