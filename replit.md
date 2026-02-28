@@ -59,12 +59,16 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `POST /api/job-runs/:runId/clock-out` - End a job run (1hr min, 15min increments)
 
 ### Jobs (Contractor)
-- `GET /api/contractor/jobs` - List contractor's posted jobs with application counts
+- `GET /api/contractor/jobs` - List contractor's posted jobs with application counts (query params: status, search, date, project_id)
 - `POST /api/contractor/jobs` - Create a new job posting
 - `DELETE /api/jobs/:id` - Cancel/delete a job
 - `GET /api/jobs/:id/assignments` - Get driver applications for a job
 - `POST /api/jobs/:id/assignments/:assignmentId/approve` - Approve a driver
 - `POST /api/jobs/:id/assignments/:assignmentId/reject` - Reject a driver
+
+### Projects (Contractor)
+- `GET /api/projects` - List contractor's projects with job counts
+- `POST /api/projects` - Create a new project (name, job_number, site_address, notes)
 
 ### Vehicles
 - `GET /api/vehicles` - List user's vehicles
@@ -165,3 +169,10 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Calendar day popup: direct "Mark Available" / "Mark Unavailable" toggle buttons (no more long-press-only modal)
 - Bulk availability actions: "All Weekdays Available" and "All Weekends Available" buttons in day popup
 - Individual day overrides: tap any day after bulk action to toggle that specific day's availability
+- Driver calendar availability controls mirrored from contractor view (inline Mark Available/Unavailable + bulk actions)
+- Jobs/Projects toggle on contractor My Jobs screen: switch between job list and project list
+- Create Project modal with name, job number, site address, notes
+- Project cards show job count, site address, awarded amount, status
+- Tapping a project filters jobs view to show only that project's jobs
+- FAB context-aware: creates project on Projects tab, creates job on Jobs tab (pre-fills project when inside project view)
+- create-job.tsx accepts projectId URL param to pre-fill project selection

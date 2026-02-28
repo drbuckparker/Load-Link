@@ -1,12 +1,14 @@
-import { useState, useMemo, useEffect } from 'react';
-import { View, Text, TextInput, Pressable, FlatList, StyleSheet, Platform, ActivityIndicator } from 'react-native';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { View, Text, TextInput, Pressable, FlatList, StyleSheet, Platform, ActivityIndicator, Modal, Alert } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor, timeAgo } from '@/lib/mock-data';
+import { apiRequest } from '@/lib/query-client';
 import JobCard from '@/components/JobCard';
 
 function isContractorRole(role?: string) {
@@ -46,7 +48,20 @@ function mapDbJob(raw: any): Job {
     totalTonsNeeded: raw.total_tons_needed || raw.totalTonsNeeded,
     createdAt: raw.created_at || raw.createdAt || '',
     projectName: raw.project_name || raw.projectName,
+    projectId: raw.project_id || raw.projectId,
   };
+}
+
+interface ProjectItem {
+  id: string;
+  name: string;
+  job_number: string | null;
+  awarded_amount: string | null;
+  status: string;
+  notes: string | null;
+  site_address: string | null;
+  created_at: string;
+  job_count: number;
 }
 
 const DRIVER_FILTERS = ['Open', 'My Jobs', 'Completed'] as const;
@@ -57,22 +72,30 @@ export default function JobsBrowseScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isContractor = isContractorRole(user?.role);
-  const params = useLocalSearchParams<{ filter?: string; date?: string }>();
+  const params = useLocalSearchParams<{ filter?: string; date?: string; tab?: string; projectId?: string }>();
+  const queryClient = useQueryClient();
 
+  const [activeTab, setActiveTab] = useState<'jobs' | 'projects'>(params.tab === 'projects' ? 'projects' : 'jobs');
   const [activeFilter, setActiveFilter] = useState<string>(params.filter || 'Open');
   const [dateFilter, setDateFilter] = useState<string | undefined>(params.date || undefined);
+  const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(params.projectId || null);
 
   useEffect(() => {
-    if (params.filter) {
-      setActiveFilter(params.filter);
-    }
-    if (params.date) {
-      setDateFilter(params.date);
-    }
-  }, [params.filter, params.date]);
+    if (params.filter) setActiveFilter(params.filter);
+    if (params.date) setDateFilter(params.date);
+    if (params.tab === 'projects') setActiveTab('projects');
+    if (params.projectId) setSelectedProjectFilter(params.projectId);
+  }, [params.filter, params.date, params.tab, params.projectId]);
+
   const [search, setSearch] = useState('');
   const [showTruckFilter, setShowTruckFilter] = useState(false);
   const [selectedTruckType, setSelectedTruckType] = useState<string | null>(null);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectJobNumber, setNewProjectJobNumber] = useState('');
+  const [newProjectSiteAddress, setNewProjectSiteAddress] = useState('');
+  const [newProjectNotes, setNewProjectNotes] = useState('');
+  const [projectSearch, setProjectSearch] = useState('');
 
   const statusParam = useMemo(() => {
     if (activeFilter === 'All') return undefined;
@@ -92,15 +115,40 @@ export default function JobsBrowseScreen() {
       p.set('driver_id', user.id);
     }
     if (dateFilter) p.set('date', dateFilter);
+    if (selectedProjectFilter) p.set('project_id', selectedProjectFilter);
     return p.toString();
-  }, [statusParam, selectedTruckType, search, isContractor, user?.id, activeFilter, dateFilter]);
+  }, [statusParam, selectedTruckType, search, isContractor, user?.id, activeFilter, dateFilter, selectedProjectFilter]);
 
   const endpoint = isContractor ? '/api/contractor/jobs' : '/api/jobs';
   const queryUrl = queryParams ? `${endpoint}?${queryParams}` : endpoint;
 
   const { data: rawJobs, isLoading, refetch } = useQuery<any[]>({
     queryKey: [queryUrl],
-    enabled: !!user,
+    enabled: !!user && activeTab === 'jobs',
+  });
+
+  const { data: projects = [], isLoading: projectsLoading, refetch: refetchProjects } = useQuery<ProjectItem[]>({
+    queryKey: ['/api/projects'],
+    enabled: !!user && isContractor,
+  });
+
+  const createProjectMutation = useMutation({
+    mutationFn: async (data: { name: string; job_number?: string; site_address?: string; notes?: string }) => {
+      const res = await apiRequest('POST', '/api/projects', data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
+      setShowCreateProject(false);
+      setNewProjectName('');
+      setNewProjectJobNumber('');
+      setNewProjectSiteAddress('');
+      setNewProjectNotes('');
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: () => {
+      Alert.alert('Error', 'Failed to create project');
+    },
   });
 
   const jobs = useMemo(() => {
@@ -108,6 +156,19 @@ export default function JobsBrowseScreen() {
     const list = Array.isArray(rawJobs) ? rawJobs : [];
     return list.map(mapDbJob);
   }, [rawJobs]);
+
+  const filteredProjects = useMemo(() => {
+    if (!projectSearch.trim()) return projects;
+    return projects.filter(p =>
+      (p.name || '').toLowerCase().includes(projectSearch.toLowerCase()) ||
+      (p.job_number || '').toLowerCase().includes(projectSearch.toLowerCase())
+    );
+  }, [projects, projectSearch]);
+
+  const selectedProjectData = useMemo(() => {
+    if (!selectedProjectFilter) return null;
+    return projects.find(p => String(p.id) === selectedProjectFilter) || null;
+  }, [selectedProjectFilter, projects]);
 
   const topPadding = Platform.OS === 'web' ? 67 : insets.top;
   const filters = isContractor ? CONTRACTOR_FILTERS : DRIVER_FILTERS;
@@ -121,7 +182,7 @@ export default function JobsBrowseScreen() {
         style={({ pressed }) => [styles.cardContainer, pressed && styles.cardPressed]}
         onPress={() => router.push(`/job/${item.id}`)}
       >
-        {item.projectName && (
+        {item.projectName && !selectedProjectFilter && (
           <Text style={styles.cardProjectName} numberOfLines={1}>{item.projectName}</Text>
         )}
         <View style={styles.cardHeader}>
@@ -202,10 +263,81 @@ export default function JobsBrowseScreen() {
     );
   }
 
+  function renderProjectCard({ item }: { item: ProjectItem }) {
+    const isActive = item.status === 'active';
+    return (
+      <Pressable
+        style={({ pressed }) => [styles.projectCard, pressed && styles.cardPressed]}
+        onPress={() => {
+          if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          setSelectedProjectFilter(String(item.id));
+          setActiveTab('jobs');
+          setActiveFilter('All');
+        }}
+      >
+        <View style={styles.projectCardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.projectCardName} numberOfLines={1}>{item.name}</Text>
+            {item.job_number ? (
+              <Text style={styles.projectJobNumber}>#{item.job_number}</Text>
+            ) : null}
+          </View>
+          <View style={[styles.projectStatusBadge, {
+            backgroundColor: isActive ? Colors.successBg : Colors.muted
+          }]}>
+            <Text style={[styles.projectStatusText, {
+              color: isActive ? Colors.success : Colors.textMuted
+            }]}>{item.status?.toUpperCase() || 'ACTIVE'}</Text>
+          </View>
+        </View>
+
+        {item.site_address ? (
+          <View style={styles.projectDetailRow}>
+            <Ionicons name="location-outline" size={14} color={Colors.textMuted} />
+            <Text style={styles.projectDetailText} numberOfLines={1}>{item.site_address}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.projectFooter}>
+          <View style={styles.projectStat}>
+            <Ionicons name="briefcase-outline" size={15} color={Colors.primary} />
+            <Text style={styles.projectStatText}>{item.job_count} job{item.job_count !== 1 ? 's' : ''}</Text>
+          </View>
+          {item.awarded_amount && Number(item.awarded_amount) > 0 ? (
+            <View style={styles.projectStat}>
+              <Ionicons name="cash-outline" size={15} color={Colors.success} />
+              <Text style={[styles.projectStatText, { color: Colors.success }]}>
+                ${Number(item.awarded_amount).toLocaleString()}
+              </Text>
+            </View>
+          ) : null}
+          <Text style={styles.timeAgoText}>{timeAgo(item.created_at)}</Text>
+        </View>
+
+        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 14, top: '50%' }} />
+      </Pressable>
+    );
+  }
+
+  const handleCreateProject = useCallback(() => {
+    if (!newProjectName.trim()) return;
+    createProjectMutation.mutate({
+      name: newProjectName.trim(),
+      ...(newProjectJobNumber.trim() ? { job_number: newProjectJobNumber.trim() } : {}),
+      ...(newProjectSiteAddress.trim() ? { site_address: newProjectSiteAddress.trim() } : {}),
+      ...(newProjectNotes.trim() ? { notes: newProjectNotes.trim() } : {}),
+    });
+  }, [newProjectName, newProjectJobNumber, newProjectSiteAddress, newProjectNotes]);
+
   return (
     <View style={[styles.container, { paddingTop: topPadding }]}>
       <View style={styles.header}>
         <Pressable onPress={() => {
+          if (selectedProjectFilter) {
+            setSelectedProjectFilter(null);
+            setActiveTab('projects');
+            return;
+          }
           if (router.canGoBack()) {
             router.back();
           } else {
@@ -214,59 +346,44 @@ export default function JobsBrowseScreen() {
         }} style={styles.backButton} hitSlop={8}>
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>{isContractor ? 'MY JOBS' : 'FIND LOADS'}</Text>
+        <Text style={styles.headerTitle}>
+          {selectedProjectFilter && selectedProjectData
+            ? selectedProjectData.name.toUpperCase()
+            : isContractor ? 'MY JOBS' : 'FIND LOADS'}
+        </Text>
         <View style={{ width: 44 }} />
       </View>
 
-      <View style={styles.searchRow}>
-        <View style={styles.searchBar}>
-          <Ionicons name="search" size={18} color={Colors.textMuted} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search jobs..."
-            placeholderTextColor={Colors.textMuted}
-            value={search}
-            onChangeText={setSearch}
-            returnKeyType="search"
-          />
-          {search.length > 0 && (
-            <Pressable onPress={() => setSearch('')} hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
-            </Pressable>
-          )}
+      {isContractor && !selectedProjectFilter && (
+        <View style={styles.tabToggleRow}>
+          <Pressable
+            style={[styles.tabToggle, activeTab === 'jobs' && styles.tabToggleActive]}
+            onPress={() => { setActiveTab('jobs'); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+          >
+            <Ionicons name="briefcase" size={16} color={activeTab === 'jobs' ? Colors.primary : Colors.textMuted} />
+            <Text style={[styles.tabToggleText, activeTab === 'jobs' && styles.tabToggleTextActive]}>Jobs</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.tabToggle, activeTab === 'projects' && styles.tabToggleActive]}
+            onPress={() => { setActiveTab('projects'); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+          >
+            <Ionicons name="folder" size={16} color={activeTab === 'projects' ? Colors.primary : Colors.textMuted} />
+            <Text style={[styles.tabToggleText, activeTab === 'projects' && styles.tabToggleTextActive]}>Projects</Text>
+          </Pressable>
         </View>
-        <Pressable
-          style={[styles.filterButton, showTruckFilter && styles.filterButtonActive]}
-          onPress={() => setShowTruckFilter(!showTruckFilter)}
-          hitSlop={4}
-        >
-          <Ionicons name="options-outline" size={20} color={showTruckFilter ? Colors.primary : Colors.textSecondary} />
-        </Pressable>
-      </View>
+      )}
 
-      <View style={styles.chipRow}>
-        {filters.map((filter) => {
-          const isActive = activeFilter === filter;
-          return (
-            <Pressable
-              key={filter}
-              style={[styles.chip, isActive && styles.chipActive]}
-              onPress={() => setActiveFilter(filter)}
-            >
-              <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{filter}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {dateFilter && (
-        <View style={styles.dateBanner}>
-          <Ionicons name="calendar-outline" size={16} color={Colors.primary} />
-          <Text style={styles.dateBannerText}>
-            Showing jobs for {new Date(dateFilter + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
+      {selectedProjectFilter && selectedProjectData && (
+        <View style={styles.projectBanner}>
+          <Ionicons name="folder" size={16} color={Colors.primary} />
+          <Text style={styles.projectBannerText} numberOfLines={1}>
+            Showing jobs in "{selectedProjectData.name}"
           </Text>
           <Pressable
-            onPress={() => setDateFilter(undefined)}
+            onPress={() => {
+              setSelectedProjectFilter(null);
+              setActiveTab('projects');
+            }}
             hitSlop={8}
           >
             <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
@@ -274,66 +391,274 @@ export default function JobsBrowseScreen() {
         </View>
       )}
 
-      {showTruckFilter && (
-        <View style={styles.truckFilterSection}>
-          <Text style={styles.truckFilterLabel}>Truck Type</Text>
-          <View style={styles.truckFilterRow}>
-            <Pressable
-              style={[styles.truckChip, !selectedTruckType && styles.truckChipActive]}
-              onPress={() => setSelectedTruckType(null)}
-            >
-              <Text style={[styles.truckChipText, !selectedTruckType && styles.truckChipTextActive]}>All</Text>
-            </Pressable>
-            {TRUCK_TYPES.map((tt) => {
-              const isActive = selectedTruckType === tt;
-              return (
-                <Pressable
-                  key={tt}
-                  style={[styles.truckChip, isActive && styles.truckChipActive]}
-                  onPress={() => setSelectedTruckType(isActive ? null : tt)}
-                >
-                  <MaterialCommunityIcons name="dump-truck" size={14} color={isActive ? Colors.primary : Colors.textSecondary} />
-                  <Text style={[styles.truckChipText, isActive && styles.truckChipTextActive]}>{formatTruckType(tt)}</Text>
+      {activeTab === 'jobs' && (
+        <>
+          <View style={styles.searchRow}>
+            <View style={styles.searchBar}>
+              <Ionicons name="search" size={18} color={Colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search jobs..."
+                placeholderTextColor={Colors.textMuted}
+                value={search}
+                onChangeText={setSearch}
+                returnKeyType="search"
+              />
+              {search.length > 0 && (
+                <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
                 </Pressable>
-              );
-            })}
+              )}
+            </View>
+            <Pressable
+              style={[styles.filterButton, showTruckFilter && styles.filterButtonActive]}
+              onPress={() => setShowTruckFilter(!showTruckFilter)}
+              hitSlop={4}
+            >
+              <Ionicons name="options-outline" size={20} color={showTruckFilter ? Colors.primary : Colors.textSecondary} />
+            </Pressable>
           </View>
-        </View>
+
+          {!selectedProjectFilter && (
+            <View style={styles.chipRow}>
+              {filters.map((filter) => {
+                const isActive = activeFilter === filter;
+                return (
+                  <Pressable
+                    key={filter}
+                    style={[styles.chip, isActive && styles.chipActive]}
+                    onPress={() => setActiveFilter(filter)}
+                  >
+                    <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{filter}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
+
+          {dateFilter && (
+            <View style={styles.dateBanner}>
+              <Ionicons name="calendar-outline" size={16} color={Colors.primary} />
+              <Text style={styles.dateBannerText}>
+                Showing jobs for {new Date(dateFilter + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
+              </Text>
+              <Pressable onPress={() => setDateFilter(undefined)} hitSlop={8}>
+                <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+              </Pressable>
+            </View>
+          )}
+
+          {showTruckFilter && (
+            <View style={styles.truckFilterSection}>
+              <Text style={styles.truckFilterLabel}>Truck Type</Text>
+              <View style={styles.truckFilterRow}>
+                <Pressable
+                  style={[styles.truckChip, !selectedTruckType && styles.truckChipActive]}
+                  onPress={() => setSelectedTruckType(null)}
+                >
+                  <Text style={[styles.truckChipText, !selectedTruckType && styles.truckChipTextActive]}>All</Text>
+                </Pressable>
+                {TRUCK_TYPES.map((tt) => {
+                  const isActive = selectedTruckType === tt;
+                  return (
+                    <Pressable
+                      key={tt}
+                      style={[styles.truckChip, isActive && styles.truckChipActive]}
+                      onPress={() => setSelectedTruckType(isActive ? null : tt)}
+                    >
+                      <MaterialCommunityIcons name="dump-truck" size={14} color={isActive ? Colors.primary : Colors.textSecondary} />
+                      <Text style={[styles.truckChipText, isActive && styles.truckChipTextActive]}>{formatTruckType(tt)}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
+          {isLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : jobs.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No jobs found</Text>
+              <Text style={styles.emptySubtitle}>
+                {selectedProjectFilter ? 'No jobs in this project yet. Tap + to add one.' :
+                  search ? 'Try adjusting your search or filters' : 'Check back later for new opportunities'}
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={jobs}
+              keyExtractor={(item) => item.id}
+              renderItem={isContractor ? renderContractorCard : renderDriverCard}
+              contentContainerStyle={styles.listContent}
+              ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+              showsVerticalScrollIndicator={false}
+              onRefresh={refetch}
+              refreshing={false}
+            />
+          )}
+        </>
       )}
 
-      {isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-        </View>
-      ) : jobs.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
-          <Text style={styles.emptyTitle}>No jobs found</Text>
-          <Text style={styles.emptySubtitle}>
-            {search ? 'Try adjusting your search or filters' : 'Check back later for new opportunities'}
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={jobs}
-          keyExtractor={(item) => item.id}
-          renderItem={isContractor ? renderContractorCard : renderDriverCard}
-          contentContainerStyle={styles.listContent}
-          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
-          showsVerticalScrollIndicator={false}
-          onRefresh={refetch}
-          refreshing={false}
-        />
+      {activeTab === 'projects' && isContractor && (
+        <>
+          <View style={styles.searchRow}>
+            <View style={styles.searchBar}>
+              <Ionicons name="search" size={18} color={Colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search projects..."
+                placeholderTextColor={Colors.textMuted}
+                value={projectSearch}
+                onChangeText={setProjectSearch}
+                returnKeyType="search"
+              />
+              {projectSearch.length > 0 && (
+                <Pressable onPress={() => setProjectSearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+
+          {projectsLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : filteredProjects.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="folder-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>
+                {projectSearch ? 'No matching projects' : 'No projects yet'}
+              </Text>
+              <Text style={styles.emptySubtitle}>
+                {projectSearch ? 'Try a different search term' : 'Create a project to organize your jobs'}
+              </Text>
+              {!projectSearch && (
+                <Pressable
+                  style={styles.emptyCreateBtn}
+                  onPress={() => setShowCreateProject(true)}
+                >
+                  <Ionicons name="add" size={18} color={Colors.primaryForeground} />
+                  <Text style={styles.emptyCreateBtnText}>Create Project</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <FlatList
+              data={filteredProjects}
+              keyExtractor={(item) => String(item.id)}
+              renderItem={renderProjectCard}
+              contentContainerStyle={styles.listContent}
+              ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+              showsVerticalScrollIndicator={false}
+              onRefresh={refetchProjects}
+              refreshing={false}
+            />
+          )}
+        </>
       )}
 
       {isContractor && (
         <Pressable
           style={[styles.fab, { bottom: Platform.OS === 'web' ? 34 + 20 : insets.bottom + 20 }]}
-          onPress={() => router.push('/create-job')}
+          onPress={() => {
+            if (activeTab === 'projects') {
+              setShowCreateProject(true);
+            } else {
+              if (selectedProjectFilter) {
+                router.push({ pathname: '/create-job', params: { projectId: selectedProjectFilter } } as any);
+              } else {
+                router.push('/create-job');
+              }
+            }
+          }}
         >
           <Ionicons name="add" size={28} color={Colors.primaryForeground} />
         </Pressable>
       )}
+
+      <Modal
+        visible={showCreateProject}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCreateProject(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowCreateProject(false)}>
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>NEW PROJECT</Text>
+              <Pressable onPress={() => setShowCreateProject(false)} hitSlop={8}>
+                <Ionicons name="close" size={24} color={Colors.textSecondary} />
+              </Pressable>
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Project Name *</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. Black Creek Development"
+                placeholderTextColor={Colors.textMuted}
+                value={newProjectName}
+                onChangeText={setNewProjectName}
+                autoFocus
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Job Number</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. JOB-2026-001"
+                placeholderTextColor={Colors.textMuted}
+                value={newProjectJobNumber}
+                onChangeText={setNewProjectJobNumber}
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Site Address</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. 123 Main St"
+                placeholderTextColor={Colors.textMuted}
+                value={newProjectSiteAddress}
+                onChangeText={setNewProjectSiteAddress}
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Notes</Text>
+              <TextInput
+                style={[styles.modalInput, { height: 72, textAlignVertical: 'top' }]}
+                placeholder="Optional project notes..."
+                placeholderTextColor={Colors.textMuted}
+                value={newProjectNotes}
+                onChangeText={setNewProjectNotes}
+                multiline
+              />
+            </View>
+
+            <Pressable
+              style={[styles.modalCreateBtn, !newProjectName.trim() && { opacity: 0.5 }]}
+              onPress={handleCreateProject}
+              disabled={!newProjectName.trim() || createProjectMutation.isPending}
+            >
+              {createProjectMutation.isPending ? (
+                <ActivityIndicator size="small" color={Colors.primaryForeground} />
+              ) : (
+                <>
+                  <Ionicons name="add-circle" size={20} color={Colors.primaryForeground} />
+                  <Text style={styles.modalCreateBtnText}>Create Project</Text>
+                </>
+              )}
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -361,6 +686,39 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: Colors.text,
     letterSpacing: 1.5,
+    flex: 1,
+    textAlign: 'center',
+  },
+  tabToggleRow: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  tabToggle: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    minHeight: 44,
+  },
+  tabToggleActive: {
+    backgroundColor: Colors.primaryLight,
+  },
+  tabToggleText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.textMuted,
+  },
+  tabToggleTextActive: {
+    color: Colors.primary,
   },
   searchRow: {
     flexDirection: 'row',
@@ -449,6 +807,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.primary,
   },
+  projectBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.primaryLight,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  projectBannerText: {
+    flex: 1,
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.primary,
+  },
   truckFilterSection: {
     paddingHorizontal: 16,
     marginBottom: 12,
@@ -510,6 +885,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textMuted,
     textAlign: 'center',
+  },
+  emptyCreateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 8,
+    minHeight: 44,
+  },
+  emptyCreateBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.primaryForeground,
   },
   listContent: {
     paddingHorizontal: 16,
@@ -662,5 +1053,133 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
+  },
+  projectCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 10,
+  },
+  projectCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingRight: 20,
+  },
+  projectCardName: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    letterSpacing: 0.5,
+  },
+  projectJobNumber: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  projectStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  projectStatusText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+    letterSpacing: 0.5,
+  },
+  projectDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  projectDetailText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    flex: 1,
+  },
+  projectFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  projectStat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  projectStatText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.primary,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: Colors.card,
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    letterSpacing: 1.5,
+  },
+  modalField: {
+    marginBottom: 16,
+  },
+  modalLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginBottom: 6,
+    letterSpacing: 0.5,
+  },
+  modalInput: {
+    backgroundColor: Colors.background,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    height: 44,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 15,
+    color: Colors.text,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  modalCreateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    marginTop: 4,
+    minHeight: 48,
+  },
+  modalCreateBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.primaryForeground,
   },
 });

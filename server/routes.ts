@@ -1992,9 +1992,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
-      const { date, status, search } = req.query;
+      const { date, status, search, project_id } = req.query;
 
       const conditions: any[] = [eq(jobs.contractor_id, userId)];
+
+      if (project_id) {
+        conditions.push(eq(jobs.project_id, project_id as string));
+      }
 
       if (date) {
         const dayStart = new Date(date as string + "T00:00:00.000Z");
@@ -2923,13 +2927,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
-      const { name } = req.body;
+      const { name, job_number, site_address, notes } = req.body;
 
       const [project] = await db
         .insert(contractorProjects)
         .values({
           contractor_id: userId,
           name,
+          ...(job_number ? { job_number } : {}),
+          ...(site_address ? { site_address } : {}),
+          ...(notes ? { notes } : {}),
         })
         .returning();
 

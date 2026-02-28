@@ -30,6 +30,7 @@ export interface Job {
   totalTonsNeeded?: number;
   createdAt: string;
   projectName?: string;
+  projectId?: string;
 }
 
 export interface Message {

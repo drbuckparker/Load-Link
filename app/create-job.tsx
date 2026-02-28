@@ -12,7 +12,7 @@ import {
   ActivityIndicator,
   Modal,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
@@ -42,9 +42,10 @@ const RATE_TYPES = [
 
 export default function CreateJobScreen() {
   const insets = useSafeAreaInsets();
+  const routeParams = useLocalSearchParams<{ projectId?: string }>();
   const [submitting, setSubmitting] = useState(false);
 
-  const [projectId, setProjectId] = useState('');
+  const [projectId, setProjectId] = useState(routeParams.projectId || '');
   const [projectName, setProjectName] = useState('');
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [material, setMaterial] = useState('');
@@ -94,6 +95,16 @@ export default function CreateJobScreen() {
   const { data: projects = [] } = useQuery<any[]>({
     queryKey: ['/api/projects'],
   });
+
+  useEffect(() => {
+    if (routeParams.projectId && projects.length > 0 && !projectName) {
+      const match = projects.find((p: any) => String(p.id) === routeParams.projectId);
+      if (match) {
+        setProjectId(String(match.id));
+        setProjectName(match.name || '');
+      }
+    }
+  }, [routeParams.projectId, projects]);
 
   const { data: pastMaterials = [] } = useQuery<string[]>({
     queryKey: ['/api/materials'],
