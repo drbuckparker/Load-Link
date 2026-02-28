@@ -650,15 +650,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const isFavorite = job.contractor_id ? await db
-        .select()
-        .from(contractorFavoriteDrivers)
-        .where(and(
-          eq(contractorFavoriteDrivers.contractor_id, job.contractor_id),
-          eq(contractorFavoriteDrivers.driver_id, userId)
-        ))
-        .limit(1)
-        .then(r => r.length > 0) : false;
+      let isFavorite = false;
+      try {
+        if (job.contractor_id) {
+          isFavorite = await db
+            .select()
+            .from(contractorFavoriteDrivers)
+            .where(and(
+              eq(contractorFavoriteDrivers.contractor_id, job.contractor_id),
+              eq(contractorFavoriteDrivers.driver_id, userId)
+            ))
+            .limit(1)
+            .then(r => r.length > 0);
+        }
+      } catch {}
 
       const assignmentStatus = isFavorite ? "approved" : "pending";
 
