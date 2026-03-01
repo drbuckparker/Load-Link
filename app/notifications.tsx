@@ -79,7 +79,12 @@ export default function NotificationsScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: Platform.OS === 'web' ? 67 : insets.top }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable onPress={() => {
+          try {
+            if (router.canGoBack()) { router.back(); return; }
+          } catch {}
+          router.replace('/(tabs)' as any);
+        }} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
         <Text style={styles.topBarTitle}>NOTIFICATIONS</Text>
