@@ -190,6 +190,18 @@ export default function JobDetailScreen() {
   }, [job?.status]);
 
   useEffect(() => {
+    if (jobData?.runs && !isRunning) {
+      const activeRun = (jobData.runs as any[]).find((r: any) => r.status === 'active' && !r.ended_at && !r.clock_out_time);
+      if (activeRun && activeRun.driver_id === user?.id) {
+        const startedAt = new Date(activeRun.started_at || activeRun.startedAt).getTime();
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        setElapsedSeconds(elapsed);
+        setIsRunning(true);
+      }
+    }
+  }, [jobData?.runs, user?.id]);
+
+  useEffect(() => {
     if (isRunning) {
       intervalRef.current = setInterval(() => {
         setElapsedSeconds(prev => prev + 1);
@@ -227,7 +239,7 @@ export default function JobDetailScreen() {
 
   const statusColor = getStatusColor(jobStatus);
   const jobTypeColor = getJobTypeColor(job.jobType);
-  const isMyJob = job.driverId === user?.id;
+  const isMyJob = job.driverId === user?.id || (myAssignment && myAssignment.status === 'approved');
   const canAccept = (jobStatus === 'open' || jobStatus === 'pending') && !hasApplied && !isContractor;
   const canStart = (jobStatus === 'accepted' || jobStatus === 'in_progress') && isMyJob;
 
