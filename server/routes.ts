@@ -2114,7 +2114,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           and(
             eq(jobAssignments.vehicle_id, vehicleId),
             eq(jobAssignments.driver_id, userId),
-            inArray(jobAssignments.status, ['accepted', 'approved', 'pending'])
+            inArray(jobAssignments.status, ['approved', 'pending'])
           )
         );
 
