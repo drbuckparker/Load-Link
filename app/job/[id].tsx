@@ -185,6 +185,8 @@ export default function JobDetailScreen() {
   const [uploadingTicket, setUploadingTicket] = useState(false);
   const [showTicketPrompt, setShowTicketPrompt] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const [previewBase64, setPreviewBase64] = useState<string | null>(null);
   const [showNextDayBanner, setShowNextDayBanner] = useState(false);
   const [nextDayDate, setNextDayDate] = useState<string>('');
 
@@ -561,7 +563,7 @@ export default function JobDetailScreen() {
     }
   }
 
-  async function pickAndUploadWeightTicket(useCamera: boolean) {
+  async function pickWeightTicketPhoto(useCamera: boolean) {
     try {
       let result;
       if (useCamera) {
@@ -591,23 +593,33 @@ export default function JobDetailScreen() {
       if (result.canceled || !result.assets?.[0]) return;
 
       const asset = result.assets[0];
-      const runId = completedRunId || (jobData?.runs || []).find((r: any) => r.status === 'completed')?.id;
-      if (!runId) {
-        Alert.alert('Error', 'No completed run found to attach this ticket to.');
-        return;
-      }
+      setPreviewUri(asset.uri);
+      setPreviewBase64(asset.base64 || null);
+      setWeightTicketModalVisible(false);
+    } catch (err) {
+      console.error('Weight ticket pick error:', err);
+      Alert.alert('Error', 'Failed to select photo. Please try again.');
+    }
+  }
 
+  async function confirmAndUploadWeightTicket() {
+    if (!previewBase64) return;
+    const runId = completedRunId || (jobData?.runs || []).find((r: any) => r.status === 'completed' || r.status === 'active')?.id;
+    if (!runId) {
+      Alert.alert('Error', 'No job run found to attach this ticket to.');
+      return;
+    }
+    try {
       setUploadingTicket(true);
-      const imageBase64 = `data:image/jpeg;base64,${asset.base64}`;
-
+      const imageBase64 = `data:image/jpeg;base64,${previewBase64}`;
       await apiRequest('POST', `/api/job-runs/${runId}/weight-tickets`, {
         image_base64: imageBase64,
       });
-
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/weight-tickets`] });
       setShowTicketPrompt(false);
-      setWeightTicketModalVisible(false);
+      setPreviewUri(null);
+      setPreviewBase64(null);
       Alert.alert('Uploaded', 'Weight ticket uploaded successfully.');
     } catch (err) {
       console.error('Weight ticket upload error:', err);
@@ -893,25 +905,50 @@ export default function JobDetailScreen() {
             <View style={styles.wtModalContent} onStartShouldSetResponder={() => true}>
               <Text style={styles.wtModalTitle}>Upload Weight Ticket</Text>
               <Text style={styles.wtModalSubtitle}>Take a photo or choose from your library</Text>
-              {uploadingTicket ? (
-                <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 30 }} />
-              ) : (
-                <View style={styles.wtModalButtons}>
-                  <Pressable style={styles.wtModalBtn} onPress={() => pickAndUploadWeightTicket(true)}>
-                    <Ionicons name="camera" size={32} color={Colors.primary} />
-                    <Text style={styles.wtModalBtnText}>Take Photo</Text>
-                  </Pressable>
-                  <Pressable style={styles.wtModalBtn} onPress={() => pickAndUploadWeightTicket(false)}>
-                    <Ionicons name="images" size={32} color={Colors.primary} />
-                    <Text style={styles.wtModalBtnText}>Choose Photo</Text>
-                  </Pressable>
-                </View>
-              )}
+              <View style={styles.wtModalButtons}>
+                <Pressable style={styles.wtModalBtn} onPress={() => pickWeightTicketPhoto(true)}>
+                  <Ionicons name="camera" size={32} color={Colors.primary} />
+                  <Text style={styles.wtModalBtnText}>Take Photo</Text>
+                </Pressable>
+                <Pressable style={styles.wtModalBtn} onPress={() => pickWeightTicketPhoto(false)}>
+                  <Ionicons name="images" size={32} color={Colors.primary} />
+                  <Text style={styles.wtModalBtnText}>Choose Photo</Text>
+                </Pressable>
+              </View>
               <Pressable style={styles.wtModalCancel} onPress={() => setWeightTicketModalVisible(false)}>
                 <Text style={styles.wtModalCancelText}>Cancel</Text>
               </Pressable>
             </View>
           </Pressable>
+        </Modal>
+
+        <Modal visible={!!previewUri} transparent animationType="fade" onRequestClose={() => { setPreviewUri(null); setPreviewBase64(null); }}>
+          <View style={styles.wtModalOverlay}>
+            <View style={styles.previewModalContent}>
+              <Text style={styles.wtModalTitle}>Review Photo</Text>
+              <Text style={styles.wtModalSubtitle}>Is this photo clear and readable?</Text>
+              {previewUri && (
+                <Image source={{ uri: previewUri }} style={styles.previewImage} resizeMode="contain" />
+              )}
+              {uploadingTicket ? (
+                <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+                  <ActivityIndicator size="large" color={Colors.primary} />
+                  <Text style={[styles.wtModalSubtitle, { marginTop: 8 }]}>Uploading...</Text>
+                </View>
+              ) : (
+                <View style={styles.previewActions}>
+                  <Pressable style={styles.previewConfirmBtn} onPress={confirmAndUploadWeightTicket}>
+                    <Ionicons name="checkmark-circle" size={22} color="#fff" />
+                    <Text style={styles.previewConfirmText}>Looks Good</Text>
+                  </Pressable>
+                  <Pressable style={styles.previewRetakeBtn} onPress={() => { setPreviewUri(null); setPreviewBase64(null); setWeightTicketModalVisible(true); }}>
+                    <Ionicons name="refresh" size={20} color={Colors.primary} />
+                    <Text style={styles.previewRetakeText}>Retake</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+          </View>
         </Modal>
 
         <View style={styles.section}>
@@ -2703,6 +2740,54 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 15,
     color: Colors.textMuted,
+  },
+  previewModalContent: {
+    backgroundColor: Colors.card,
+    borderRadius: 20,
+    padding: 20,
+    marginHorizontal: 24,
+    width: Dimensions.get('window').width - 48,
+    maxHeight: Dimensions.get('window').height * 0.8,
+    alignItems: 'center' as const,
+  },
+  previewImage: {
+    width: '100%' as any,
+    height: 300,
+    borderRadius: 12,
+    marginVertical: 16,
+    backgroundColor: '#000',
+  },
+  previewActions: {
+    width: '100%' as any,
+    gap: 10,
+  },
+  previewConfirmBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: '#2d6a3e',
+    borderRadius: 12,
+    paddingVertical: 14,
+    gap: 8,
+  },
+  previewConfirmText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: '#fff',
+  },
+  previewRetakeBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: 12,
+    paddingVertical: 14,
+    gap: 8,
+  },
+  previewRetakeText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.primary,
   },
   nextDayBanner: {
     backgroundColor: '#0d2818',
