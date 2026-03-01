@@ -78,6 +78,26 @@ function mapAssignment(a: any): Assignment {
   };
 }
 
+function getJobDateRange(scheduledDate: string, estimatedDays: number | string | null, includesWeekends: boolean): string[] {
+  if (!scheduledDate) return [];
+  const startDate = new Date(scheduledDate);
+  if (isNaN(startDate.getTime())) return [];
+  const days = Math.max(1, Math.ceil(parseFloat(String(estimatedDays || '1')) || 1));
+  const dates: string[] = [];
+  const current = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate()));
+  let added = 0;
+  while (added < days) {
+    const dow = current.getUTCDay();
+    if (includesWeekends || (dow !== 0 && dow !== 6)) {
+      const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
+      dates.push(key);
+      added++;
+    }
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 function mapJob(j: any): Job {
   return {
     id: j.id,
@@ -165,6 +185,8 @@ export default function JobDetailScreen() {
   const [uploadingTicket, setUploadingTicket] = useState(false);
   const [showTicketPrompt, setShowTicketPrompt] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showNextDayBanner, setShowNextDayBanner] = useState(false);
+  const [nextDayDate, setNextDayDate] = useState<string>('');
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -503,6 +525,32 @@ export default function JobDetailScreen() {
       setJobStatus('completed');
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+
+      const estDays = parseFloat(String(jobData?.estimated_days || jobData?.listed_days || '1')) || 1;
+      if (estDays > 1 && jobData?.scheduled_date) {
+        const scheduledDates = getJobDateRange(
+          jobData.scheduled_date,
+          jobData.listed_days || jobData.estimated_days,
+          jobData.includes_weekends ?? false
+        );
+        const now = new Date();
+        const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const todayIdx = scheduledDates.indexOf(todayKey);
+        const nextScheduledDate = todayIdx >= 0 && todayIdx < scheduledDates.length - 1
+          ? scheduledDates[todayIdx + 1]
+          : null;
+        if (nextScheduledDate) {
+          const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+          const tomorrowKey = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+          const isTomorrow = nextScheduledDate === tomorrowKey;
+          const nextDate = new Date(nextScheduledDate + 'T12:00:00');
+          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const label = isTomorrow ? dayNames[nextDate.getDay()] : `${dayNames[nextDate.getDay()]}, ${nextDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+          setNextDayDate(label);
+          setTimeout(() => setShowNextDayBanner(true), jobRequiresWeightTickets ? 800 : 300);
+        }
+      }
+
       if (jobRequiresWeightTickets) {
         setTimeout(() => setShowTicketPrompt(true), 500);
       }
@@ -820,6 +868,23 @@ export default function JobDetailScreen() {
                 <Text style={styles.ticketPromptLaterText}>Later</Text>
               </Pressable>
             </View>
+          </View>
+        )}
+
+        {showNextDayBanner && (
+          <View style={styles.nextDayBanner}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+              <View style={styles.nextDayIcon}>
+                <Ionicons name="calendar" size={22} color={Colors.primary} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.nextDayTitle}>BACK AT IT SOON</Text>
+                <Text style={styles.nextDayMsg}>You're scheduled for this same job on {nextDayDate}. See you then!</Text>
+              </View>
+            </View>
+            <Pressable onPress={() => setShowNextDayBanner(false)} hitSlop={12} style={{ padding: 4, marginLeft: 8 }}>
+              <Ionicons name="close" size={20} color={Colors.textMuted} />
+            </Pressable>
           </View>
         )}
 
@@ -2638,5 +2703,37 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 15,
     color: Colors.textMuted,
+  },
+  nextDayBanner: {
+    backgroundColor: '#0d2818',
+    borderRadius: 16,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#2d6a3e',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  nextDayIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,153,0,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  nextDayTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: '#4ade80',
+    letterSpacing: 0.5,
+  },
+  nextDayMsg: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 3,
+    lineHeight: 18,
   },
 });
