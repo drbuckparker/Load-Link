@@ -155,11 +155,13 @@ export default function ReviewScreen() {
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: Platform.OS === 'web' ? 67 : insets.top }]}>
         <Pressable onPress={() => {
-          if (router.canGoBack()) {
-            router.back();
-          } else {
-            router.replace('/(tabs)/messages' as any);
-          }
+          try {
+            if (router.canGoBack()) {
+              router.back();
+              return;
+            }
+          } catch {}
+          router.replace('/(tabs)/messages' as any);
         }} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>

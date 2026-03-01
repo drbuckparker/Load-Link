@@ -535,7 +535,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const r = result[0];
-      const job = {
+      const job: any = {
         ...r.job,
         contractor_name: r.contractor_name || "Unknown",
         contractor_company: r.contractor_company || "Unknown Company",
@@ -543,6 +543,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         contractor_email: r.contractor_email || "",
         project_name: r.project_name || null,
       };
+
+      if (r.job.driver_id) {
+        const [driverUser] = await db
+          .select({ full_name: users.full_name, company: users.company })
+          .from(users)
+          .where(eq(users.id, r.job.driver_id))
+          .limit(1);
+        if (driverUser) {
+          job.driver_name = driverUser.full_name;
+          job.driver_company = driverUser.company;
+        }
+      }
 
       const runs = await db
         .select()
