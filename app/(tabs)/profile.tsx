@@ -222,7 +222,7 @@ export default function ProfileScreen() {
                   <Pressable
                     key={v.id}
                     style={styles.infoRow}
-                    onPress={() => router.push('/vehicles')}
+                    onPress={() => router.push(`/vehicle-jobs/${v.id}` as any)}
                   >
                     <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
                     <Text style={styles.infoLabel}>{v.truck_number || `#${idx + 1}`}</Text>

@@ -2069,6 +2069,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ VEHICLES ============
 
+  app.get("/api/vehicles/:vehicleId/jobs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { vehicleId } = req.params;
+
+      const vehicle = await db.select().from(driverVehicles).where(eq(driverVehicles.id, vehicleId)).limit(1);
+      if (!vehicle.length || vehicle[0].driver_id !== userId) {
+        return res.status(404).json({ message: "Vehicle not found" });
+      }
+
+      const assignments = await db
+        .select({
+          assignment: jobAssignments,
+          job: jobs,
+          contractor: {
+            id: users.id,
+            name: users.name,
+            company: users.company,
+          },
+        })
+        .from(jobAssignments)
+        .innerJoin(jobs, eq(jobAssignments.job_id, jobs.id))
+        .leftJoin(users, eq(jobs.contractor_id, users.id))
+        .where(
+          and(
+            eq(jobAssignments.vehicle_id, vehicleId),
+            eq(jobAssignments.driver_id, userId),
+            inArray(jobAssignments.status, ['accepted', 'approved', 'pending'])
+          )
+        );
+
+      const result = assignments.map((a) => ({
+        ...a.job,
+        assignment_status: a.assignment.status,
+        contractor_name: a.contractor?.company || a.contractor?.name || 'Unknown',
+      }));
+
+      return res.json({ vehicle: vehicle[0], jobs: result });
+    } catch (err) {
+      console.error("Vehicle jobs error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
