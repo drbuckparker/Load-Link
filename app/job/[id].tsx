@@ -151,8 +151,9 @@ export default function JobDetailScreen() {
 
   const job = jobData ? mapJob(jobData) : null;
   const isMyPostedJob = isContractor && job?.contractorId === user?.id;
-  const myAssignment = (jobData?.assignments || []).find((a: any) => a.driver_id === user?.id);
-  const hasApplied = !!myAssignment;
+  const myAssignments = (jobData?.assignments || []).filter((a: any) => a.driver_id === user?.id);
+  const myAssignment = myAssignments[0] || null;
+  const hasApplied = myAssignments.length > 0;
   const myAssignmentStatus = myAssignment?.status || null;
 
   const { data: assignmentsData } = useQuery<any[]>({
@@ -195,6 +196,7 @@ export default function JobDetailScreen() {
   const [nextDayDate, setNextDayDate] = useState<string>('');
   const [backingOut, setBackingOut] = useState(false);
   const [confirmBackOut, setConfirmBackOut] = useState(false);
+  const [removingAssignmentId, setRemovingAssignmentId] = useState<string | null>(null);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -407,6 +409,29 @@ export default function JobDetailScreen() {
       Alert.alert('Error', e.message || 'Failed to accept job');
     }
     setAcceptingJob(false);
+  }
+
+  async function handleRemoveTruck(assignmentId: string) {
+    setBackingOut(true);
+    try {
+      const res = await apiRequest('DELETE', `/api/jobs/${id}/assignments/${assignmentId}`);
+      const result = await res.json();
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setRemovingAssignmentId(null);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] });
+      if (result.remainingAssignments === 0) {
+        try {
+          if (router.canGoBack()) { router.back(); return; }
+        } catch {}
+        router.replace('/(tabs)' as any);
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to remove truck');
+    }
+    setBackingOut(false);
   }
 
   function handleBackOut() {
@@ -1242,30 +1267,55 @@ export default function JobDetailScreen() {
         )}
 
         {hasApplied && !isContractor && (
-          <View style={{
-            flexDirection: 'row', alignItems: 'center', gap: 10,
-            backgroundColor: myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted'
-              ? 'rgba(34,197,94,0.1)' : 'rgba(255,153,0,0.1)',
-            borderRadius: 12, padding: 14, marginHorizontal: 16,
-            borderWidth: 1,
-            borderColor: myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted'
-              ? 'rgba(34,197,94,0.3)' : 'rgba(255,153,0,0.3)',
-          }}>
-            <Ionicons
-              name={myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted' ? "checkmark-circle" : "time"}
-              size={22}
-              color={myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted' ? Colors.success : Colors.primary}
-            />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.text, letterSpacing: 0.5 }}>
-                {myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted' ? 'YOU ARE ASSIGNED' : 'APPLICATION PENDING'}
-              </Text>
-              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginTop: 2 }}>
-                {myAssignmentStatus === 'approved' || myAssignmentStatus === 'accepted'
-                  ? 'You are confirmed for this job. Check your calendar for details.'
-                  : 'The company has been notified. You will be notified when they respond.'}
-              </Text>
-            </View>
+          <View style={{ marginHorizontal: 16, gap: 8 }}>
+            <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.textSecondary, letterSpacing: 1, marginBottom: 4 }}>
+              YOUR TRUCKS ({myAssignments.length})
+            </Text>
+            {myAssignments.map((a: any) => {
+              const isApproved = a.status === 'approved' || a.status === 'accepted';
+              const truckLabel = a.vehicle
+                ? `${a.vehicle.truck_number ? '#' + a.vehicle.truck_number + ' — ' : ''}${[a.vehicle.year, a.vehicle.make, a.vehicle.model].filter(Boolean).join(' ')}`
+                : 'No truck assigned';
+              const truckType = a.vehicle?.truck_type?.replace(/_/g, ' ') || '';
+              return (
+                <View key={a.id} style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 10,
+                  backgroundColor: isApproved ? 'rgba(34,197,94,0.08)' : 'rgba(255,153,0,0.08)',
+                  borderRadius: 12, padding: 12,
+                  borderWidth: 1,
+                  borderColor: isApproved ? 'rgba(34,197,94,0.25)' : 'rgba(255,153,0,0.25)',
+                }}>
+                  <Ionicons
+                    name={isApproved ? "checkmark-circle" : "time"}
+                    size={20}
+                    color={isApproved ? Colors.success : Colors.primary}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.text }}>
+                      {truckLabel}
+                    </Text>
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textSecondary, marginTop: 1 }}>
+                      {isApproved ? 'Confirmed' : 'Pending approval'}{truckType ? ` · ${truckType}` : ''}
+                    </Text>
+                  </View>
+                  {jobStatus !== 'completed' && jobStatus !== 'cancelled' && !isRunning && (
+                    <Pressable
+                      onPress={() => {
+                        if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        setRemovingAssignmentId(a.id);
+                      }}
+                      style={({ pressed }) => ({
+                        padding: 8, borderRadius: 8,
+                        backgroundColor: removingAssignmentId === a.id ? 'rgba(239,68,68,0.15)' : 'rgba(239,68,68,0.08)',
+                        opacity: pressed ? 0.7 : 1,
+                      })}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#ef4444" />
+                    </Pressable>
+                  )}
+                </View>
+              );
+            })}
           </View>
         )}
 
@@ -1313,10 +1363,36 @@ export default function JobDetailScreen() {
           </Pressable>
         )}
 
-        {hasApplied && !isRunning && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
+        {removingAssignmentId && !isRunning && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
+          <View style={styles.backOutConfirmRow}>
+            <Text style={styles.backOutConfirmText}>Remove this truck from the job?</Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Pressable
+                style={({ pressed }) => [styles.backOutCancelBtn, pressed && { opacity: 0.8 }]}
+                onPress={() => setRemovingAssignmentId(null)}
+                disabled={backingOut}
+              >
+                <Text style={styles.backOutCancelBtnText}>KEEP</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.backOutConfirmBtn, pressed && { opacity: 0.8 }]}
+                onPress={() => handleRemoveTruck(removingAssignmentId)}
+                disabled={backingOut}
+              >
+                {backingOut ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.backOutConfirmBtnText}>YES, REMOVE</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {hasApplied && !isRunning && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && myAssignments.length > 1 && !removingAssignmentId && (
           confirmBackOut ? (
             <View style={styles.backOutConfirmRow}>
-              <Text style={styles.backOutConfirmText}>Back out of this job?</Text>
+              <Text style={styles.backOutConfirmText}>Remove ALL trucks from this job?</Text>
               <View style={{ flexDirection: 'row', gap: 10 }}>
                 <Pressable
                   style={({ pressed }) => [styles.backOutCancelBtn, pressed && { opacity: 0.8 }]}
@@ -1333,7 +1409,7 @@ export default function JobDetailScreen() {
                   {backingOut ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <Text style={styles.backOutConfirmBtnText}>YES, BACK OUT</Text>
+                    <Text style={styles.backOutConfirmBtnText}>YES, REMOVE ALL</Text>
                   )}
                 </Pressable>
               </View>
@@ -1344,7 +1420,7 @@ export default function JobDetailScreen() {
               onPress={handleBackOut}
             >
               <Ionicons name="exit-outline" size={20} color="#ef4444" />
-              <Text style={styles.backOutBtnText}>BACK OUT OF JOB</Text>
+              <Text style={styles.backOutBtnText}>BACK OUT ALL TRUCKS</Text>
             </Pressable>
           )
         )}

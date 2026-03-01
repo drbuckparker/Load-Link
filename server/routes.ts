@@ -576,10 +576,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(eq(jobRuns.job_id, id))
         .orderBy(desc(jobRuns.started_at));
 
-      const assignments = await db
+      const rawAssignments = await db
         .select()
         .from(jobAssignments)
         .where(eq(jobAssignments.job_id, id));
+
+      const assignments = await Promise.all(rawAssignments.map(async (a) => {
+        if (!a.vehicle_id) return { ...a, vehicle: null };
+        const [v] = await db.select().from(driverVehicles).where(eq(driverVehicles.id, a.vehicle_id)).limit(1);
+        return { ...a, vehicle: v ? { id: v.id, year: v.year, make: v.make, model: v.model, truck_type: v.truck_type, truck_number: (v as any).truck_number } : null };
+      }));
 
       const driverId = r.job.driver_id
         || assignments.find(a => a.status === 'approved')?.driver_id
@@ -913,6 +919,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ ok: true });
     } catch (err) {
       console.error("Withdraw error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { id, assignmentId } = req.params;
+
+      const [assignment] = await db.select().from(jobAssignments)
+        .where(and(eq(jobAssignments.id, assignmentId), eq(jobAssignments.job_id, id)))
+        .limit(1);
+      if (!assignment) return res.status(404).json({ message: "Assignment not found" });
+      if (assignment.driver_id !== userId) return res.status(403).json({ message: "Not your assignment" });
+
+      let vehicleLabel = 'a truck';
+      if (assignment.vehicle_id) {
+        const [v] = await db.select().from(driverVehicles).where(eq(driverVehicles.id, assignment.vehicle_id)).limit(1);
+        if (v) vehicleLabel = [v.year, v.make, v.model].filter(Boolean).join(' ') || 'a truck';
+      }
+
+      await db.delete(jobAssignments).where(eq(jobAssignments.id, assignmentId));
+
+      const remaining = await db.select({ id: jobAssignments.id }).from(jobAssignments)
+        .where(and(
+          eq(jobAssignments.job_id, id),
+          eq(jobAssignments.driver_id, userId),
+          sql`${jobAssignments.status}::text IN ('accepted', 'approved', 'pending')`
+        ));
+
+      if (remaining.length === 0) {
+        await db
+          .update(jobs)
+          .set({ driver_id: null, status: "open", updated_at: new Date() })
+          .where(and(eq(jobs.id, id), eq(jobs.driver_id, userId)));
+      }
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (job?.contractor_id) {
+        const [driverUser] = await db.select({ full_name: users.full_name }).from(users).where(eq(users.id, userId)).limit(1);
+        const driverName = driverUser?.full_name || 'A driver';
+        await db.insert(notifications).values({
+          user_id: job.contractor_id,
+          type: "load_rejected",
+          title: "Truck Removed from Job",
+          message: `${driverName} removed ${vehicleLabel} from your ${job.material || ''} job`,
+          job_id: id,
+        });
+      }
+
+      return res.json({ ok: true, remainingAssignments: remaining.length });
+    } catch (err) {
+      console.error("Remove assignment error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });
