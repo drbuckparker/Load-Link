@@ -196,9 +196,7 @@ export default function ReviewScreen() {
               <Ionicons name="person" size={32} color={Colors.textMuted} />
             </View>
             <Text style={styles.revieweeName}>{resolvedRevieweeName || 'User'}</Text>
-            {resolvedRevieweeCompany ? (
-              <Text style={styles.revieweeCompany}>{resolvedRevieweeCompany}</Text>
-            ) : null}
+            <Text style={styles.revieweeCompany}>{resolvedRevieweeCompany || 'Independent Owner-Operator'}</Text>
             <Text style={styles.ratePrompt}>How was your experience?</Text>
           </View>
 
