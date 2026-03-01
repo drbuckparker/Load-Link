@@ -168,6 +168,9 @@ export default function JobDetailScreen() {
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showResumeModal, setShowResumeModal] = useState(false);
+  const [showLoadsModal, setShowLoadsModal] = useState(false);
+  const [loadsHauled, setLoadsHauled] = useState(1);
+  const loadsScrollRef = useRef<ScrollView>(null);
   const [selectedDriver, setSelectedDriver] = useState<Assignment | null>(null);
   const [counterBidVisible, setCounterBidVisible] = useState(false);
   const [counterBidRate, setCounterBidRate] = useState('');
@@ -539,12 +542,12 @@ export default function JobDetailScreen() {
 
   function handleStopJob() {
     if (Platform.OS === 'web') {
-      doStop();
+      setShowLoadsModal(true);
       return;
     }
     Alert.alert('Clock Out', 'Are you sure you want to clock out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Clock Out', style: 'destructive', onPress: doStop },
+      { text: 'Clock Out', style: 'destructive', onPress: () => setShowLoadsModal(true) },
     ]);
   }
 
@@ -553,7 +556,7 @@ export default function JobDetailScreen() {
       const runs = (jobData as any)?.runs;
       const activeRun = runs?.find?.((r: any) => !r.clock_out_time && !r.clockOutTime);
       if (activeRun) {
-        await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, { lat: 0, lng: 0 });
+        await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, { lat: 0, lng: 0, loads_hauled: loadsHauled });
       }
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsRunning(false);
@@ -933,6 +936,67 @@ export default function JobDetailScreen() {
             </Pressable>
           </View>
         )}
+
+        <Modal visible={showLoadsModal} transparent animationType="fade" onRequestClose={() => setShowLoadsModal(false)}>
+          <View style={styles.wtModalOverlay}>
+            <View style={[styles.wtModalContent, { alignItems: 'center', paddingTop: 24, paddingBottom: 24 }]} onStartShouldSetResponder={() => true}>
+              <Ionicons name="cube-outline" size={48} color={Colors.primary} />
+              <Text style={[styles.wtModalTitle, { marginTop: 12 }]}>How Many Loads?</Text>
+              <Text style={[styles.wtModalSubtitle, { textAlign: 'center', marginBottom: 16 }]}>
+                How many loads did you haul this session?
+              </Text>
+              <View style={styles.loadsPickerContainer}>
+                <ScrollView
+                  ref={loadsScrollRef}
+                  style={styles.loadsScroller}
+                  contentContainerStyle={styles.loadsScrollContent}
+                  showsVerticalScrollIndicator={false}
+                  snapToInterval={50}
+                  decelerationRate="fast"
+                  onMomentumScrollEnd={(e) => {
+                    const idx = Math.round(e.nativeEvent.contentOffset.y / 50);
+                    setLoadsHauled(Math.max(1, Math.min(100, idx + 1)));
+                  }}
+                  onLayout={() => {
+                    if (loadsScrollRef.current) {
+                      loadsScrollRef.current.scrollTo({ y: (loadsHauled - 1) * 50, animated: false });
+                    }
+                  }}
+                >
+                  {Array.from({ length: 100 }, (_, i) => i + 1).map((num) => (
+                    <Pressable
+                      key={num}
+                      style={styles.loadsItem}
+                      onPress={() => {
+                        setLoadsHauled(num);
+                        loadsScrollRef.current?.scrollTo({ y: (num - 1) * 50, animated: true });
+                      }}
+                    >
+                      <Text style={[
+                        styles.loadsItemText,
+                        num === loadsHauled && styles.loadsItemTextSelected
+                      ]}>{num}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+                <View style={styles.loadsHighlight} pointerEvents="none" />
+              </View>
+              <Text style={{ color: '#aaa', fontSize: 13, marginTop: 8, marginBottom: 16 }}>
+                {loadsHauled} {loadsHauled === 1 ? 'load' : 'loads'} selected
+              </Text>
+              <Pressable
+                style={[styles.ticketPromptUploadBtn, { width: '100%', paddingVertical: 16, borderRadius: 12, backgroundColor: Colors.primary }]}
+                onPress={() => {
+                  setShowLoadsModal(false);
+                  doStop();
+                }}
+              >
+                <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16, marginLeft: 8, fontFamily: 'ChakraPetch_700Bold' }}>OK</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={showResumeModal} transparent animationType="fade" onRequestClose={() => setShowResumeModal(false)}>
           <Pressable style={styles.wtModalOverlay} onPress={() => setShowResumeModal(false)}>
@@ -1772,6 +1836,45 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 13,
     color: Colors.text,
+  },
+  loadsPickerContainer: {
+    height: 150,
+    width: 120,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    position: 'relative',
+  },
+  loadsScroller: {
+    height: 150,
+  },
+  loadsScrollContent: {
+    paddingVertical: 50,
+  },
+  loadsItem: {
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadsItemText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 24,
+    color: '#666',
+  },
+  loadsItemTextSelected: {
+    fontSize: 32,
+    color: Colors.primary,
+  },
+  loadsHighlight: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    height: 50,
+    borderTopWidth: 2,
+    borderBottomWidth: 2,
+    borderColor: Colors.primary,
+    borderRadius: 0,
   },
   headerSection: { marginBottom: 16 },
   titleRow: {

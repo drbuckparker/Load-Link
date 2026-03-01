@@ -965,7 +965,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
     try {
       const { runId } = req.params;
-      const { lat, lng } = req.body;
+      const { lat, lng, loads_hauled } = req.body;
 
       const [run] = await db
         .select()
@@ -982,16 +982,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       const billedMinutes = Math.max(60, Math.ceil(actualMinutes / 15) * 15);
 
+      const updateData: any = {
+        status: "completed",
+        ended_at: endedAt,
+        end_lat: lat?.toString(),
+        end_lng: lng?.toString(),
+        actual_duration_minutes: actualMinutes,
+        billed_duration_minutes: billedMinutes,
+      };
+      if (loads_hauled !== undefined && loads_hauled !== null) {
+        updateData.loads_hauled = parseInt(loads_hauled);
+      }
+
       const [updated] = await db
         .update(jobRuns)
-        .set({
-          status: "completed",
-          ended_at: endedAt,
-          end_lat: lat?.toString(),
-          end_lng: lng?.toString(),
-          actual_duration_minutes: actualMinutes,
-          billed_duration_minutes: billedMinutes,
-        })
+        .set(updateData)
         .where(eq(jobRuns.id, runId))
         .returning();
 
