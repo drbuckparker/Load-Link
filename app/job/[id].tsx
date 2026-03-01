@@ -381,7 +381,8 @@ export default function JobDetailScreen() {
 
   async function handleConfirmAccept() {
     if (selectedVehicleIds.length === 0) {
-      Alert.alert('Select a Truck', 'Please select at least one truck to assign to this job');
+      showTruckWarning('Please select at least one truck to assign to this job');
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       return;
     }
     setAcceptingJob(true);
@@ -406,7 +407,8 @@ export default function JobDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to accept job');
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showTruckWarning(e.message || 'Failed to accept job');
     }
     setAcceptingJob(false);
   }
@@ -462,7 +464,7 @@ export default function JobDetailScreen() {
   function showTruckWarning(msg: string) {
     if (truckWarningTimeout.current) clearTimeout(truckWarningTimeout.current);
     setTruckWarning(msg);
-    truckWarningTimeout.current = setTimeout(() => setTruckWarning(null), 4000);
+    truckWarningTimeout.current = setTimeout(() => setTruckWarning(null), 8000);
   }
 
   async function openRouteMap() {
