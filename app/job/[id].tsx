@@ -110,6 +110,9 @@ function mapJob(j: any): Job {
     totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
     createdAt: j.created_at ?? j.createdAt ?? '',
     projectName: j.project_name ?? j.projectName,
+    estimatedDurationMinutes: j.estimated_duration_minutes ?? j.estimatedDurationMinutes ?? null,
+    loadTimeMinutes: j.load_time_minutes ?? j.loadTimeMinutes ?? 10,
+    unloadTimeMinutes: j.unload_time_minutes ?? j.unloadTimeMinutes ?? 10,
   };
 }
 
@@ -643,6 +646,25 @@ export default function JobDetailScreen() {
                 <Text style={styles.detailValue}>{job.estimatedTrips}</Text>
               </View>
             )}
+            {(() => {
+              const trips = Number(job.estimatedTrips) || 0;
+              const dist = Number(job.distance) || 0;
+              if (trips <= 0 || dist <= 0) return null;
+              const oneWayMin = job.estimatedDurationMinutes
+                ? Number(job.estimatedDurationMinutes)
+                : (dist / 35) * 60 * 1.4;
+              const loadMin = Number(job.loadTimeMinutes) || 10;
+              const unloadMin = Number(job.unloadTimeMinutes) || 10;
+              const roundTripMin = (oneWayMin * 2) + loadMin + unloadMin;
+              const totalHours = (roundTripMin * trips) / 60;
+              return (
+                <View style={styles.detailItem}>
+                  <Ionicons name="hourglass" size={16} color={Colors.textMuted} />
+                  <Text style={styles.detailLabel}>Est. Hours</Text>
+                  <Text style={styles.detailValue}>{totalHours.toFixed(1)}</Text>
+                </View>
+              );
+            })()}
           </View>
         </View>
 
