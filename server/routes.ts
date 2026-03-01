@@ -2073,24 +2073,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const q = (req.query.q as string || '').trim();
       if (q.length < 2) return res.json([]);
-      const results = await db
-        .select({ id: users.id, name: users.name, email: users.email, company: users.company, role: users.role })
-        .from(users)
-        .where(
-          and(
-            or(
-              ilike(users.name, `%${q}%`),
-              ilike(users.email, `%${q}%`),
-              ilike(users.company, `%${q}%`)
-            ),
-            or(
-              ilike(users.role, '%driver%'),
-              ilike(users.role, '%trucking%')
-            )
-          )
-        )
-        .limit(10);
-      return res.json(results);
+      const pattern = `%${q}%`;
+      const results = await db.execute(
+        sql`SELECT id, name, email, company, role FROM users
+            WHERE (name ILIKE ${pattern} OR email ILIKE ${pattern} OR company ILIKE ${pattern})
+            AND (role ILIKE '%driver%' OR role ILIKE '%trucking%')
+            LIMIT 10`
+      );
+      return res.json(results.rows || results);
     } catch (err) {
       console.error("Driver search error:", err);
       return res.status(500).json({ message: "Server error" });
