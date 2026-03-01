@@ -722,7 +722,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await db.insert(notifications).values({
         user_id: job.contractor_id!,
-        type: isFavorite ? "load_accepted" : "driver_applied",
+        type: "load_accepted",
         title: isFavorite ? "Favorite Driver Assigned" : "New Driver Application",
         message: isFavorite
           ? `${driverName} (favorite) has been auto-assigned to your ${job.material} job`
