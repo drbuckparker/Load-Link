@@ -56,7 +56,7 @@ function getJobDateRange(job: { scheduled_date: Date | null; estimated_days: str
 async function getVehicleConflicts(
   vehicleId: string,
   jobDates: string[],
-  _newJobIsFullDay: boolean,
+  newJobIsFullDay: boolean,
   excludeJobId?: string
 ): Promise<{ date: string; jobMaterial: string; jobType: string; jobId: string }[]> {
   const existingAssignments = await db
@@ -72,22 +72,55 @@ async function getVehicleConflicts(
       )
     );
 
-  const conflicts: { date: string; jobMaterial: string; jobType: string; jobId: string }[] = [];
+  const dateBookings: Record<string, { jobId: string; jobMaterial: string; jobType: string; isFullDay: boolean }[]> = {};
   for (const a of existingAssignments) {
     if (!a.job_id || a.job_id === excludeJobId) continue;
     const [existingJob] = await db.select().from(jobs).where(eq(jobs.id, a.job_id)).limit(1);
     if (!existingJob || existingJob.status === 'cancelled' || existingJob.status === 'completed') continue;
 
     const existingDates = getJobDateRange(existingJob);
+    const isFullDay = existingJob.job_type === 'full_day';
     for (const d of existingDates) {
       if (jobDates.includes(d)) {
-        conflicts.push({
-          date: d,
+        if (!dateBookings[d]) dateBookings[d] = [];
+        dateBookings[d].push({
+          jobId: existingJob.id,
           jobMaterial: existingJob.material || 'Unknown',
           jobType: existingJob.job_type || 'single_load',
-          jobId: existingJob.id,
+          isFullDay,
         });
       }
+    }
+  }
+
+  const conflicts: { date: string; jobMaterial: string; jobType: string; jobId: string }[] = [];
+  for (const d of jobDates) {
+    const bookings = dateBookings[d];
+    if (!bookings || bookings.length === 0) continue;
+
+    const hasFullDayExisting = bookings.some(b => b.isFullDay);
+
+    if (hasFullDayExisting) {
+      conflicts.push({
+        date: d,
+        jobMaterial: bookings.find(b => b.isFullDay)!.jobMaterial,
+        jobType: 'full_day',
+        jobId: bookings.find(b => b.isFullDay)!.jobId,
+      });
+    } else if (newJobIsFullDay) {
+      conflicts.push({
+        date: d,
+        jobMaterial: bookings[0].jobMaterial,
+        jobType: bookings[0].jobType,
+        jobId: bookings[0].jobId,
+      });
+    } else if (bookings.length >= 2) {
+      conflicts.push({
+        date: d,
+        jobMaterial: bookings[0].jobMaterial,
+        jobType: bookings[0].jobType,
+        jobId: bookings[0].jobId,
+      });
     }
   }
   return conflicts;
@@ -699,7 +732,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (vIds.length > 0) {
+        const existingForJob = await db
+          .select({ vehicle_id: jobAssignments.vehicle_id })
+          .from(jobAssignments)
+          .where(
+            and(
+              eq(jobAssignments.job_id, id),
+              eq(jobAssignments.driver_id, userId),
+              sql`${jobAssignments.status}::text IN ('accepted', 'approved', 'pending')`
+            )
+          );
+        const alreadyAssigned = new Set(existingForJob.map(a => a.vehicle_id));
+
         for (const vehicleId of vIds) {
+          if (alreadyAssigned.has(vehicleId)) continue;
           await db.insert(jobAssignments).values({
             job_id: id,
             driver_id: userId,
