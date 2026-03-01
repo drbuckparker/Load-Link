@@ -96,8 +96,10 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     if (dashboard?.activeRun?.clockInTime) {
-      const clockIn = new Date(dashboard.activeRun.clockInTime).getTime();
-      const updateElapsed = () => setActiveElapsed(Math.floor((Date.now() - clockIn) / 1000));
+      let raw = String(dashboard.activeRun.clockInTime);
+      if (!raw.endsWith('Z') && !raw.includes('+')) raw += 'Z';
+      const clockIn = new Date(raw).getTime();
+      const updateElapsed = () => setActiveElapsed(Math.max(0, Math.floor((Date.now() - clockIn) / 1000)));
       updateElapsed();
       timerRef.current = setInterval(updateElapsed, 1000);
       return () => { if (timerRef.current) clearInterval(timerRef.current); };
