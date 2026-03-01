@@ -2069,6 +2069,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ VEHICLES ============
 
+  app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const q = (req.query.q as string || '').trim();
+      if (q.length < 2) return res.json([]);
+      const results = await db
+        .select({ id: users.id, name: users.name, email: users.email, company: users.company, role: users.role })
+        .from(users)
+        .where(
+          and(
+            or(
+              ilike(users.name, `%${q}%`),
+              ilike(users.email, `%${q}%`),
+              ilike(users.company, `%${q}%`)
+            ),
+            or(
+              ilike(users.role, '%driver%'),
+              ilike(users.role, '%trucking%')
+            )
+          )
+        )
+        .limit(10);
+      return res.json(results);
+    } catch (err) {
+      console.error("Driver search error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/vehicles/:vehicleId/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
@@ -2120,7 +2148,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .select()
         .from(driverVehicles)
         .where(eq(driverVehicles.driver_id, userId));
-      return res.json(vehicles);
+
+      const enriched = await Promise.all(vehicles.map(async (v) => {
+        if (v.assigned_driver_id) {
+          const [driver] = await db
+            .select({ id: users.id, name: users.name, email: users.email })
+            .from(users)
+            .where(eq(users.id, v.assigned_driver_id))
+            .limit(1);
+          return { ...v, assigned_driver: driver || null };
+        }
+        return { ...v, assigned_driver: null };
+      }));
+
+      return res.json(enriched);
     } catch (err) {
       console.error("Vehicles error:", err);
       return res.status(500).json({ message: "Server error" });

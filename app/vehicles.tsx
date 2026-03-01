@@ -3,9 +3,15 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import Colors from '@/constants/colors';
-import { apiRequest, queryClient } from '@/lib/query-client';
+import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
+
+interface AssignedDriver {
+  id: string;
+  name: string;
+  email: string;
+}
 
 interface Vehicle {
   id: number;
@@ -21,6 +27,8 @@ interface Vehicle {
   is_primary: boolean;
   is_active: boolean;
   created_at: string;
+  assigned_driver_id: string | null;
+  assigned_driver: AssignedDriver | null;
 }
 
 const TRUCK_TYPES = ['end_dump', 'side_dump', 'belly_dump'] as const;
@@ -40,6 +48,8 @@ const EMPTY_FORM = {
   max_capacity_tons: '',
   truck_number: '',
   is_primary: false,
+  assigned_driver_id: '' as string,
+  assigned_driver_name: '' as string,
 };
 
 export default function VehiclesScreen() {
@@ -48,6 +58,26 @@ export default function VehiclesScreen() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [refreshing, setRefreshing] = useState(false);
+  const [driverSearch, setDriverSearch] = useState('');
+  const [driverResults, setDriverResults] = useState<AssignedDriver[]>([]);
+  const [searchingDrivers, setSearchingDrivers] = useState(false);
+  const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
+
+  const searchDrivers = useCallback((query: string) => {
+    setDriverSearch(query);
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    if (query.length < 2) { setDriverResults([]); return; }
+    searchTimeout.current = setTimeout(async () => {
+      setSearchingDrivers(true);
+      try {
+        const url = new URL(`/api/drivers/search?q=${encodeURIComponent(query)}`, getApiUrl());
+        const resp = await fetch(url.toString(), { credentials: 'include' });
+        const data = await resp.json();
+        setDriverResults(data);
+      } catch { setDriverResults([]); }
+      setSearchingDrivers(false);
+    }, 300);
+  }, []);
 
   const { data: vehicles = [], isLoading } = useQuery<Vehicle[]>({
     queryKey: ['/api/vehicles'],
@@ -55,7 +85,7 @@ export default function VehiclesScreen() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const payload = {
+      const payload: any = {
         truck_type: form.truck_type,
         make: form.make,
         model: form.model,
@@ -65,6 +95,7 @@ export default function VehiclesScreen() {
         max_capacity_tons: parseFloat(form.max_capacity_tons) || 0,
         truck_number: form.truck_number,
         is_primary: form.is_primary,
+        assigned_driver_id: form.assigned_driver_id || null,
       };
       if (editingId) {
         return apiRequest('PUT', `/api/vehicles/${editingId}`, payload);
@@ -102,7 +133,11 @@ export default function VehiclesScreen() {
       max_capacity_tons: v.max_capacity_tons ? String(v.max_capacity_tons) : '',
       truck_number: v.truck_number || '',
       is_primary: !!v.is_primary,
+      assigned_driver_id: v.assigned_driver_id || '',
+      assigned_driver_name: v.assigned_driver?.name || '',
     });
+    setDriverSearch('');
+    setDriverResults([]);
     setShowForm(true);
   }
 
@@ -110,6 +145,8 @@ export default function VehiclesScreen() {
     setShowForm(false);
     setEditingId(null);
     setForm({ ...EMPTY_FORM });
+    setDriverSearch('');
+    setDriverResults([]);
   }
 
   function handleDelete(id: number) {
@@ -231,6 +268,53 @@ export default function VehiclesScreen() {
           />
         </View>
 
+        <Text style={styles.fieldLabel}>Assigned Driver</Text>
+        {form.assigned_driver_id ? (
+          <View style={styles.assignedDriverRow}>
+            <View style={styles.assignedDriverInfo}>
+              <Ionicons name="person" size={16} color={Colors.primary} />
+              <Text style={styles.assignedDriverName}>{form.assigned_driver_name}</Text>
+            </View>
+            <Pressable onPress={() => setForm(f => ({ ...f, assigned_driver_id: '', assigned_driver_name: '' }))} hitSlop={8}>
+              <Ionicons name="close-circle" size={22} color={Colors.destructive} />
+            </Pressable>
+          </View>
+        ) : (
+          <View>
+            <TextInput
+              style={styles.input}
+              value={driverSearch}
+              onChangeText={searchDrivers}
+              placeholder="Search by name or email..."
+              placeholderTextColor={Colors.textMuted}
+            />
+            {searchingDrivers && (
+              <ActivityIndicator size="small" color={Colors.primary} style={{ marginTop: 6 }} />
+            )}
+            {driverResults.length > 0 && (
+              <View style={styles.driverDropdown}>
+                {driverResults.map(d => (
+                  <Pressable
+                    key={d.id}
+                    style={styles.driverOption}
+                    onPress={() => {
+                      setForm(f => ({ ...f, assigned_driver_id: d.id, assigned_driver_name: d.name }));
+                      setDriverSearch('');
+                      setDriverResults([]);
+                    }}
+                  >
+                    <Ionicons name="person-outline" size={16} color={Colors.textSecondary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.driverOptionName}>{d.name}</Text>
+                      <Text style={styles.driverOptionEmail}>{d.email}</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
         <View style={styles.formActions}>
           <Pressable style={styles.cancelBtn} onPress={closeForm}>
             <Ionicons name="close" size={20} color={Colors.textMuted} />
@@ -303,6 +387,12 @@ export default function VehiclesScreen() {
             <Text style={styles.detailText}>{item.truck_number || '—'}</Text>
           </View>
         </View>
+        {item.assigned_driver && (
+          <View style={styles.assignedDriverCard}>
+            <Ionicons name="person" size={14} color={Colors.primary} />
+            <Text style={styles.assignedDriverCardText}>{item.assigned_driver.name}</Text>
+          </View>
+        )}
       </View>
     );
   }
@@ -562,5 +652,66 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 13,
     color: Colors.textMuted,
+  },
+  assignedDriverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.muted,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  assignedDriverInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  assignedDriverName: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  driverDropdown: {
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 6,
+    overflow: 'hidden',
+  },
+  driverOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  driverOptionName: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: Colors.text,
+  },
+  driverOptionEmail: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
+  assignedDriverCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+  },
+  assignedDriverCardText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.primary,
   },
 });

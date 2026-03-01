@@ -322,6 +322,7 @@ export const driverVehicles = pgTable("driver_vehicles", {
   updated_at: timestamp("updated_at"),
   max_capacity_tons: numeric("max_capacity_tons", { precision: 10, scale: 2 }),
   truck_number: text("truck_number"),
+  assigned_driver_id: varchar("assigned_driver_id").references(() => users.id),
 });
 
 export const sessions = pgTable("sessions", {
