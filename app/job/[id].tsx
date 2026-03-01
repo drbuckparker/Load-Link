@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking, Image } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking, Image, RefreshControl } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -164,6 +164,7 @@ export default function JobDetailScreen() {
   const [weightTicketModalVisible, setWeightTicketModalVisible] = useState(false);
   const [uploadingTicket, setUploadingTicket] = useState(false);
   const [showTicketPrompt, setShowTicketPrompt] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -568,6 +569,16 @@ export default function JobDetailScreen() {
     }
   }
 
+  async function onRefresh() {
+    setRefreshing(true);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] }),
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/assignments`] }),
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/weight-tickets`] }),
+    ]);
+    setRefreshing(false);
+  }
+
   const actualMinutes = Math.floor(elapsedSeconds / 60);
   const billedMinutes = getBilledMinutes(actualMinutes);
 
@@ -589,7 +600,7 @@ export default function JobDetailScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 24 }]} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 24 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}>
         {isRunning && (
           <View style={styles.timerCard}>
             <Text style={styles.timerLabel}>ACTIVE JOB TIMER</Text>
