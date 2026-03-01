@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -49,6 +49,7 @@ export default function DashboardScreen() {
   const unreadCount = (notifsData || []).filter((n: any) => !(n.is_read ?? n.isRead)).length;
 
   const [switchingRole, setSwitchingRole] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [deviceLat, setDeviceLat] = useState<number | null>(null);
   const [deviceLng, setDeviceLng] = useState<number | null>(null);
   const [deviceAddress, setDeviceAddress] = useState<string | null>(null);
@@ -239,6 +240,7 @@ export default function DashboardScreen() {
       <ScrollView
         contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 + 100 : 100 }]}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries(); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
       >
         {!contractor && dashboard?.quickJob ? (
           <Pressable

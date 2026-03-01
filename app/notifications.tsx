@@ -1,4 +1,5 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
+import { useState } from 'react';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -47,6 +48,7 @@ function getNotifColor(type: string): string {
 
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
+  const [refreshing, setRefreshing] = useState(false);
 
   const { data: notifsData, isLoading } = useQuery<any[]>({
     queryKey: ['/api/notifications'],
@@ -92,6 +94,7 @@ export default function NotificationsScreen() {
 
       <FlatList
         data={notifications}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/notifications'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         renderItem={({ item }) => {
           const iconName = getNotifIcon(item.type);
           const iconColor = getNotifColor(item.type);

@@ -1,9 +1,10 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useState, useMemo } from 'react';
+import { queryClient } from '@/lib/query-client';
 import { router } from 'expo-router';
 
 interface Invoice {
@@ -59,6 +60,7 @@ function getInvoiceStatusColor(status: string): { bg: string; text: string } {
 export default function InvoicesScreen() {
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState<string>('All');
+  const [refreshing, setRefreshing] = useState(false);
 
   const queryParam = filter === 'All' ? '' : `?status=${filter.toLowerCase()}`;
 
@@ -181,6 +183,7 @@ export default function InvoicesScreen() {
         contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
         ListHeaderComponent={renderHeader}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/invoices'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           isLoading ? (
             <View style={styles.emptyState}>

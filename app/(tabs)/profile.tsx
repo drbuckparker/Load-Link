@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert, Linking, Modal, TextInput, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert, Linking, Modal, TextInput, KeyboardAvoidingView, ActivityIndicator, RefreshControl } from 'react-native';
 import { useState, useRef } from 'react';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -42,6 +42,7 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const { user, logout, updateUser, refreshUser } = useAuth();
   const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
+  const [refreshing, setRefreshing] = useState(false);
   const [switchingRole, setSwitchingRole] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const [locationPickerType, setLocationPickerType] = useState<'primary' | 'secondary' | null>(null);
@@ -597,6 +598,7 @@ export default function ProfileScreen() {
         ref={scrollRef}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 + 100 : 100 }]}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries(); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
       >
         {activeTab === 'profile' && renderProfileTab()}
         {activeTab === 'role' && renderRoleTab()}

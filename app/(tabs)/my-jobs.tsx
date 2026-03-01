@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, Modal, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -55,6 +55,7 @@ export default function MyJobsScreen() {
   const { user } = useAuth();
   const [filter, setFilter] = useState<Filter>('upcoming');
   const [vehicleModalJob, setVehicleModalJob] = useState<DriverJob | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const jobsQuery = useQuery<DriverJob[]>({
     queryKey: ['/api/driver/jobs', `?filter=${filter === 'completed' ? 'completed' : 'active'}`],
@@ -262,6 +263,7 @@ export default function MyJobsScreen() {
         contentContainerStyle={[styles.listContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]}
         ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] }); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           jobsQuery.isLoading ? (
             <View style={styles.emptyState}>

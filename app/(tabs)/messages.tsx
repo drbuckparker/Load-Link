@@ -1,4 +1,5 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
+import { useState } from 'react';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,6 +7,7 @@ import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { Conversation, timeAgo } from '@/lib/mock-data';
+import { queryClient } from '@/lib/query-client';
 
 function mapConversation(c: any): Conversation {
   return {
@@ -64,6 +66,7 @@ function PendingReviewsBanner() {
 
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
+  const [refreshing, setRefreshing] = useState(false);
 
   const { data: convsData, isLoading } = useQuery<any[]>({
     queryKey: ['/api/conversations'],
@@ -81,6 +84,7 @@ export default function MessagesScreen() {
 
       <FlatList
         data={conversations}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/conversations'] }); await queryClient.invalidateQueries({ queryKey: ['/api/reviews/pending'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         renderItem={({ item }) => (
           <Pressable
             style={({ pressed }) => [styles.convCard, pressed && styles.convCardPressed]}

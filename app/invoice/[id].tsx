@@ -1,11 +1,13 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useState } from 'react';
 import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
+import { queryClient } from '@/lib/query-client';
 import { formatTruckType } from '@/lib/mock-data';
 
 function isContractorRole(role: string): boolean {
@@ -41,6 +43,7 @@ export default function InvoiceDetailScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isContractor = user?.role ? isContractorRole(user.role) : false;
+  const [refreshing, setRefreshing] = useState(false);
 
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ['/api/invoices/' + id],
@@ -103,7 +106,7 @@ export default function InvoiceDetailScreen() {
         <View style={{ width: 36 }} />
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/invoices/' + id] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}>
         <View style={styles.invoiceHeader}>
           <View style={styles.invoiceIconLarge}>
             <Ionicons name="document-text" size={28} color={Colors.primary} />

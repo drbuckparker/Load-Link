@@ -1,4 +1,4 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Switch, Platform, Alert, TextInput, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Switch, Platform, Alert, TextInput, ActivityIndicator, ScrollView, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -47,6 +47,7 @@ export default function VehiclesScreen() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [refreshing, setRefreshing] = useState(false);
 
   const { data: vehicles = [], isLoading } = useQuery<Vehicle[]>({
     queryKey: ['/api/vehicles'],
@@ -323,6 +324,7 @@ export default function VehiclesScreen() {
         keyExtractor={item => String(item.id)}
         renderItem={renderVehicle}
         ListHeaderComponent={renderForm()}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           isLoading ? (
             <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 60 }} />

@@ -1,9 +1,10 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { Earning } from '@/lib/mock-data';
+import { queryClient } from '@/lib/query-client';
 import { useState, useMemo } from 'react';
 
 type Period = 'week' | 'month' | 'all';
@@ -26,6 +27,7 @@ function mapEarning(e: any): Earning {
 export default function EarningsScreen() {
   const insets = useSafeAreaInsets();
   const [period, setPeriod] = useState<Period>('month');
+  const [refreshing, setRefreshing] = useState(false);
 
   const { data: earningsData, isLoading } = useQuery<any>({
     queryKey: [`/api/earnings?period=${period}`],
@@ -143,6 +145,7 @@ export default function EarningsScreen() {
         contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
         ListHeaderComponent={renderHeader}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/earnings'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           isLoading ? (
             <View style={styles.emptyState}>

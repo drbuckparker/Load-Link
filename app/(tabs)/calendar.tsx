@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -53,6 +53,7 @@ export default function CalendarScreen() {
   const now = new Date();
   const [currentMonth, setCurrentMonth] = useState(now.getMonth());
   const [currentYear, setCurrentYear] = useState(now.getFullYear());
+  const [refreshing, setRefreshing] = useState(false);
   const [availability, setAvailability] = useState<Record<string, { status: AvailabilityStatus; name?: string; shift?: string; notes?: string; startTime?: string; endTime?: string }>>({});
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -418,7 +419,7 @@ export default function CalendarScreen() {
         <Text style={styles.headerTitle}>{isContractor ? 'SCHEDULED JOBS' : 'AVAILABILITY'}</Text>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/availability'] }); await queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}>
         <View style={styles.monthNav}>
           <Pressable onPress={() => navigateMonth(-1)} style={styles.navBtn}>
             <Ionicons name="chevron-back" size={20} color={Colors.text} />
