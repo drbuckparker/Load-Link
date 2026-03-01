@@ -650,12 +650,10 @@ export default function JobDetailScreen() {
               const trips = Number(job.estimatedTrips) || 0;
               const dist = Number(job.distance) || 0;
               if (trips <= 0 || dist <= 0) return null;
-              const oneWayMin = job.estimatedDurationMinutes
-                ? Number(job.estimatedDurationMinutes)
-                : (dist / 35) * 60 * 1.4;
+              const oneWayDriveMin = (dist / 25) * 60;
               const loadMin = Number(job.loadTimeMinutes) || 10;
               const unloadMin = Number(job.unloadTimeMinutes) || 10;
-              const roundTripMin = (oneWayMin * 2) + loadMin + unloadMin;
+              const roundTripMin = (oneWayDriveMin * 2) + loadMin + unloadMin;
               const totalHours = (roundTripMin * trips) / 60;
               return (
                 <View style={styles.detailItem}>
