@@ -113,6 +113,7 @@ export function getStatusColor(status: string): { bg: string; text: string } {
     case 'pending': return { bg: 'rgba(245, 158, 11, 0.2)', text: '#f59e0b' };
     case 'accepted': return { bg: 'rgba(34, 197, 94, 0.2)', text: '#22c55e' };
     case 'in_progress': return { bg: 'rgba(59, 130, 246, 0.2)', text: '#3b82f6' };
+    case 'upcoming': return { bg: 'rgba(147, 130, 246, 0.2)', text: '#9382f6' };
     case 'completed': return { bg: 'rgba(34, 197, 94, 0.2)', text: '#22c55e' };
     case 'cancelled': return { bg: 'rgba(239, 68, 68, 0.2)', text: '#ef4444' };
     default: return { bg: 'rgba(107, 112, 128, 0.2)', text: '#6b7080' };

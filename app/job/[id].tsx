@@ -281,7 +281,18 @@ export default function JobDetailScreen() {
     );
   }
 
-  const statusColor = getStatusColor(jobStatus);
+  const isUpcoming = (() => {
+    if (!job.scheduledDate) return false;
+    const raw = String(job.scheduledDate);
+    const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const startDate = new Date(y, m - 1, d);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return startDate > today;
+  })();
+  const displayStatus = isUpcoming && (jobStatus === 'in_progress' || jobStatus === 'accepted') ? 'upcoming' : jobStatus;
+  const statusColor = getStatusColor(displayStatus);
   const jobTypeColor = getJobTypeColor(job.jobType);
   const isMyJob = job.driverId === user?.id || (myAssignment && myAssignment.status === 'approved');
   const canAccept = (jobStatus === 'open' || jobStatus === 'pending') && !hasApplied && !isContractor;
@@ -750,7 +761,7 @@ export default function JobDetailScreen() {
             <Text style={[styles.badgeText, { color: jobTypeColor.text }]}>{formatJobType(job.jobType, job.estimatedDays)}</Text>
           </View>
           <View style={[styles.badge, { backgroundColor: statusColor.bg }]}>
-            <Text style={[styles.badgeText, { color: statusColor.text }]}>{jobStatus.replace('_', ' ').toUpperCase()}</Text>
+            <Text style={[styles.badgeText, { color: statusColor.text }]}>{displayStatus.replace('_', ' ').toUpperCase()}</Text>
           </View>
           <View style={styles.badge}>
             <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textSecondary} />
@@ -795,14 +806,27 @@ export default function JobDetailScreen() {
           <View style={styles.detailsGrid}>
             <View style={styles.detailItem}>
               <Ionicons name="calendar" size={16} color={Colors.textMuted} />
-              <Text style={styles.detailLabel}>Date</Text>
+              <Text style={styles.detailLabel}>{(parseFloat(String(job.estimatedDays || '1')) || 1) > 1 ? 'Dates' : 'Date'}</Text>
               <Text style={styles.detailValue}>
                 {(() => {
                   const raw = String(job.scheduledDate);
                   const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
                   const [y, m, d] = dateStr.split('-').map(Number);
-                  const dt = new Date(y, m - 1, d);
-                  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                  const startDt = new Date(y, m - 1, d);
+                  const estDays = parseFloat(String(job.estimatedDays || '1')) || 1;
+                  if (estDays > 1) {
+                    const includesWeekends = (jobData as any)?.includes_weekends ?? false;
+                    const dates = getJobDateRange(dateStr, estDays, includesWeekends);
+                    if (dates.length > 1) {
+                      const lastDateStr = dates[dates.length - 1];
+                      const [ey, em, ed] = lastDateStr.split('-').map(Number);
+                      const endDt = new Date(ey, em - 1, ed);
+                      const startFmt = startDt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      const endFmt = endDt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      return `${startFmt} – ${endFmt}`;
+                    }
+                  }
+                  return startDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
                 })()}
               </Text>
             </View>
