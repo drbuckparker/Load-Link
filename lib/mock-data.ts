@@ -142,3 +142,7 @@ export function timeAgo(dateString: string): string {
   if (diffDays < 7) return `${diffDays}d ago`;
   return date.toLocaleDateString();
 }
+
+export function isContractorRole(role: string): boolean {
+  return role?.includes('contractor') ?? false;
+}

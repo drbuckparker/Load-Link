@@ -1,4 +1,4 @@
-import { View, Text, Pressable, StyleSheet, Platform, TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Platform, TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, ScrollView, Switch } from 'react-native';
 import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient } from '@/lib/query-client';
 import { useAuth } from '@/contexts/AuthContext';
+import { isContractorRole } from '@/lib/mock-data';
 
 const STAR_LABELS = ['', 'Poor', 'Below Average', 'Good', 'Very Good', 'Excellent'];
 
@@ -18,6 +19,7 @@ export default function ReviewScreen() {
     jobId: string;
     revieweeId: string;
     revieweeName: string;
+    revieweeCompany: string;
     material: string;
   }>();
 
@@ -42,12 +44,32 @@ export default function ReviewScreen() {
     return contractor?.company || contractor?.full_name || 'Contractor';
   })();
 
+  const resolvedRevieweeCompany = params.revieweeCompany || (() => {
+    if (!jobData || !user) return '';
+    const job = jobData.job || jobData;
+    const contractor = jobData.contractor || job.contractor;
+    if (job.contractor_id === user.id) {
+      return job.driver_company || '';
+    }
+    return contractor?.company || '';
+  })();
+
   const resolvedMaterial = params.material || jobData?.job?.material || jobData?.material || '';
+
+  const isReviewingDriver = user ? isContractorRole(user.role) : false;
+
+  const { data: favData } = useQuery<any>({
+    queryKey: [`/api/favorites/${resolvedRevieweeId}`],
+    enabled: !!resolvedRevieweeId && isReviewingDriver,
+  });
 
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [addFavorite, setAddFavorite] = useState(false);
+
+  const alreadyFavorite = favData?.isFavorite ?? false;
 
   if (jobLoading && !params.revieweeId) {
     return (
@@ -82,6 +104,13 @@ export default function ReviewScreen() {
         rating,
         comment: comment.trim() || null,
       });
+
+      if (addFavorite && !alreadyFavorite && resolvedRevieweeId) {
+        try {
+          await apiRequest('POST', `/api/favorites/${resolvedRevieweeId}`);
+          queryClient.invalidateQueries({ queryKey: [`/api/favorites/${resolvedRevieweeId}`] });
+        } catch {}
+      }
 
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSubmitted(true);
@@ -159,6 +188,9 @@ export default function ReviewScreen() {
               <Ionicons name="person" size={32} color={Colors.textMuted} />
             </View>
             <Text style={styles.revieweeName}>{resolvedRevieweeName || 'User'}</Text>
+            {resolvedRevieweeCompany ? (
+              <Text style={styles.revieweeCompany}>{resolvedRevieweeCompany}</Text>
+            ) : null}
             <Text style={styles.ratePrompt}>How was your experience?</Text>
           </View>
 
@@ -202,6 +234,37 @@ export default function ReviewScreen() {
             />
             <Text style={styles.charCount}>{comment.length}/500</Text>
           </View>
+
+          {isReviewingDriver && !alreadyFavorite && (
+            <View style={styles.favoriteSection}>
+              <View style={styles.favoriteToggleRow}>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={styles.favoriteLabel}>Add as Favorite Driver</Text>
+                </View>
+                <Switch
+                  value={addFavorite}
+                  onValueChange={setAddFavorite}
+                  trackColor={{ false: Colors.surface, true: 'rgba(255, 153, 0, 0.4)' }}
+                  thumbColor={addFavorite ? Colors.primary : '#666'}
+                />
+              </View>
+              <Text style={styles.favoriteHint}>
+                If you favorite this driver, they will be able to accept a job you post without you having to confirm it
+              </Text>
+            </View>
+          )}
+
+          {isReviewingDriver && alreadyFavorite && (
+            <View style={styles.favoriteSection}>
+              <View style={styles.favoriteToggleRow}>
+                <Ionicons name="star" size={18} color={Colors.primary} />
+                <Text style={[styles.favoriteLabel, { marginLeft: 8 }]}>Favorite Driver</Text>
+              </View>
+              <Text style={styles.favoriteHint}>
+                This driver is already one of your favorites and can accept your jobs without confirmation.
+              </Text>
+            </View>
+          )}
 
           <Pressable
             style={({ pressed }) => [
@@ -288,7 +351,7 @@ const styles = StyleSheet.create({
   },
   revieweeSection: {
     alignItems: 'center',
-    gap: 8,
+    gap: 4,
     paddingTop: 8,
   },
   avatarCircle: {
@@ -300,16 +363,23 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 4,
   },
   revieweeName: {
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 20,
     color: Colors.text,
   },
+  revieweeCompany: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
   ratePrompt: {
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
     color: Colors.textSecondary,
+    marginTop: 4,
   },
   starsContainer: {
     flexDirection: 'row',
@@ -371,6 +441,30 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textMuted,
     textAlign: 'right',
+  },
+  favoriteSection: {
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 16,
+    gap: 8,
+  },
+  favoriteToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  favoriteLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.text,
+  },
+  favoriteHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    lineHeight: 18,
   },
   submitBtn: {
     backgroundColor: Colors.primary,

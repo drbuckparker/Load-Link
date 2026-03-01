@@ -52,6 +52,7 @@ function PendingReviewsBanner() {
               jobId: first.jobId,
               revieweeId: first.reviewee?.id || '',
               revieweeName: first.reviewee?.full_name || first.reviewee?.company || '',
+              revieweeCompany: first.reviewee?.company || '',
               material: first.material || '',
             },
           });

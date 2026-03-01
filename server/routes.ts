@@ -3527,6 +3527,52 @@ function initMap(){
     }
   });
 
+  app.get("/api/favorites/:driverId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const contractorId = (req.session as any).userId;
+      const { driverId } = req.params;
+      const [fav] = await db
+        .select()
+        .from(contractorFavoriteDrivers)
+        .where(and(
+          eq(contractorFavoriteDrivers.contractor_id, contractorId),
+          eq(contractorFavoriteDrivers.driver_id, driverId)
+        ))
+        .limit(1);
+      return res.json({ isFavorite: !!fav });
+    } catch (err) {
+      return res.json({ isFavorite: false });
+    }
+  });
+
+  app.post("/api/favorites/:driverId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const contractorId = (req.session as any).userId;
+      const { driverId } = req.params;
+      const [existing] = await db
+        .select()
+        .from(contractorFavoriteDrivers)
+        .where(and(
+          eq(contractorFavoriteDrivers.contractor_id, contractorId),
+          eq(contractorFavoriteDrivers.driver_id, driverId)
+        ))
+        .limit(1);
+      if (existing) {
+        await db.delete(contractorFavoriteDrivers).where(eq(contractorFavoriteDrivers.id, existing.id));
+        return res.json({ isFavorite: false });
+      } else {
+        await db.insert(contractorFavoriteDrivers).values({
+          contractor_id: contractorId,
+          driver_id: driverId,
+        });
+        return res.json({ isFavorite: true });
+      }
+    } catch (err) {
+      console.error("Favorite toggle error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/reviews/pending", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
