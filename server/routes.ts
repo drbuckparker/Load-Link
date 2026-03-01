@@ -544,18 +544,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         project_name: r.project_name || null,
       };
 
-      if (r.job.driver_id) {
-        const [driverUser] = await db
-          .select({ full_name: users.full_name, company: users.company })
-          .from(users)
-          .where(eq(users.id, r.job.driver_id))
-          .limit(1);
-        if (driverUser) {
-          job.driver_name = driverUser.full_name;
-          job.driver_company = driverUser.company;
-        }
-      }
-
       const runs = await db
         .select()
         .from(jobRuns)
@@ -566,6 +554,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .select()
         .from(jobAssignments)
         .where(eq(jobAssignments.job_id, id));
+
+      const driverId = r.job.driver_id
+        || assignments.find(a => a.status === 'approved')?.driver_id
+        || runs[0]?.driver_id
+        || null;
+
+      if (driverId) {
+        const [driverUser] = await db
+          .select({ full_name: users.full_name, company: users.company })
+          .from(users)
+          .where(eq(users.id, driverId))
+          .limit(1);
+        if (driverUser) {
+          job.driver_id = driverId;
+          job.driver_name = driverUser.full_name;
+          job.driver_company = driverUser.company;
+        }
+      }
 
       return res.json({ ...job, runs, assignments });
     } catch (err) {
