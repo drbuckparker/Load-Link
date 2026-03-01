@@ -193,6 +193,7 @@ export default function JobDetailScreen() {
   const [previewBase64, setPreviewBase64] = useState<string | null>(null);
   const [showNextDayBanner, setShowNextDayBanner] = useState(false);
   const [nextDayDate, setNextDayDate] = useState<string>('');
+  const [backingOut, setBackingOut] = useState(false);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -406,8 +407,6 @@ export default function JobDetailScreen() {
     }
     setAcceptingJob(false);
   }
-
-  const [backingOut, setBackingOut] = useState(false);
 
   function handleBackOut() {
     Alert.alert(
