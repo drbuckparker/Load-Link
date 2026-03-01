@@ -79,7 +79,7 @@ async function getVehicleConflicts(
     if (!existingJob || existingJob.status === 'cancelled' || existingJob.status === 'completed') continue;
 
     const existingDates = getJobDateRange(existingJob);
-    const isFullDay = existingJob.job_type === 'full_day';
+    const isFullDay = existingJob.job_type === 'full_day' || existingJob.job_type === 'multi_day';
     for (const d of existingDates) {
       if (jobDates.includes(d)) {
         if (!dateBookings[d]) dateBookings[d] = [];
@@ -624,7 +624,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const vIds = Array.isArray(vehicleIds) ? vehicleIds : [];
       const jobDates = getJobDateRange(job);
-      const newJobIsFullDay = job.job_type === 'full_day';
+      const newJobIsFullDay = job.job_type === 'full_day' || job.job_type === 'multi_day';
 
       if (vIds.length > 0 && jobDates.length > 0) {
         for (const vehicleId of vIds) {
@@ -798,7 +798,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!job) return res.status(404).json({ message: "Job not found" });
 
       const jobDates = getJobDateRange(job);
-      const newJobIsFullDay = job.job_type === 'full_day';
+      const newJobIsFullDay = job.job_type === 'full_day' || job.job_type === 'multi_day';
 
       const userVehicles = await db
         .select()
