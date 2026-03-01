@@ -407,6 +407,39 @@ export default function JobDetailScreen() {
     setAcceptingJob(false);
   }
 
+  const [backingOut, setBackingOut] = useState(false);
+
+  function handleBackOut() {
+    Alert.alert(
+      'Back Out of Job',
+      'Are you sure you want to back out? The contractor will be notified.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Back Out',
+          style: 'destructive',
+          onPress: async () => {
+            setBackingOut(true);
+            try {
+              await apiRequest('POST', `/api/jobs/${id}/withdraw`);
+              if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+              queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+              queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+              try {
+                if (router.canGoBack()) { router.back(); return; }
+              } catch {}
+              router.replace('/(tabs)' as any);
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Failed to back out of job');
+            }
+            setBackingOut(false);
+          },
+        },
+      ],
+    );
+  }
+
   function showTruckWarning(msg: string) {
     if (truckWarningTimeout.current) clearTimeout(truckWarningTimeout.current);
     setTruckWarning(msg);
@@ -1283,6 +1316,23 @@ export default function JobDetailScreen() {
           >
             <Ionicons name="stop-circle" size={20} color="#fff" />
             <Text style={styles.stopBtnText}>CLOCK OUT</Text>
+          </Pressable>
+        )}
+
+        {hasApplied && !isRunning && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
+          <Pressable
+            style={({ pressed }) => [styles.backOutBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+            onPress={handleBackOut}
+            disabled={backingOut}
+          >
+            {backingOut ? (
+              <ActivityIndicator size="small" color="#ef4444" />
+            ) : (
+              <>
+                <Ionicons name="exit-outline" size={20} color="#ef4444" />
+                <Text style={styles.backOutBtnText}>BACK OUT OF JOB</Text>
+              </>
+            )}
           </Pressable>
         )}
       </ScrollView>
@@ -2186,6 +2236,26 @@ const styles = StyleSheet.create({
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 16,
     color: '#fff',
+    letterSpacing: 1,
+  },
+  backOutBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.25)',
+    borderRadius: 12,
+    height: 48,
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 32,
+  },
+  backOutBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: '#ef4444',
     letterSpacing: 1,
   },
   assignmentCard: {

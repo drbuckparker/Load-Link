@@ -887,6 +887,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req.session as any).userId;
       const { id } = req.params;
 
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+
       await db
         .delete(jobAssignments)
         .where(and(eq(jobAssignments.job_id, id), eq(jobAssignments.driver_id, userId)));
@@ -895,6 +897,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .update(jobs)
         .set({ driver_id: null, status: "open", updated_at: new Date() })
         .where(and(eq(jobs.id, id), eq(jobs.driver_id, userId)));
+
+      if (job?.contractor_id) {
+        const [driverUser] = await db.select({ full_name: users.full_name }).from(users).where(eq(users.id, userId)).limit(1);
+        const driverName = driverUser?.full_name || 'A driver';
+        await db.insert(notifications).values({
+          user_id: job.contractor_id,
+          type: "load_rejected",
+          title: "Driver Backed Out",
+          message: `${driverName} has backed out of your ${job.material || ''} job`,
+          job_id: id,
+        });
+      }
 
       return res.json({ ok: true });
     } catch (err) {
