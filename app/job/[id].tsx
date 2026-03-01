@@ -352,7 +352,7 @@ export default function JobDetailScreen() {
           const key = q.queryKey.join('/');
           return key.includes('/api/jobs') || key.includes('/api/contractor');
         }});
-        router.back();
+        if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any);
       } catch (e: any) {
         Alert.alert('Error', e.message || 'Failed to cancel job');
       }

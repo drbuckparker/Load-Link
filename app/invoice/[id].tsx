@@ -54,7 +54,7 @@ export default function InvoiceDetailScreen() {
     return (
       <View style={styles.container}>
         <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any); }} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={22} color={Colors.text} />
           </Pressable>
           <Text style={styles.headerTitle}>INVOICE</Text>
@@ -71,7 +71,7 @@ export default function InvoiceDetailScreen() {
     return (
       <View style={styles.container}>
         <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any); }} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={22} color={Colors.text} />
           </Pressable>
           <Text style={styles.headerTitle}>INVOICE</Text>
@@ -80,7 +80,7 @@ export default function InvoiceDetailScreen() {
         <View style={styles.loadingContainer}>
           <Ionicons name="alert-circle-outline" size={48} color={Colors.destructive} />
           <Text style={styles.errorText}>Invoice not found</Text>
-          <Pressable style={styles.retryBtn} onPress={() => router.back()}>
+          <Pressable style={styles.retryBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any); }}>
             <Text style={styles.retryBtnText}>Go Back</Text>
           </Pressable>
         </View>
@@ -99,7 +99,7 @@ export default function InvoiceDetailScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any); }} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
         <Text style={styles.headerTitle}>INVOICE</Text>

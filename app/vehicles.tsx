@@ -400,7 +400,7 @@ export default function VehiclesScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={8}>
+        <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)/profile' as any); }} hitSlop={8}>
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
         </Pressable>
         <Text style={styles.headerTitle}>My Vehicles</Text>

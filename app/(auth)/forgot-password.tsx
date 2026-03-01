@@ -79,7 +79,7 @@ export default function ForgotPasswordScreen() {
           <Text style={styles.successText}>
             Your password has been updated. You can now sign in with your new password.
           </Text>
-          <Pressable style={styles.primaryBtn} onPress={() => router.back()}>
+          <Pressable style={styles.primaryBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(auth)/login' as any); }}>
             <Text style={styles.primaryBtnText}>BACK TO SIGN IN</Text>
           </Pressable>
         </View>
@@ -178,7 +178,7 @@ export default function ForgotPasswordScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 : insets.top }]}>
-      <Pressable style={styles.backArrow} onPress={() => router.back()}>
+      <Pressable style={styles.backArrow} onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(auth)/login' as any); }}>
         <Ionicons name="arrow-back" size={22} color={Colors.text} />
       </Pressable>
 

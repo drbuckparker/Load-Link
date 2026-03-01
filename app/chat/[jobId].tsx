@@ -89,7 +89,7 @@ export default function ChatScreen() {
       keyboardVerticalOffset={0}
     >
       <View style={[styles.topBar, { paddingTop: Platform.OS === 'web' ? 67 : insets.top }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/(tabs)/messages' as any); }} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
         <View style={styles.topBarInfo}>
