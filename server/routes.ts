@@ -2075,8 +2075,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (q.length < 2) return res.json([]);
       const pattern = `%${q}%`;
       const results = await db.execute(
-        sql`SELECT id, name, email, company, role FROM users
-            WHERE (name ILIKE ${pattern} OR email ILIKE ${pattern} OR company ILIKE ${pattern})
+        sql`SELECT id, full_name as name, email, company, role FROM users
+            WHERE (full_name ILIKE ${pattern} OR email ILIKE ${pattern} OR company ILIKE ${pattern})
             AND (role ILIKE '%driver%' OR role ILIKE '%trucking%')
             LIMIT 10`
       );
@@ -2103,7 +2103,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           job: jobs,
           contractor: {
             id: users.id,
-            name: users.name,
+            name: users.full_name,
             company: users.company,
           },
         })
@@ -2142,7 +2142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const enriched = await Promise.all(vehicles.map(async (v) => {
         if (v.assigned_driver_id) {
           const [driver] = await db
-            .select({ id: users.id, name: users.name, email: users.email })
+            .select({ id: users.id, name: users.full_name, email: users.email })
             .from(users)
             .where(eq(users.id, v.assigned_driver_id))
             .limit(1);
