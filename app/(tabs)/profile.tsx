@@ -225,7 +225,7 @@ export default function ProfileScreen() {
                     onPress={() => router.push('/vehicles')}
                   >
                     <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
-                    <Text style={styles.infoLabel}>#{idx + 1}</Text>
+                    <Text style={styles.infoLabel}>{v.truck_number || `#${idx + 1}`}</Text>
                     <Text style={styles.infoValue} numberOfLines={1}>
                       {[v.make, formatTruckType(v.truck_type)].filter(Boolean).join(' ')}
                     </Text>
