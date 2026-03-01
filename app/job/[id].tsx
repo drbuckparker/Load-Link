@@ -618,7 +618,7 @@ export default function JobDetailScreen() {
             <View style={styles.detailItem}>
               <Ionicons name="time" size={16} color={Colors.textMuted} />
               <Text style={styles.detailLabel}>Pickup Time</Text>
-              <Text style={styles.detailValue}>{job.pickupTime}</Text>
+              <Text style={styles.detailValue}>{job.pickupTime || '07:00'}</Text>
             </View>
             <View style={styles.detailItem}>
               <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.textMuted} />
