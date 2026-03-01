@@ -202,9 +202,11 @@ export default function JobDetailScreen() {
     queryKey: ['/api/vehicles'],
     enabled: truckSelectVisible,
   });
-  const { data: conflictsData } = useQuery<any>({
+  const { data: conflictsData, refetch: refetchConflicts } = useQuery<any>({
     queryKey: [`/api/jobs/${id}/vehicle-conflicts`],
     enabled: truckSelectVisible && !!id,
+    staleTime: 0,
+    gcTime: 0,
   });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -377,6 +379,7 @@ export default function JobDetailScreen() {
     setSelectedVehicleIds([]);
     setTruckWarning(null);
     setTruckSelectVisible(true);
+    queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/vehicle-conflicts`] });
   }
 
   async function handleConfirmAccept() {
@@ -1712,8 +1715,8 @@ export default function JobDetailScreen() {
                             </View>
                           )}
                           {isBlocked && !isWrongType && (
-                            <View style={styles.bookedBadge}>
-                              <Text style={styles.bookedBadgeText}>BOOKED</Text>
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>ALREADY BOOKED</Text>
                             </View>
                           )}
                         </View>
@@ -1731,9 +1734,12 @@ export default function JobDetailScreen() {
                             <Text style={styles.truckOptionMeta}>{v.max_capacity_tons}T</Text>
                           ) : null}
                         </View>
-                        {isBlocked && conflict.conflictDates?.length > 0 && (
+                        {isBlocked && !isWrongType && conflict.conflictDates?.length > 0 && (
                           <Text style={styles.truckConflictInfo}>
-                            Busy on {conflict.conflictDates.slice(0, 2).join(', ')}{conflict.conflictDates.length > 2 ? ` +${conflict.conflictDates.length - 2} more` : ''}
+                            {conflict.conflictJobs?.[0] ? `Assigned to ${conflict.conflictJobs[0]} job` : 'Assigned to another job'} · {conflict.conflictDates.slice(0, 2).map((d: string) => {
+                              const dt = new Date(d + 'T12:00:00Z');
+                              return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                            }).join(', ')}{conflict.conflictDates.length > 2 ? ` +${conflict.conflictDates.length - 2} more days` : ''}
                           </Text>
                         )}
                       </View>
