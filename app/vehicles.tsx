@@ -386,13 +386,13 @@ export default function VehiclesScreen() {
             <Ionicons name="pricetag-outline" size={14} color={Colors.textMuted} />
             <Text style={styles.detailText}>{item.truck_number || '—'}</Text>
           </View>
+          {item.assigned_driver && (
+            <View style={styles.detailItem}>
+              <Ionicons name="person" size={14} color={Colors.primary} />
+              <Text style={[styles.detailText, { color: Colors.primary }]}>{item.assigned_driver.name}</Text>
+            </View>
+          )}
         </View>
-        {item.assigned_driver && (
-          <View style={styles.assignedDriverCard}>
-            <Ionicons name="person" size={14} color={Colors.primary} />
-            <Text style={styles.assignedDriverCardText}>{item.assigned_driver.name}</Text>
-          </View>
-        )}
       </View>
     );
   }
