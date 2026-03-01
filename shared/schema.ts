@@ -389,6 +389,19 @@ export const insertUserSchema = createInsertSchema(users).pick({
   password: true,
 });
 
+export const weightTickets = pgTable("weight_tickets", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  job_run_id: varchar("job_run_id").references(() => jobRuns.id),
+  job_id: varchar("job_id").references(() => jobs.id),
+  driver_id: varchar("driver_id").references(() => users.id),
+  image_data: text("image_data"),
+  weight_value: varchar("weight_value"),
+  notes: text("notes"),
+  created_at: timestamp("created_at").defaultNow(),
+});
+
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type Job = typeof jobs.$inferSelect;
@@ -400,3 +413,4 @@ export type MonthlyInvoice = typeof monthlyInvoices.$inferSelect;
 export type DriverVehicle = typeof driverVehicles.$inferSelect;
 export type JobAssignment = typeof jobAssignments.$inferSelect;
 export type Review = typeof reviews.$inferSelect;
+export type WeightTicket = typeof weightTickets.$inferSelect;

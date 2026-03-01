@@ -15,6 +15,7 @@ import {
   contractorProjects,
   reviews,
   contractorFavoriteDrivers,
+  weightTickets,
 } from "@shared/schema";
 import bcrypt from "bcrypt";
 import session from "express-session";
@@ -22,10 +23,15 @@ import pgSession from "connect-pg-simple";
 import { pool } from "./db";
 import { Resend } from "resend";
 import crypto from "crypto";
+import multer from "multer";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const resetTokens = new Map<string, { email: string; expiresAt: number }>();
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+const pendingWeightTicketTimers = new Map<string, NodeJS.Timeout>();
 
 function getJobDateRange(job: { scheduled_date: Date | null; estimated_days: string | null; listed_days?: string | null; includes_weekends: boolean | null }): string[] {
   if (!job.scheduled_date) return [];
@@ -1020,9 +1026,125 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Review notification error (non-fatal):", notifErr);
       }
 
+      try {
+        const [job] = await db.select().from(jobs).where(eq(jobs.id, run.job_id!)).limit(1);
+        if (job && job.requires_weight_tickets) {
+          const timerKey = `${runId}`;
+          if (pendingWeightTicketTimers.has(timerKey)) clearTimeout(pendingWeightTicketTimers.get(timerKey)!);
+          const timer = setTimeout(async () => {
+            try {
+              const existing = await db.select().from(weightTickets).where(eq(weightTickets.job_run_id, runId));
+              if (existing.length === 0) {
+                const driverId = run.driver_id;
+                const contractorId = job.contractor_id;
+                const missingMsg = `Weight tickets have not been uploaded for the ${job.material || 'hauling'} job. Please upload them as soon as possible.`;
+                if (driverId) {
+                  await db.insert(notifications).values({
+                    user_id: driverId,
+                    type: "general",
+                    title: "Missing Weight Tickets",
+                    message: missingMsg,
+                    job_id: job.id,
+                  });
+                }
+                if (contractorId) {
+                  await db.insert(notifications).values({
+                    user_id: contractorId,
+                    type: "general",
+                    title: "Missing Weight Tickets",
+                    message: `Driver has not uploaded weight tickets for the ${job.material || 'hauling'} job within 30 minutes of clock-out.`,
+                    job_id: job.id,
+                  });
+                }
+                if (job.trucking_company_id) {
+                  await db.insert(notifications).values({
+                    user_id: job.trucking_company_id,
+                    type: "general",
+                    title: "Missing Weight Tickets",
+                    message: `Driver has not uploaded weight tickets for the ${job.material || 'hauling'} job within 30 minutes of clock-out.`,
+                    job_id: job.id,
+                  });
+                }
+              }
+              pendingWeightTicketTimers.delete(timerKey);
+            } catch (timerErr) {
+              console.error("Weight ticket reminder error:", timerErr);
+            }
+          }, 30 * 60 * 1000);
+          pendingWeightTicketTimers.set(timerKey, timer);
+        }
+      } catch (wtErr) {
+        console.error("Weight ticket timer error (non-fatal):", wtErr);
+      }
+
       return res.json(updated);
     } catch (err) {
       console.error("Clock out error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // ============ WEIGHT TICKETS ============
+
+  app.post("/api/job-runs/:runId/weight-tickets", requireAuth, upload.single('image'), async (req: Request, res: Response) => {
+    try {
+      const { runId } = req.params;
+      const userId = (req.session as any).userId;
+      const { weight_value, notes, image_base64 } = req.body;
+
+      const [run] = await db.select().from(jobRuns).where(eq(jobRuns.id, runId)).limit(1);
+      if (!run) return res.status(404).json({ message: "Run not found" });
+
+      let imageData: string | null = null;
+      if (req.file) {
+        imageData = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+      } else if (image_base64) {
+        imageData = image_base64;
+      }
+
+      const [ticket] = await db.insert(weightTickets).values({
+        job_run_id: runId,
+        job_id: run.job_id,
+        driver_id: userId,
+        image_data: imageData,
+        weight_value: weight_value || null,
+        notes: notes || null,
+      }).returning();
+
+      if (pendingWeightTicketTimers.has(runId)) {
+        clearTimeout(pendingWeightTicketTimers.get(runId)!);
+        pendingWeightTicketTimers.delete(runId);
+      }
+
+      return res.json(ticket);
+    } catch (err) {
+      console.error("Weight ticket upload error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/jobs/:jobId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { jobId } = req.params;
+      const tickets = await db.select().from(weightTickets)
+        .where(eq(weightTickets.job_id, jobId))
+        .orderBy(desc(weightTickets.created_at));
+      return res.json(tickets);
+    } catch (err) {
+      console.error("Get weight tickets error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runId } = req.params;
+      const tickets = await db.select().from(weightTickets)
+        .where(eq(weightTickets.job_run_id, runId))
+        .orderBy(desc(weightTickets.created_at));
+      return res.json(tickets);
+    } catch (err) {
+      console.error("Get weight tickets error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });

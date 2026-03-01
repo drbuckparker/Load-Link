@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking, Image } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
@@ -160,6 +161,9 @@ export default function JobDetailScreen() {
   const [acceptBannerData, setAcceptBannerData] = useState<{ isFavorite: boolean; message: string } | null>(null);
   const [mapVisible, setMapVisible] = useState(false);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  const [weightTicketModalVisible, setWeightTicketModalVisible] = useState(false);
+  const [uploadingTicket, setUploadingTicket] = useState(false);
+  const [showTicketPrompt, setShowTicketPrompt] = useState(false);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -170,6 +174,14 @@ export default function JobDetailScreen() {
     enabled: truckSelectVisible && !!id,
   });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const completedRunId = (jobData?.runs || []).find((r: any) => r.status === 'completed')?.id;
+  const jobRequiresWeightTickets = job?.requiresWeightTickets === true;
+
+  const { data: weightTicketsData } = useQuery<any[]>({
+    queryKey: [`/api/jobs/${id}/weight-tickets`],
+    enabled: !!id && jobRequiresWeightTickets,
+  });
 
   useEffect(() => {
     if (job) {
@@ -478,10 +490,69 @@ export default function JobDetailScreen() {
       setJobStatus('completed');
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      if (jobRequiresWeightTickets) {
+        setTimeout(() => setShowTicketPrompt(true), 500);
+      }
     } catch (e: any) {
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsRunning(false);
       setJobStatus('completed');
+    }
+  }
+
+  async function pickAndUploadWeightTicket(useCamera: boolean) {
+    try {
+      let result;
+      if (useCamera) {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert('Permission Required', 'Camera access is needed to take weight ticket photos.');
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          quality: 0.7,
+          base64: true,
+        });
+      } else {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert('Permission Required', 'Photo library access is needed to select weight tickets.');
+          return;
+        }
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          quality: 0.7,
+          base64: true,
+        });
+      }
+
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      const runId = completedRunId || (jobData?.runs || []).find((r: any) => r.status === 'completed')?.id;
+      if (!runId) {
+        Alert.alert('Error', 'No completed run found to attach this ticket to.');
+        return;
+      }
+
+      setUploadingTicket(true);
+      const imageBase64 = `data:image/jpeg;base64,${asset.base64}`;
+
+      await apiRequest('POST', `/api/job-runs/${runId}/weight-tickets`, {
+        image_base64: imageBase64,
+      });
+
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/weight-tickets`] });
+      setShowTicketPrompt(false);
+      setWeightTicketModalVisible(false);
+      Alert.alert('Uploaded', 'Weight ticket uploaded successfully.');
+    } catch (err) {
+      console.error('Weight ticket upload error:', err);
+      Alert.alert('Error', 'Failed to upload weight ticket. Please try again.');
+    } finally {
+      setUploadingTicket(false);
     }
   }
 
@@ -679,6 +750,81 @@ export default function JobDetailScreen() {
             </View>
           </View>
         </View>
+
+        {jobRequiresWeightTickets && (jobStatus === 'completed' || (weightTicketsData && weightTicketsData.length > 0)) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>WEIGHT TICKETS ({weightTicketsData?.length || 0})</Text>
+            {(weightTicketsData || []).map((ticket: any, idx: number) => (
+              <View key={ticket.id} style={styles.weightTicketCard}>
+                {ticket.image_data && (
+                  <Image source={{ uri: ticket.image_data }} style={styles.weightTicketImage} resizeMode="cover" />
+                )}
+                <View style={styles.weightTicketInfo}>
+                  <Text style={styles.weightTicketLabel}>Ticket #{idx + 1}</Text>
+                  <Text style={styles.weightTicketDate}>
+                    {new Date(ticket.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  </Text>
+                </View>
+              </View>
+            ))}
+            {!isContractor && completedRunId && (
+              <Pressable
+                style={styles.uploadTicketBtn}
+                onPress={() => setWeightTicketModalVisible(true)}
+              >
+                <Ionicons name="camera" size={20} color={Colors.primary} />
+                <Text style={styles.uploadTicketText}>Upload Weight Ticket</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+
+        {showTicketPrompt && (
+          <View style={styles.ticketPromptBanner}>
+            <View style={styles.ticketPromptContent}>
+              <Ionicons name="warning" size={24} color={Colors.warning} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.ticketPromptTitle}>Weight Tickets Required</Text>
+                <Text style={styles.ticketPromptMsg}>Please upload weight tickets within 30 minutes.</Text>
+              </View>
+            </View>
+            <View style={styles.ticketPromptActions}>
+              <Pressable style={styles.ticketPromptUploadBtn} onPress={() => { setShowTicketPrompt(false); setWeightTicketModalVisible(true); }}>
+                <Ionicons name="camera" size={18} color="#fff" />
+                <Text style={styles.ticketPromptUploadText}>Upload Now</Text>
+              </Pressable>
+              <Pressable style={styles.ticketPromptLaterBtn} onPress={() => setShowTicketPrompt(false)}>
+                <Text style={styles.ticketPromptLaterText}>Later</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        <Modal visible={weightTicketModalVisible} transparent animationType="fade" onRequestClose={() => setWeightTicketModalVisible(false)}>
+          <Pressable style={styles.wtModalOverlay} onPress={() => setWeightTicketModalVisible(false)}>
+            <View style={styles.wtModalContent} onStartShouldSetResponder={() => true}>
+              <Text style={styles.wtModalTitle}>Upload Weight Ticket</Text>
+              <Text style={styles.wtModalSubtitle}>Take a photo or choose from your library</Text>
+              {uploadingTicket ? (
+                <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 30 }} />
+              ) : (
+                <View style={styles.wtModalButtons}>
+                  <Pressable style={styles.wtModalBtn} onPress={() => pickAndUploadWeightTicket(true)}>
+                    <Ionicons name="camera" size={32} color={Colors.primary} />
+                    <Text style={styles.wtModalBtnText}>Take Photo</Text>
+                  </Pressable>
+                  <Pressable style={styles.wtModalBtn} onPress={() => pickAndUploadWeightTicket(false)}>
+                    <Ionicons name="images" size={32} color={Colors.primary} />
+                    <Text style={styles.wtModalBtnText}>Choose Photo</Text>
+                  </Pressable>
+                </View>
+              )}
+              <Pressable style={styles.wtModalCancel} onPress={() => setWeightTicketModalVisible(false)}>
+                <Text style={styles.wtModalCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Modal>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>POSTED BY</Text>
@@ -2311,5 +2457,163 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Colors.primaryForeground,
     letterSpacing: 1,
+  },
+  weightTicketCard: {
+    flexDirection: 'row',
+    backgroundColor: Colors.muted,
+    borderRadius: 12,
+    marginBottom: 8,
+    overflow: 'hidden',
+  },
+  weightTicketImage: {
+    width: 80,
+    height: 80,
+  },
+  weightTicketInfo: {
+    flex: 1,
+    padding: 12,
+    justifyContent: 'center',
+  },
+  weightTicketLabel: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  weightTicketDate: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 4,
+  },
+  uploadTicketBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.muted,
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderStyle: 'dashed',
+  },
+  uploadTicketText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.primary,
+    marginLeft: 8,
+  },
+  ticketPromptBanner: {
+    backgroundColor: '#2a2000',
+    borderRadius: 16,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+  },
+  ticketPromptContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  ticketPromptTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.warning,
+  },
+  ticketPromptMsg: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  ticketPromptActions: {
+    flexDirection: 'row',
+    marginTop: 12,
+    gap: 10,
+  },
+  ticketPromptUploadBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    padding: 12,
+    gap: 6,
+  },
+  ticketPromptUploadText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: '#fff',
+  },
+  ticketPromptLaterBtn: {
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    backgroundColor: Colors.muted,
+    padding: 12,
+  },
+  ticketPromptLaterText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  wtModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  wtModalContent: {
+    backgroundColor: Colors.card,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+  },
+  wtModalTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  wtModalSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textSecondary,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  wtModalButtons: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 24,
+  },
+  wtModalBtn: {
+    flex: 1,
+    backgroundColor: Colors.muted,
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    gap: 8,
+  },
+  wtModalBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.text,
+  },
+  wtModalCancel: {
+    marginTop: 16,
+    padding: 12,
+  },
+  wtModalCancelText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 15,
+    color: Colors.textMuted,
   },
 });

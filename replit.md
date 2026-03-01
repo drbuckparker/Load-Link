@@ -179,3 +179,8 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Tapping a project filters jobs view to show only that project's jobs
 - FAB context-aware: creates project on Projects tab, creates job on Jobs tab (pre-fills project when inside project view)
 - create-job.tsx accepts projectId URL param to pre-fill project selection
+- Weight ticket upload system: weight_tickets table, photo upload via expo-image-picker (camera or library)
+- After clock-out on weight-ticket-required jobs, driver gets prompt to upload tickets
+- 30-minute timer: if no tickets uploaded within 30 min of clock-out, notifications sent to driver, contractor, and fleet manager
+- Weight ticket API: POST `/api/job-runs/:runId/weight-tickets`, GET `/api/jobs/:jobId/weight-tickets`
+- Contractors can view uploaded weight ticket photos on job detail screen
