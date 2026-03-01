@@ -194,6 +194,7 @@ export default function JobDetailScreen() {
   const [showNextDayBanner, setShowNextDayBanner] = useState(false);
   const [nextDayDate, setNextDayDate] = useState<string>('');
   const [backingOut, setBackingOut] = useState(false);
+  const [confirmBackOut, setConfirmBackOut] = useState(false);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -409,34 +410,28 @@ export default function JobDetailScreen() {
   }
 
   function handleBackOut() {
-    Alert.alert(
-      'Back Out of Job',
-      'Are you sure you want to back out? The contractor will be notified.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Back Out',
-          style: 'destructive',
-          onPress: async () => {
-            setBackingOut(true);
-            try {
-              await apiRequest('POST', `/api/jobs/${id}/withdraw`);
-              if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
-              queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
-              queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
-              try {
-                if (router.canGoBack()) { router.back(); return; }
-              } catch {}
-              router.replace('/(tabs)' as any);
-            } catch (e: any) {
-              Alert.alert('Error', e.message || 'Failed to back out of job');
-            }
-            setBackingOut(false);
-          },
-        },
-      ],
-    );
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setConfirmBackOut(true);
+  }
+
+  async function handleConfirmBackOut() {
+    setBackingOut(true);
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/withdraw`);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] });
+      try {
+        if (router.canGoBack()) { router.back(); return; }
+      } catch {}
+      router.replace('/(tabs)' as any);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to back out of job');
+      setBackingOut(false);
+      setConfirmBackOut(false);
+    }
   }
 
   function showTruckWarning(msg: string) {
@@ -1319,20 +1314,39 @@ export default function JobDetailScreen() {
         )}
 
         {hasApplied && !isRunning && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
-          <Pressable
-            style={({ pressed }) => [styles.backOutBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-            onPress={handleBackOut}
-            disabled={backingOut}
-          >
-            {backingOut ? (
-              <ActivityIndicator size="small" color="#ef4444" />
-            ) : (
-              <>
-                <Ionicons name="exit-outline" size={20} color="#ef4444" />
-                <Text style={styles.backOutBtnText}>BACK OUT OF JOB</Text>
-              </>
-            )}
-          </Pressable>
+          confirmBackOut ? (
+            <View style={styles.backOutConfirmRow}>
+              <Text style={styles.backOutConfirmText}>Back out of this job?</Text>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Pressable
+                  style={({ pressed }) => [styles.backOutCancelBtn, pressed && { opacity: 0.8 }]}
+                  onPress={() => setConfirmBackOut(false)}
+                  disabled={backingOut}
+                >
+                  <Text style={styles.backOutCancelBtnText}>CANCEL</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.backOutConfirmBtn, pressed && { opacity: 0.8 }]}
+                  onPress={handleConfirmBackOut}
+                  disabled={backingOut}
+                >
+                  {backingOut ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.backOutConfirmBtnText}>YES, BACK OUT</Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.backOutBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+              onPress={handleBackOut}
+            >
+              <Ionicons name="exit-outline" size={20} color="#ef4444" />
+              <Text style={styles.backOutBtnText}>BACK OUT OF JOB</Text>
+            </Pressable>
+          )
         )}
       </ScrollView>
 
@@ -2255,6 +2269,52 @@ const styles = StyleSheet.create({
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 14,
     color: '#ef4444',
+    letterSpacing: 1,
+  },
+  backOutConfirmRow: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 32,
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.3)',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center' as const,
+    gap: 12,
+  },
+  backOutConfirmText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: '#ef4444',
+    letterSpacing: 0.5,
+  },
+  backOutCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  backOutCancelBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    letterSpacing: 1,
+  },
+  backOutConfirmBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: '#ef4444',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  backOutConfirmBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: '#fff',
     letterSpacing: 1,
   },
   assignmentCard: {
