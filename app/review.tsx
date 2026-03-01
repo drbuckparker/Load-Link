@@ -154,7 +154,13 @@ export default function ReviewScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: Platform.OS === 'web' ? 67 : insets.top }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable onPress={() => {
+          if (router.canGoBack()) {
+            router.back();
+          } else {
+            router.replace('/(tabs)/messages' as any);
+          }
+        }} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
         <Text style={styles.topBarTitle}>LEAVE A REVIEW</Text>
@@ -282,7 +288,13 @@ export default function ReviewScreen() {
             )}
           </Pressable>
 
-          <Pressable onPress={() => router.back()} style={styles.skipBtn}>
+          <Pressable onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace('/(tabs)/messages' as any);
+            }
+          }} style={styles.skipBtn}>
             <Text style={styles.skipBtnText}>Skip for Now</Text>
           </Pressable>
         </ScrollView>
