@@ -1321,6 +1321,29 @@ export default function JobDetailScreen() {
                 </View>
               );
             })}
+            {job && myAssignments.length < (job.trucksNeeded || 1) && jobStatus !== 'completed' && jobStatus !== 'cancelled' && !isRunning && (
+              <Pressable
+                style={({ pressed }) => ({
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  backgroundColor: 'rgba(255,153,0,0.1)',
+                  borderWidth: 1, borderColor: 'rgba(255,153,0,0.3)', borderStyle: 'dashed' as const,
+                  borderRadius: 12, padding: 14, marginTop: 4,
+                  opacity: pressed ? 0.8 : 1,
+                })}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  handleAccept();
+                }}
+              >
+                <Ionicons name="add-circle-outline" size={20} color={Colors.primary} />
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.primary, letterSpacing: 0.5 }}>
+                  ASSIGN MORE TRUCKS
+                </Text>
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textSecondary }}>
+                  ({myAssignments.length}/{job.trucksNeeded})
+                </Text>
+              </Pressable>
+            )}
           </View>
         )}
 
@@ -1681,10 +1704,11 @@ export default function JobDetailScreen() {
                 {vehiclesData.map((v: any) => {
                   const vId = v.id;
                   const isSelected = selectedVehicleIds.includes(vId);
+                  const isAlreadyOnJob = myAssignments.some((a: any) => a.vehicle_id === vId);
                   const truckLabel = [v.year, v.make, v.model].filter(Boolean).join(' ');
                   const truckTypeLabel = v.truck_type ? formatTruckType(v.truck_type) : '';
                   const conflict = conflictsData?.vehicleConflicts?.[vId];
-                  const isBlocked = conflict?.blocked === true;
+                  const isBlocked = (conflict?.blocked === true) || isAlreadyOnJob;
                   const isWrongType = conflict?.wrongType === true;
                   return (
                     <Pressable
@@ -1692,29 +1716,40 @@ export default function JobDetailScreen() {
                       style={[
                         styles.truckOption,
                         isSelected && styles.truckOptionSelected,
-                        isBlocked && styles.truckOptionBlocked,
+                        isAlreadyOnJob && { backgroundColor: 'rgba(34,197,94,0.06)', borderColor: 'rgba(34,197,94,0.2)', borderWidth: 1 },
+                        (isBlocked && !isAlreadyOnJob) && styles.truckOptionBlocked,
                       ]}
                       onPress={() => {
+                        if (isAlreadyOnJob) {
+                          showTruckWarning('This truck is already assigned to this job. Remove it from the truck list above first.');
+                          if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                          return;
+                        }
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         toggleVehicleSelection(vId);
                       }}
                     >
-                      <View style={[styles.truckCheckbox, isSelected && styles.truckCheckboxSelected, isBlocked && styles.truckCheckboxBlocked]}>
-                        {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
-                        {isBlocked && !isSelected && <Ionicons name="close" size={14} color="#cc3300" />}
+                      <View style={[styles.truckCheckbox, isSelected && styles.truckCheckboxSelected, isAlreadyOnJob && { backgroundColor: Colors.success, borderColor: Colors.success }, (isBlocked && !isAlreadyOnJob) && styles.truckCheckboxBlocked]}>
+                        {(isSelected || isAlreadyOnJob) && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        {isBlocked && !isSelected && !isAlreadyOnJob && <Ionicons name="close" size={14} color="#cc3300" />}
                       </View>
-                      <MaterialCommunityIcons name="dump-truck" size={24} color={isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
+                      <MaterialCommunityIcons name="dump-truck" size={24} color={isAlreadyOnJob ? Colors.success : isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                          <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }, isBlocked && { color: Colors.textMuted }]}>
+                          <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }, isAlreadyOnJob && { color: Colors.text }, (isBlocked && !isAlreadyOnJob) && { color: Colors.textMuted }]}>
                             {truckLabel || 'Unnamed Truck'}
                           </Text>
-                          {isWrongType && (
+                          {isAlreadyOnJob && (
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(34,197,94,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: Colors.success }]}>ON THIS JOB</Text>
+                            </View>
+                          )}
+                          {isWrongType && !isAlreadyOnJob && (
                             <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>WRONG TYPE</Text>
                             </View>
                           )}
-                          {isBlocked && !isWrongType && (
+                          {conflict?.blocked && !isWrongType && !isAlreadyOnJob && (
                             <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>ALREADY BOOKED</Text>
                             </View>
@@ -1734,7 +1769,7 @@ export default function JobDetailScreen() {
                             <Text style={styles.truckOptionMeta}>{v.max_capacity_tons}T</Text>
                           ) : null}
                         </View>
-                        {isBlocked && !isWrongType && conflict.conflictDates?.length > 0 && (
+                        {isBlocked && !isWrongType && !isAlreadyOnJob && conflict?.conflictDates?.length > 0 && (
                           <Text style={styles.truckConflictInfo}>
                             {conflict.conflictJobs?.[0] ? `Assigned to ${conflict.conflictJobs[0]} job` : 'Assigned to another job'} · {conflict.conflictDates.slice(0, 2).map((d: string) => {
                               const dt = new Date(d + 'T12:00:00Z');
