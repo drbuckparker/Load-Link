@@ -499,6 +499,7 @@ export default function JobDetailScreen() {
       setJobStatus('in_progress');
       setIsRunning(true);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to clock in');
     }
@@ -527,6 +528,7 @@ export default function JobDetailScreen() {
       setJobStatus('completed');
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
 
       const estDays = parseFloat(String(jobData?.estimated_days || jobData?.listed_days || '1')) || 1;
       if (estDays > 1 && jobData?.scheduled_date) {
