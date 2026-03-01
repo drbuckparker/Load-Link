@@ -56,6 +56,11 @@ export default function ProfileScreen() {
     enabled: activeTab === 'earnings',
   });
 
+  const { data: vehiclesList } = useQuery<any[]>({
+    queryKey: ['/api/vehicles'],
+    enabled: !isContractorRole(user?.role || ''),
+  });
+
   function openFieldEditor(label: string, key: string, currentValue: string, apiKey: string, keyboard?: string) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setEditField({ label, key, value: currentValue, apiKey, keyboard });
@@ -210,28 +215,30 @@ export default function ProfileScreen() {
 
         {!isContractorRole(user.role) && (
           <>
-            <Text style={styles.sectionTitle}>VEHICLE</Text>
+            <Text style={styles.sectionTitle}>VEHICLE LIST</Text>
             <View style={styles.infoCard}>
-              <Pressable style={styles.infoRow} onPress={() => openFieldEditor('Truck Type', 'truckType', user.truckType || '', 'truck_type')}>
-                <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.textMuted} />
-                <Text style={styles.infoLabel}>Type</Text>
-                <Text style={[styles.infoValue, !user.truckType && styles.infoValueMuted]} numberOfLines={1}>{user.truckType ? formatTruckType(user.truckType) : 'Not set'}</Text>
-                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-              </Pressable>
-              <Pressable style={styles.infoRow} onPress={() => openFieldEditor('Truck', 'truckMake', user.truckMake || '', 'truck_make')}>
-                <Ionicons name="car" size={18} color={Colors.textMuted} />
-                <Text style={styles.infoLabel}>Truck</Text>
-                <Text style={[styles.infoValue, !(user.truckYear && user.truckMake) && styles.infoValueMuted]} numberOfLines={1}>
-                  {user.truckYear && user.truckMake ? `${user.truckYear} ${user.truckMake} ${user.truckModel || ''}`.trim() : 'Not set'}
-                </Text>
-                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-              </Pressable>
-              <Pressable style={styles.infoRow} onPress={() => openFieldEditor('License Plate', 'licensePlate', user.licensePlate || '', 'license_plate')}>
-                <Ionicons name="card-outline" size={18} color={Colors.textMuted} />
-                <Text style={styles.infoLabel}>Plate</Text>
-                <Text style={[styles.infoValue, !user.licensePlate && styles.infoValueMuted]} numberOfLines={1}>{user.licensePlate || 'Not set'}</Text>
-                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-              </Pressable>
+              {vehiclesList && vehiclesList.length > 0 ? (
+                vehiclesList.map((v: any, idx: number) => (
+                  <Pressable
+                    key={v.id}
+                    style={styles.infoRow}
+                    onPress={() => router.push('/vehicles')}
+                  >
+                    <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
+                    <Text style={styles.infoLabel}>#{idx + 1}</Text>
+                    <Text style={styles.infoValue} numberOfLines={1}>
+                      {[v.make, formatTruckType(v.truck_type)].filter(Boolean).join(' ')}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                  </Pressable>
+                ))
+              ) : (
+                <Pressable style={styles.infoRow} onPress={() => router.push('/vehicles')}>
+                  <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.textMuted} />
+                  <Text style={[styles.infoLabel, { flex: 1 }]}>No vehicles added</Text>
+                  <Ionicons name="add-circle-outline" size={18} color={Colors.primary} />
+                </Pressable>
+              )}
             </View>
             <Pressable style={styles.navCard} onPress={() => router.push('/vehicles')}>
               <View style={styles.navCardLeft}>
