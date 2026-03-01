@@ -167,6 +167,7 @@ export default function JobDetailScreen() {
   const [jobStatus, setJobStatus] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [showResumeModal, setShowResumeModal] = useState(false);
   const [selectedDriver, setSelectedDriver] = useState<Assignment | null>(null);
   const [counterBidVisible, setCounterBidVisible] = useState(false);
   const [counterBidRate, setCounterBidRate] = useState('');
@@ -214,14 +215,29 @@ export default function JobDetailScreen() {
     }
   }, [job?.status]);
 
+  const getCompletedRunsSeconds = () => {
+    if (!jobData?.runs) return 0;
+    return (jobData.runs as any[])
+      .filter((r: any) => r.driver_id === user?.id && r.ended_at)
+      .reduce((total: number, r: any) => {
+        const start = new Date(r.started_at || r.startedAt).getTime();
+        const end = new Date(r.ended_at || r.endedAt).getTime();
+        return total + Math.floor((end - start) / 1000);
+      }, 0);
+  };
+
   useEffect(() => {
     if (jobData?.runs && !isRunning) {
       const activeRun = (jobData.runs as any[]).find((r: any) => r.status === 'active' && !r.ended_at && !r.clock_out_time);
       if (activeRun && activeRun.driver_id === user?.id) {
         const startedAt = new Date(activeRun.started_at || activeRun.startedAt).getTime();
-        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-        setElapsedSeconds(elapsed);
+        const activeElapsed = Math.floor((Date.now() - startedAt) / 1000);
+        const completedTime = getCompletedRunsSeconds();
+        setElapsedSeconds(completedTime + activeElapsed);
         setIsRunning(true);
+      } else if (jobStatus === 'completed') {
+        const completedTime = getCompletedRunsSeconds();
+        if (completedTime > 0) setElapsedSeconds(completedTime);
       }
     }
   }, [jobData?.runs, user?.id]);
@@ -505,6 +521,22 @@ export default function JobDetailScreen() {
     }
   }
 
+  async function handleResumeJob() {
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/clock-in`, { lat: 0, lng: 0 });
+      if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      const completedTime = getCompletedRunsSeconds();
+      setElapsedSeconds(completedTime);
+      setJobStatus('in_progress');
+      setIsRunning(true);
+      setShowResumeModal(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to resume job');
+    }
+  }
+
   function handleStopJob() {
     if (Platform.OS === 'web') {
       doStop();
@@ -682,13 +714,13 @@ export default function JobDetailScreen() {
         )}
 
         {jobStatus === 'completed' && elapsedSeconds > 0 && (
-          <View style={styles.completedCard}>
+          <Pressable style={styles.completedCard} onPress={() => setShowResumeModal(true)}>
             <Ionicons name="checkmark-circle" size={32} color={Colors.success} />
             <Text style={styles.completedTitle}>JOB COMPLETED</Text>
             <Text style={styles.completedText}>
               Time worked: {formatElapsed(elapsedSeconds)} ({billedMinutes} min billed)
             </Text>
-          </View>
+          </Pressable>
         )}
 
         <View style={styles.headerSection}>
@@ -901,6 +933,28 @@ export default function JobDetailScreen() {
             </Pressable>
           </View>
         )}
+
+        <Modal visible={showResumeModal} transparent animationType="fade" onRequestClose={() => setShowResumeModal(false)}>
+          <Pressable style={styles.wtModalOverlay} onPress={() => setShowResumeModal(false)}>
+            <View style={[styles.wtModalContent, { alignItems: 'center', paddingTop: 20 }]} onStartShouldSetResponder={() => true}>
+              <Pressable style={{ position: 'absolute', top: 12, right: 12, zIndex: 10 }} onPress={() => setShowResumeModal(false)}>
+                <Ionicons name="close" size={24} color="#999" />
+              </Pressable>
+              <Ionicons name="time-outline" size={48} color={Colors.primary} />
+              <Text style={[styles.wtModalTitle, { marginTop: 12 }]}>Resume This Job?</Text>
+              <Text style={[styles.wtModalSubtitle, { textAlign: 'center', marginBottom: 20 }]}>
+                The clock will continue from where you left off ({formatElapsed(elapsedSeconds)}).
+              </Text>
+              <Pressable
+                style={[styles.ticketPromptUploadBtn, { width: '100%', paddingVertical: 16, borderRadius: 12, backgroundColor: Colors.success }]}
+                onPress={handleResumeJob}
+              >
+                <Ionicons name="play" size={20} color="#fff" />
+                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16, marginLeft: 8, fontFamily: 'ChakraPetch_700Bold' }}>Continue Work</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Modal>
 
         <Modal visible={weightTicketModalVisible} transparent animationType="fade" onRequestClose={() => setWeightTicketModalVisible(false)}>
           <Pressable style={styles.wtModalOverlay} onPress={() => setWeightTicketModalVisible(false)}>
