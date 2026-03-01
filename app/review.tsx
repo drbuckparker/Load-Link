@@ -89,7 +89,11 @@ export default function ReviewScreen() {
       queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
 
       setTimeout(() => {
-        router.back();
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/(tabs)/messages' as any);
+        }
       }, 1500);
     } catch (err: any) {
       const msg = err?.message || 'Failed to submit review';
@@ -139,7 +143,7 @@ export default function ReviewScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.jobInfoCard}>
+          <Pressable style={styles.jobInfoCard} onPress={() => { if (params.jobId) router.push(`/job/${params.jobId}` as any); }}>
             <View style={styles.jobInfoIcon}>
               <Ionicons name="briefcase" size={20} color={Colors.primary} />
             </View>
@@ -147,7 +151,8 @@ export default function ReviewScreen() {
               <Text style={styles.jobMaterial}>{resolvedMaterial || 'Hauling Job'}</Text>
               <Text style={styles.jobLabel}>Job completed</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+          </Pressable>
 
           <View style={styles.revieweeSection}>
             <View style={styles.avatarCircle}>
