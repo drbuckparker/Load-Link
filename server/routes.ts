@@ -1531,11 +1531,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .orderBy(desc(notifications.created_at))
         .limit(5);
 
+      let activeRun: any = null;
+      const activeRunRows = await db
+        .select({
+          runId: jobRuns.id,
+          jobId: jobRuns.job_id,
+          clockInTime: jobRuns.clock_in_time,
+          material: jobs.material,
+          originAddress: jobs.origin_address,
+          contractorName: users.full_name,
+        })
+        .from(jobRuns)
+        .innerJoin(jobs, eq(jobRuns.job_id, jobs.id))
+        .leftJoin(users, eq(jobs.contractor_id, users.id))
+        .where(and(
+          eq(jobRuns.driver_id, userId),
+          eq(jobRuns.status, 'active'),
+          sql`${jobRuns.clock_out_time} IS NULL`
+        ))
+        .limit(1);
+      if (activeRunRows.length > 0) {
+        const r = activeRunRows[0];
+        activeRun = {
+          runId: r.runId,
+          jobId: r.jobId,
+          clockInTime: r.clockInTime,
+          material: r.material,
+          originAddress: r.originAddress,
+          contractorName: r.contractorName,
+        };
+      }
+
       return res.json({
         userName: user.full_name,
         role: user.role,
         activeJobs: activeJobsCount,
         isConnected: user.is_connected,
+        activeRun,
         quickJob: nearbyOpenJobs.length > 0 ? {
           material: nearbyOpenJobs[0].material,
           address: nearbyOpenJobs[0].origin_address,

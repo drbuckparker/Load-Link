@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +22,7 @@ interface DashboardData {
   activeJobs: number;
   isConnected: boolean;
   quickJob: { material: string; address: string } | null;
+  activeRun: { runId: string; jobId: string; clockInTime: string; material: string; originAddress: string; contractorName: string } | null;
   earnings: { total: number; awaiting: number; thisMonth: number; thisWeek: number };
   location: { lat: number | null; lng: number | null; address: string | null };
   upcomingDays: { date: string; dayName: string; dayNum: number; status: string; jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[] }[];
@@ -50,6 +51,8 @@ export default function DashboardScreen() {
 
   const [switchingRole, setSwitchingRole] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeElapsed, setActiveElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [deviceLat, setDeviceLat] = useState<number | null>(null);
   const [deviceLng, setDeviceLng] = useState<number | null>(null);
   const [deviceAddress, setDeviceAddress] = useState<string | null>(null);
@@ -90,6 +93,26 @@ export default function DashboardScreen() {
       } catch {}
     })();
   }, []);
+
+  useEffect(() => {
+    if (dashboard?.activeRun?.clockInTime) {
+      const clockIn = new Date(dashboard.activeRun.clockInTime).getTime();
+      const updateElapsed = () => setActiveElapsed(Math.floor((Date.now() - clockIn) / 1000));
+      updateElapsed();
+      timerRef.current = setInterval(updateElapsed, 1000);
+      return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    } else {
+      setActiveElapsed(0);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  }, [dashboard?.activeRun?.clockInTime]);
+
+  const formatTimer = (secs: number) => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
 
   const mapLat = deviceLat || dashboard?.location?.lat || undefined;
   const mapLng = deviceLng || dashboard?.location?.lng || undefined;
@@ -242,7 +265,26 @@ export default function DashboardScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries(); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
       >
-        {!contractor && dashboard?.quickJob ? (
+        {!contractor && dashboard?.activeRun ? (
+          <Pressable
+            style={styles.activeRunCard}
+            onPress={() => router.push(`/job/${dashboard.activeRun!.jobId}` as any)}
+          >
+            <View style={styles.activeRunPulse}>
+              <View style={styles.activeRunDot} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.activeRunLabel}>ON THE CLOCK</Text>
+              <Text style={styles.activeRunMaterial} numberOfLines={1}>
+                {dashboard.activeRun.material}{dashboard.activeRun.contractorName ? ` — ${dashboard.activeRun.contractorName}` : ''}
+              </Text>
+            </View>
+            <View style={styles.activeRunTimerBox}>
+              <Text style={styles.activeRunTimer}>{formatTimer(activeElapsed)}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} style={{ marginLeft: 8 }} />
+          </Pressable>
+        ) : !contractor && dashboard?.quickJob ? (
           <Pressable
             style={styles.quickJobCard}
             onPress={() => router.push('/jobs-browse' as any)}
@@ -270,7 +312,7 @@ export default function DashboardScreen() {
           </View>
         ) : null}
 
-        {!contractor && (
+        {!contractor && !dashboard?.activeRun && (
           <Text style={styles.sectionHint}>Check back later or expand your search radius in Settings</Text>
         )}
 
@@ -596,6 +638,55 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   scrollContent: { padding: 16 },
+  activeRunCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1a2e1a',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#2d6a3e',
+    gap: 10,
+    marginBottom: 6,
+  },
+  activeRunPulse: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(74,222,128,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeRunDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#4ade80',
+  },
+  activeRunLabel: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 12,
+    color: '#4ade80',
+    letterSpacing: 0.8,
+  },
+  activeRunMaterial: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 1,
+  },
+  activeRunTimerBox: {
+    backgroundColor: 'rgba(74,222,128,0.12)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  activeRunTimer: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: '#4ade80',
+    letterSpacing: 1,
+  },
   quickJobCard: {
     flexDirection: 'row',
     alignItems: 'center',

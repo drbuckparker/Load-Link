@@ -184,3 +184,5 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - 30-minute timer: if no tickets uploaded within 30 min of clock-out, notifications sent to driver, contractor, and fleet manager
 - Weight ticket API: POST `/api/job-runs/:runId/weight-tickets`, GET `/api/jobs/:jobId/weight-tickets`
 - Contractors can view uploaded weight ticket photos on job detail screen
+- Dashboard "ON THE CLOCK" timer: when driver has an active job run, replaces Quick Job card with live HH:MM:SS counter, material/contractor info, green styling; tapping navigates to job detail
+- "Back at it soon" banner: after clock-out on multi-day jobs, shows next scheduled date with smart formatting (day name for tomorrow, full date if further away); dismissible
