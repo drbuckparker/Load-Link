@@ -114,13 +114,6 @@ async function getVehicleConflicts(
         jobType: bookings[0].jobType,
         jobId: bookings[0].jobId,
       });
-    } else if (bookings.length >= 2) {
-      conflicts.push({
-        date: d,
-        jobMaterial: bookings[0].jobMaterial,
-        jobType: bookings[0].jobType,
-        jobId: bookings[0].jobId,
-      });
     }
   }
   return conflicts;
