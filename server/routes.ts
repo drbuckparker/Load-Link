@@ -1532,26 +1532,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .limit(5);
 
       let activeRun: any = null;
-      const activeRunRows = await db
-        .select({
-          runId: jobRuns.id,
-          jobId: jobRuns.job_id,
-          clockInTime: jobRuns.clock_in_time,
-          material: jobs.material,
-          originAddress: jobs.origin_address,
-          contractorName: users.full_name,
-        })
-        .from(jobRuns)
-        .innerJoin(jobs, eq(jobRuns.job_id, jobs.id))
-        .leftJoin(users, eq(jobs.contractor_id, users.id))
-        .where(and(
-          eq(jobRuns.driver_id, userId),
-          eq(jobRuns.status, 'active'),
-          sql`${jobRuns.clock_out_time} IS NULL`
-        ))
-        .limit(1);
-      if (activeRunRows.length > 0) {
-        const r = activeRunRows[0];
+      const activeRunRows = await db.execute(sql`
+        SELECT jr.id as "runId", jr.job_id as "jobId", jr.started_at as "clockInTime",
+               j.material, j.origin_address as "originAddress",
+               u.full_name as "contractorName"
+        FROM job_runs jr
+        INNER JOIN jobs j ON jr.job_id = j.id
+        LEFT JOIN users u ON j.contractor_id = u.id
+        WHERE jr.driver_id = ${userId}
+          AND jr.status = 'active'
+          AND jr.ended_at IS NULL
+        LIMIT 1
+      `);
+      if (activeRunRows.rows && activeRunRows.rows.length > 0) {
+        const r = activeRunRows.rows[0] as any;
         activeRun = {
           runId: r.runId,
           jobId: r.jobId,
@@ -1710,11 +1704,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isRead: n.is_read,
       }));
 
+      let activeRun: any = null;
+      const activeRunRows = await db.execute(sql`
+        SELECT jr.id as "runId", jr.job_id as "jobId", jr.started_at as "clockInTime",
+               j.material, j.origin_address as "originAddress",
+               u.full_name as "contractorName"
+        FROM job_runs jr
+        INNER JOIN jobs j ON jr.job_id = j.id
+        LEFT JOIN users u ON j.contractor_id = u.id
+        WHERE jr.driver_id = ${userId}
+          AND jr.status = 'active'
+          AND jr.ended_at IS NULL
+        LIMIT 1
+      `);
+      if (activeRunRows.rows && activeRunRows.rows.length > 0) {
+        const r = activeRunRows.rows[0] as any;
+        activeRun = {
+          runId: r.runId,
+          jobId: r.jobId,
+          clockInTime: r.clockInTime,
+          material: r.material,
+          originAddress: r.originAddress,
+          contractorName: r.contractorName,
+        };
+      }
+
       res.json({
         userName: `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.email,
         role: user.role,
         activeJobs: activeJobsList.length,
         isConnected: user.is_connected,
+        activeRun,
         quickJob,
         earnings: {
           total: totalEarnings,
