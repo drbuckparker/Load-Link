@@ -134,7 +134,7 @@ export default function JobsBrowseScreen() {
     enabled: !!user && activeTab === 'jobs',
   });
 
-  const projectsQueryUrl = showArchived ? '/api/projects?include_deleted=true' : '/api/projects';
+  const projectsQueryUrl = '/api/projects?include_deleted=true';
   const { data: projects = [], isLoading: projectsLoading, refetch: refetchProjects } = useQuery<ProjectItem[]>({
     queryKey: [projectsQueryUrl],
     enabled: !!user && isContractor,
@@ -254,12 +254,20 @@ export default function JobsBrowseScreen() {
   }, [rawJobs]);
 
   const filteredProjects = useMemo(() => {
-    if (!projectSearch.trim()) return projects;
-    return projects.filter(p =>
-      (p.name || '').toLowerCase().includes(projectSearch.toLowerCase()) ||
-      (p.job_number || '').toLowerCase().includes(projectSearch.toLowerCase())
-    );
-  }, [projects, projectSearch]);
+    let list = projects;
+    if (showArchived) {
+      list = list.filter(p => !!(p as any).deleted_at);
+    } else {
+      list = list.filter(p => !(p as any).deleted_at);
+    }
+    if (projectSearch.trim()) {
+      list = list.filter(p =>
+        (p.name || '').toLowerCase().includes(projectSearch.toLowerCase()) ||
+        (p.job_number || '').toLowerCase().includes(projectSearch.toLowerCase())
+      );
+    }
+    return list;
+  }, [projects, projectSearch, showArchived]);
 
   const selectedProjectData = useMemo(() => {
     if (!selectedProjectFilter) return null;
@@ -642,28 +650,32 @@ export default function JobsBrowseScreen() {
       {activeTab === 'projects' && isContractor && (
         <>
           <View style={styles.searchRow}>
-            <View style={styles.searchBar}>
-              <Ionicons name="search" size={18} color={Colors.textMuted} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search projects..."
-                placeholderTextColor={Colors.textMuted}
-                value={projectSearch}
-                onChangeText={setProjectSearch}
-                returnKeyType="search"
-              />
-              {projectSearch.length > 0 && (
-                <Pressable onPress={() => setProjectSearch('')} hitSlop={8}>
-                  <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
-                </Pressable>
-              )}
-            </View>
-            <Pressable
-              style={[styles.archivedToggle, showArchived && styles.archivedToggleActive]}
-              onPress={() => setShowArchived(!showArchived)}
-            >
-              <Ionicons name="archive-outline" size={18} color={showArchived ? Colors.primary : Colors.textMuted} />
-            </Pressable>
+            {showArchived ? (
+              <Pressable
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, paddingVertical: 10 }}
+                onPress={() => setShowArchived(false)}
+              >
+                <Ionicons name="arrow-back" size={20} color={Colors.primary} />
+                <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.primary }}>Back to Projects</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.searchBar}>
+                <Ionicons name="search" size={18} color={Colors.textMuted} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search projects..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={projectSearch}
+                  onChangeText={setProjectSearch}
+                  returnKeyType="search"
+                />
+                {projectSearch.length > 0 && (
+                  <Pressable onPress={() => setProjectSearch('')} hitSlop={8}>
+                    <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                  </Pressable>
+                )}
+              </View>
+            )}
           </View>
 
           {projectsLoading ? (
@@ -672,14 +684,14 @@ export default function JobsBrowseScreen() {
             </View>
           ) : filteredProjects.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <Ionicons name="folder-outline" size={48} color={Colors.textMuted} />
+              <Ionicons name={showArchived ? "trash-outline" : "folder-outline"} size={48} color={Colors.textMuted} />
               <Text style={styles.emptyTitle}>
-                {projectSearch ? 'No matching projects' : 'No projects yet'}
+                {showArchived ? 'No deleted projects' : projectSearch ? 'No matching projects' : 'No projects yet'}
               </Text>
               <Text style={styles.emptySubtitle}>
-                {projectSearch ? 'Try a different search term' : 'Create a project to organize your jobs'}
+                {showArchived ? 'Deleted projects will appear here' : projectSearch ? 'Try a different search term' : 'Create a project to organize your jobs'}
               </Text>
-              {!projectSearch && (
+              {!projectSearch && !showArchived && (
                 <Pressable
                   style={styles.emptyCreateBtn}
                   onPress={() => setShowCreateProject(true)}
@@ -699,6 +711,22 @@ export default function JobsBrowseScreen() {
               showsVerticalScrollIndicator={false}
               onRefresh={refetchProjects}
               refreshing={false}
+              ListFooterComponent={!showArchived && projects.some((p: any) => p.deleted_at) ? (
+                <Pressable
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                    gap: 8, paddingVertical: 14, marginTop: 16, marginBottom: 80,
+                    borderRadius: 10, borderWidth: 1, borderColor: Colors.border,
+                    backgroundColor: Colors.card,
+                  }}
+                  onPress={() => { setShowArchived(true); setProjectSearch(''); }}
+                >
+                  <Ionicons name="trash-outline" size={18} color={Colors.textMuted} />
+                  <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 14, color: Colors.textMuted }}>
+                    View Deleted Projects
+                  </Text>
+                </Pressable>
+              ) : <View style={{ height: 80 }} />}
             />
           )}
         </>
