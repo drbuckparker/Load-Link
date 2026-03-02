@@ -614,7 +614,7 @@ export default function CalendarScreen() {
                       style={styles.calJobCard}
                       onPress={() => {
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        router.push(`/job/${job.id}` as any);
+                        router.push({ pathname: `/job/${job.id}`, params: { date: selectedDate || '' } } as any);
                       }}
                     >
                       {job.projectName ? (
@@ -744,7 +744,7 @@ export default function CalendarScreen() {
                           style={[styles.calJobCard, job.assignmentStatus === 'pending' && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' as any }]}
                           onPress={() => {
                             if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                            router.push(`/job/${job.id}` as any);
+                            router.push({ pathname: `/job/${job.id}`, params: { date: modalDate || selectedDate || '' } } as any);
                           }}
                         >
                           {job.projectName ? (

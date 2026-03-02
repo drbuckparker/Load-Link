@@ -151,7 +151,7 @@ function mapJob(j: any): Job {
 }
 
 export default function JobDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, date: calendarDate } = useLocalSearchParams<{ id: string; date?: string }>();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
 
@@ -332,7 +332,12 @@ export default function JobDetailScreen() {
       );
       const isTodayScheduled = jobDates.length === 0 || jobDates.includes(todayStr) || jobDates.includes(todayUTC);
       if (!isTodayScheduled) {
-        const nextDate = jobDates.find(d => d >= todayStr) || jobDates.find(d => d >= todayUTC);
+        if (calendarDate && jobDates.includes(calendarDate)) {
+          const [y, m, d] = calendarDate.split('-').map(Number);
+          const dt = new Date(y, m - 1, d);
+          return `Available ${dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`;
+        }
+        const nextDate = jobDates.find(d => d > todayStr) || jobDates.find(d => d > todayUTC);
         if (nextDate) {
           const [y, m, d] = nextDate.split('-').map(Number);
           const dt = new Date(y, m - 1, d);
