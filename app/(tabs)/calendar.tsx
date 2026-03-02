@@ -685,24 +685,28 @@ export default function CalendarScreen() {
                   ]}>
                     {day.date}
                   </Text>
-                  {dotColor && (
+                  {hasJobs && hasSomePending ? (
                     <View style={styles.capacityDotsRow}>
-                      <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
-                      {hasSomePending && (
-                        <View style={[styles.statusDot, { backgroundColor: Colors.warning, marginLeft: 2 }]} />
-                      )}
+                      <View style={{ alignItems: 'center' }}>
+                        <View style={[styles.statusDot, { backgroundColor: allTrucksBooked ? '#fff' : Colors.info }]} />
+                        <Text style={[styles.truckCountBadge, { color: allTrucksBooked ? '#fff' : Colors.info }]}>{approvedJobCount}</Text>
+                      </View>
+                      <View style={{ alignItems: 'center', marginLeft: 3 }}>
+                        <View style={[styles.statusDot, { backgroundColor: Colors.warning }]} />
+                        <Text style={[styles.truckCountBadge, { color: Colors.warning }]}>{dayPending?.pending}</Text>
+                      </View>
                     </View>
-                  )}
-                  {hasJobs && (
-                    hasSomePending ? (
-                      <Text style={styles.truckCountBadge}>
-                        <Text style={{ color: allTrucksBooked ? '#fff' : Colors.info }}>{approvedJobCount}</Text>
-                        <Text style={{ color: Colors.textMuted }}>/</Text>
-                        <Text style={{ color: Colors.warning }}>{dayPending?.pending}</Text>
-                      </Text>
-                    ) : (
-                      <Text style={[styles.truckCountBadge, allPending && { color: Colors.warning }, allTrucksBooked && { color: '#fff' }]}>{assignedJobCount}</Text>
-                    )
+                  ) : (
+                    <>
+                      {dotColor && (
+                        <View style={styles.capacityDotsRow}>
+                          <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
+                        </View>
+                      )}
+                      {hasJobs && (
+                        <Text style={[styles.truckCountBadge, allPending && { color: Colors.warning }, allTrucksBooked && { color: '#fff' }]}>{assignedJobCount}</Text>
+                      )}
+                    </>
                   )}
                   {isToday && <View style={styles.todayIndicator} />}
                 </Pressable>
