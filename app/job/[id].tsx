@@ -900,7 +900,7 @@ export default function JobDetailScreen() {
             {job.capacityNeeded && (
               <View style={styles.detailItem}>
                 <Ionicons name="scale" size={16} color={Colors.textMuted} />
-                <Text style={styles.detailLabel}>Capacity</Text>
+                <Text style={styles.detailLabel}>Capacity (tons)</Text>
                 <Text style={styles.detailValue}>{job.capacityNeeded}</Text>
               </View>
             )}
