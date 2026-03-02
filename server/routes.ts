@@ -2427,10 +2427,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!job) return res.status(404).json({ message: "Job not found" });
       if (job.contractor_id !== userId) return res.status(403).json({ message: "Not authorized" });
 
+      const activeAssignments = await db
+        .select({ id: jobAssignments.id, driver_id: jobAssignments.driver_id })
+        .from(jobAssignments)
+        .where(and(
+          eq(jobAssignments.job_id, id),
+          sql`${jobAssignments.status}::text IN ('pending', 'approved', 'accepted')`
+        ));
+
+      await db
+        .update(jobAssignments)
+        .set({ status: "rejected" })
+        .where(and(
+          eq(jobAssignments.job_id, id),
+          sql`${jobAssignments.status}::text IN ('pending', 'approved', 'accepted')`
+        ));
+
       await db
         .update(jobs)
-        .set({ status: "cancelled", cancelled_at: new Date(), updated_at: new Date() })
+        .set({ status: "cancelled", driver_id: null, cancelled_at: new Date(), updated_at: new Date() })
         .where(eq(jobs.id, id));
+
+      const scheduledDate = job.scheduled_date
+        ? new Date(job.scheduled_date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+        : 'the scheduled date';
+
+      const uniqueDriverIds = [...new Set(activeAssignments.map(a => a.driver_id).filter(Boolean))] as string[];
+      for (const driverId of uniqueDriverIds) {
+        await db.insert(notifications).values({
+          user_id: driverId,
+          type: "load_rejected",
+          title: "Job Cancelled",
+          message: `The ${job.material || ''} job on ${scheduledDate} has been cancelled by the contractor. That day is now free for other work.`,
+          job_id: id,
+        });
+
+        await db.insert(jobMessages).values({
+          job_id: id,
+          sender_id: userId,
+          body: `This ${job.material || ''} job on ${scheduledDate} has been cancelled. Your schedule is now open for that day. Sorry for any inconvenience.`,
+        });
+      }
 
       return res.json({ ok: true });
     } catch (err) {
