@@ -3050,6 +3050,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
         body: `You've been approved for this ${job.material || ''} job! Looking forward to working with you.`,
       });
 
+      const trucksNeeded = job.trucks_needed || 1;
+      const approvedAssignments = await db
+        .select({ id: jobAssignments.id })
+        .from(jobAssignments)
+        .where(and(
+          eq(jobAssignments.job_id, id),
+          eq(jobAssignments.status, "approved")
+        ));
+
+      if (approvedAssignments.length >= trucksNeeded) {
+        const pendingAssignments = await db
+          .select({ id: jobAssignments.id, driver_id: jobAssignments.driver_id })
+          .from(jobAssignments)
+          .where(and(
+            eq(jobAssignments.job_id, id),
+            eq(jobAssignments.status, "pending")
+          ));
+
+        const scheduledDate = job.scheduled_date
+          ? new Date(job.scheduled_date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+          : 'the scheduled date';
+
+        for (const pending of pendingAssignments) {
+          await db
+            .update(jobAssignments)
+            .set({ status: "rejected" })
+            .where(eq(jobAssignments.id, pending.id));
+
+          if (pending.driver_id) {
+            await db.insert(notifications).values({
+              user_id: pending.driver_id,
+              type: "load_rejected",
+              title: "Position Filled",
+              message: `The ${job.material || ''} job has been filled. ${scheduledDate} is now available for you to book with someone else.`,
+              job_id: id,
+            });
+
+            await db.insert(jobMessages).values({
+              job_id: id,
+              sender_id: userId,
+              body: `This ${job.material || ''} job has been filled with another driver. ${scheduledDate} is now free for you to book other work. Thanks for your interest!`,
+            });
+          }
+        }
+      }
+
       return res.json({ ok: true });
     } catch (err) {
       console.error("Approve assignment error:", err);
