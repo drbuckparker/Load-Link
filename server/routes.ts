@@ -1185,7 +1185,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!job) return res.status(404).json({ message: "Job not found" });
 
       const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const todayUTC = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
 
       if (job.scheduled_date) {
         const jobDates = getJobDateRange({
@@ -1194,7 +1195,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           listed_days: (job as any).listed_days,
           includes_weekends: job.includes_weekends,
         });
-        if (jobDates.length > 0 && !jobDates.includes(todayStr)) {
+        if (jobDates.length > 0 && !jobDates.includes(todayLocal) && !jobDates.includes(todayUTC)) {
           return res.status(400).json({ message: "You can only clock in on a scheduled work day for this job" });
         }
       }

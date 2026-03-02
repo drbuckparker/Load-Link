@@ -322,6 +322,7 @@ export default function JobDetailScreen() {
     if (!canStart || isRunning) return null;
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const todayUTC = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
 
     if (job.scheduledDate) {
       const jobDates = getJobDateRange(
@@ -329,8 +330,9 @@ export default function JobDetailScreen() {
         job.estimatedDays,
         jobData?.includes_weekends ?? false
       );
-      if (jobDates.length > 0 && !jobDates.includes(todayStr)) {
-        const nextDate = jobDates.find(d => d >= todayStr);
+      const isTodayScheduled = jobDates.length === 0 || jobDates.includes(todayStr) || jobDates.includes(todayUTC);
+      if (!isTodayScheduled) {
+        const nextDate = jobDates.find(d => d >= todayStr) || jobDates.find(d => d >= todayUTC);
         if (nextDate) {
           const [y, m, d] = nextDate.split('-').map(Number);
           const dt = new Date(y, m - 1, d);
