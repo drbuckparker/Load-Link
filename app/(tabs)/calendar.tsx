@@ -447,42 +447,27 @@ export default function CalendarScreen() {
 
               if (isContractor) {
                 const cap = capacityQuery.data?.dailyCapacity?.[key];
-                const fleetSize = capacityQuery.data?.fleetSize || 0;
                 const booked = cap?.booked || 0;
                 const needed = cap?.needed || 0;
                 const jobCount = cap?.jobCount || 0;
-                const dayAvail = availability[key];
-                const isUnavailable = dayAvail?.status === 'unavailable';
-                let capacityStatus: 'full' | 'partial' | 'open' | null = null;
+                let capacityStatus: 'partial' | 'open' | null = null;
                 if (jobCount > 0) {
-                  if (fleetSize > 0 && booked >= fleetSize) capacityStatus = 'full';
-                  else if (booked > 0) capacityStatus = 'partial';
+                  if (booked > 0) capacityStatus = 'partial';
                   else capacityStatus = 'open';
                 }
 
                 return (
                   <Pressable
                     key={key}
-                    style={[styles.dayCell, isSelected && styles.dayCellSelected, isUnavailable && !isSelected && { opacity: 0.5 }]}
+                    style={[styles.dayCell, isSelected && styles.dayCellSelected]}
                     onPress={() => { setSelectedDate(key); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
                   >
                     <Text style={[
                       styles.dayNumber,
                       isToday && styles.dayNumberToday,
-                      isUnavailable && { color: Colors.destructive },
                     ]}>
                       {day.date}
                     </Text>
-                    {isUnavailable && !capacityStatus && (
-                      <View style={styles.capacityDotsRow}>
-                        <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />
-                      </View>
-                    )}
-                    {capacityStatus === 'full' && (
-                      <View style={styles.capacityDotsRow}>
-                        <View style={[styles.statusDot, { backgroundColor: Colors.destructive }]} />
-                      </View>
-                    )}
                     {capacityStatus === 'partial' && (
                       <View style={styles.capacityDotsRow}>
                         <View style={[styles.statusDot, { backgroundColor: Colors.warning }]} />
@@ -602,26 +587,13 @@ export default function CalendarScreen() {
                 <Text style={styles.detailDate}>
                   {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                 </Text>
-                {currentDayAvail && currentDayAvail.status !== 'committed' && (
-                  <View style={[{
-                    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
-                    backgroundColor: isCurrentlyAvailable ? Colors.successBg : Colors.destructiveBg
-                  }]}>
-                    <Text style={{
-                      fontFamily: 'Inter_600SemiBold', fontSize: 11, letterSpacing: 0.5,
-                      color: isCurrentlyAvailable ? Colors.success : Colors.destructive
-                    }}>
-                      {currentDayAvail.status?.toUpperCase()}
-                    </Text>
-                  </View>
-                )}
               </View>
 
-              {dateJobs.length === 0 && !currentDayAvail ? (
+              {dateJobs.length === 0 ? (
                 <View style={{ paddingVertical: 8, alignItems: 'center' }}>
                   <Text style={{ color: Colors.textMuted, fontSize: 13, fontFamily: 'Inter_400Regular' }}>No jobs scheduled for this date</Text>
                 </View>
-              ) : dateJobs.length === 0 ? null : (
+              ) : (
                 <View style={{ gap: 10, marginTop: 4 }}>
                   {dateJobs.map((job) => (
                     <Pressable
@@ -673,93 +645,6 @@ export default function CalendarScreen() {
                 </View>
               )}
 
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-                <Pressable
-                  style={[{
-                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                    gap: 6, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, minHeight: 44,
-                    borderColor: Colors.success,
-                  }, isCurrentlyAvailable && { backgroundColor: Colors.success, borderColor: Colors.success }]}
-                  onPress={() => quickSetAvailability(selectedDate, true)}
-                  disabled={!!savingQuick}
-                >
-                  {savingQuick === 'available' ? (
-                    <ActivityIndicator size="small" color={Colors.success} />
-                  ) : (
-                    <>
-                      <Ionicons name={isCurrentlyAvailable ? "checkmark-circle" : "checkmark-circle-outline"} size={18} color={isCurrentlyAvailable ? '#fff' : Colors.success} />
-                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: isCurrentlyAvailable ? '#fff' : Colors.success }}>
-                        {isCurrentlyAvailable ? 'Available' : 'Mark Available'}
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
-                <Pressable
-                  style={[{
-                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                    gap: 6, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, minHeight: 44,
-                    borderColor: Colors.destructive,
-                  }, isCurrentlyUnavailable && { backgroundColor: Colors.destructive, borderColor: Colors.destructive }]}
-                  onPress={() => quickSetAvailability(selectedDate, false)}
-                  disabled={!!savingQuick}
-                >
-                  {savingQuick === 'unavailable' ? (
-                    <ActivityIndicator size="small" color={Colors.destructive} />
-                  ) : (
-                    <>
-                      <Ionicons name={isCurrentlyUnavailable ? "close-circle" : "close-circle-outline"} size={18} color={isCurrentlyUnavailable ? '#fff' : Colors.destructive} />
-                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: isCurrentlyUnavailable ? '#fff' : Colors.destructive }}>
-                        {isCurrentlyUnavailable ? 'Unavailable' : 'Mark Unavailable'}
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
-              </View>
-
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 }}>
-                <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
-                <Text style={{ fontFamily: 'ChakraPetch_600SemiBold', fontSize: 10, color: Colors.textMuted, letterSpacing: 1 }}>BULK ACTIONS</Text>
-                <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <Pressable
-                  style={[{
-                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                    gap: 6, paddingVertical: 10, borderRadius: 8, minHeight: 44,
-                    backgroundColor: 'rgba(34, 197, 94, 0.08)', borderWidth: 1, borderColor: 'rgba(34, 197, 94, 0.2)',
-                  }, savingQuick === 'weekdays' && { opacity: 0.6 }]}
-                  onPress={() => bulkSetAvailability('weekdays', true)}
-                  disabled={!!savingQuick}
-                >
-                  {savingQuick === 'weekdays' ? (
-                    <ActivityIndicator size="small" color={Colors.success} />
-                  ) : (
-                    <>
-                      <Ionicons name="briefcase-outline" size={16} color={Colors.success} />
-                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.success }}>All Weekdays Available</Text>
-                    </>
-                  )}
-                </Pressable>
-                <Pressable
-                  style={[{
-                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                    gap: 6, paddingVertical: 10, borderRadius: 8, minHeight: 44,
-                    backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.2)',
-                  }, savingQuick === 'weekends' && { opacity: 0.6 }]}
-                  onPress={() => bulkSetAvailability('weekends', false)}
-                  disabled={!!savingQuick}
-                >
-                  {savingQuick === 'weekends' ? (
-                    <ActivityIndicator size="small" color={Colors.destructive} />
-                  ) : (
-                    <>
-                      <Ionicons name="sunny-outline" size={16} color={Colors.destructive} />
-                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.destructive }}>All Weekends Unavailable</Text>
-                    </>
-                  )}
-                </Pressable>
-              </View>
             </View>
           );
         })()}
@@ -1034,7 +919,7 @@ export default function CalendarScreen() {
 
         <Text style={styles.helpText}>
           {isContractor
-            ? 'Tap a date to manage availability and view scheduled jobs.'
+            ? 'Tap a date to view scheduled jobs.'
             : 'Tap a date to manage availability and view booked jobs.'}
         </Text>
       </ScrollView>
