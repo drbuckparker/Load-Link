@@ -1168,81 +1168,97 @@ export default function JobDetailScreen() {
         {isMyPostedJob && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>DRIVER APPLICATIONS ({assignments.length})</Text>
-            {pendingAssignments.length > 0 ? (
-              pendingAssignments.map(a => (
-                <Pressable key={a.id} style={styles.assignmentCard} onPress={() => setSelectedDriver(a)}>
-                  <View style={styles.assignmentInfo}>
-                    <View style={styles.driverAvatar}>
-                      <Text style={styles.driverAvatarText}>{a.driverName.charAt(0)}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      {a.truckingCompanyName ? (
-                        <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
-                      ) : null}
-                      <Text style={styles.driverNameText}>{a.driverName}</Text>
-                      <View style={styles.driverMeta}>
-                        {a.driverTruckType ? (
-                          <View style={styles.driverMetaItem}>
-                            <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textMuted} />
-                            <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
-                          </View>
-                        ) : null}
-                        {a.driverRating > 0 && (
-                          <View style={styles.driverMetaItem}>
-                            <Ionicons name="star" size={12} color={Colors.warning} />
-                            <Text style={styles.driverMetaText}>{a.driverRating.toFixed(1)}</Text>
-                          </View>
-                        )}
-                        {a.vehicle ? (
-                          <View style={styles.driverMetaItem}>
-                            <Ionicons name="car" size={12} color={Colors.textMuted} />
-                            <Text style={styles.driverMetaText}>
-                              {[a.vehicle.year, a.vehicle.make, a.vehicle.model].filter(Boolean).join(' ')}
-                            </Text>
-                          </View>
-                        ) : null}
+            {assignments.length > 0 ? (
+              <>
+                {approvedAssignments.map(a => (
+                  <Pressable key={a.id} style={[styles.assignmentCard, { borderColor: 'rgba(34, 197, 94, 0.3)' }]} onPress={() => setSelectedDriver(a)}>
+                    <View style={styles.assignmentInfo}>
+                      <View style={[styles.driverAvatar, { borderColor: Colors.success }]}>
+                        <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{a.driverName.charAt(0)}</Text>
                       </View>
+                      <View style={{ flex: 1 }}>
+                        {a.truckingCompanyName ? (
+                          <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
+                        ) : null}
+                        <Text style={styles.driverNameText}>{a.driverName}</Text>
+                        <View style={styles.driverMeta}>
+                          {a.driverTruckType ? (
+                            <View style={styles.driverMetaItem}>
+                              <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textMuted} />
+                              <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
+                            </View>
+                          ) : null}
+                          {a.vehicle ? (
+                            <View style={styles.driverMetaItem}>
+                              <Ionicons name="car" size={12} color={Colors.textMuted} />
+                              <Text style={styles.driverMetaText}>
+                                {[a.vehicle.year, a.vehicle.make, a.vehicle.model].filter(Boolean).join(' ')}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
                     </View>
-                    <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
-                  </View>
-                  <View style={styles.assignmentActions}>
-                    <Pressable
-                      style={styles.approveBtn}
-                      onPress={(e) => { e.stopPropagation(); handleApproveAssignment(a.id); }}
-                    >
-                      <Ionicons name="checkmark" size={20} color="#fff" />
-                    </Pressable>
-                    <Pressable
-                      style={styles.rejectBtn}
-                      onPress={(e) => { e.stopPropagation(); handleRejectAssignment(a.id); }}
-                    >
-                      <Ionicons name="close" size={20} color="#fff" />
-                    </Pressable>
-                  </View>
-                </Pressable>
-              ))
-            ) : approvedAssignments.length > 0 ? (
-              approvedAssignments.map(a => (
-                <Pressable key={a.id} style={[styles.assignmentCard, { borderColor: 'rgba(34, 197, 94, 0.3)' }]} onPress={() => setSelectedDriver(a)}>
-                  <View style={styles.assignmentInfo}>
-                    <View style={[styles.driverAvatar, { borderColor: Colors.success }]}>
-                      <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{a.driverName.charAt(0)}</Text>
+                    <View style={[styles.badge, { backgroundColor: Colors.successBg }]}>
+                      <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
+                      <Text style={[styles.badgeText, { color: Colors.success }]}>APPROVED</Text>
                     </View>
-                    <View style={{ flex: 1 }}>
-                      {a.truckingCompanyName ? (
-                        <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
-                      ) : null}
-                      <Text style={styles.driverNameText}>{a.driverName}</Text>
-                      <Text style={[styles.driverMetaText, { color: Colors.success }]}>Approved</Text>
+                  </Pressable>
+                ))}
+                {pendingAssignments.map(a => (
+                  <Pressable key={a.id} style={styles.assignmentCard} onPress={() => setSelectedDriver(a)}>
+                    <View style={styles.assignmentInfo}>
+                      <View style={styles.driverAvatar}>
+                        <Text style={styles.driverAvatarText}>{a.driverName.charAt(0)}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        {a.truckingCompanyName ? (
+                          <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
+                        ) : null}
+                        <Text style={styles.driverNameText}>{a.driverName}</Text>
+                        <View style={styles.driverMeta}>
+                          {a.driverTruckType ? (
+                            <View style={styles.driverMetaItem}>
+                              <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textMuted} />
+                              <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
+                            </View>
+                          ) : null}
+                          {a.driverRating > 0 && (
+                            <View style={styles.driverMetaItem}>
+                              <Ionicons name="star" size={12} color={Colors.warning} />
+                              <Text style={styles.driverMetaText}>{a.driverRating.toFixed(1)}</Text>
+                            </View>
+                          )}
+                          {a.vehicle ? (
+                            <View style={styles.driverMetaItem}>
+                              <Ionicons name="car" size={12} color={Colors.textMuted} />
+                              <Text style={styles.driverMetaText}>
+                                {[a.vehicle.year, a.vehicle.make, a.vehicle.model].filter(Boolean).join(' ')}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
                     </View>
-                    <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-                  </View>
-                  <View style={[styles.badge, { backgroundColor: Colors.successBg }]}>
-                    <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                    <Text style={[styles.badgeText, { color: Colors.success }]}>APPROVED</Text>
-                  </View>
-                </Pressable>
-              ))
+                    <View style={styles.assignmentActions}>
+                      <Pressable
+                        style={styles.approveBtn}
+                        onPress={(e) => { e.stopPropagation(); handleApproveAssignment(a.id); }}
+                      >
+                        <Ionicons name="checkmark" size={20} color="#fff" />
+                      </Pressable>
+                      <Pressable
+                        style={styles.rejectBtn}
+                        onPress={(e) => { e.stopPropagation(); handleRejectAssignment(a.id); }}
+                      >
+                        <Ionicons name="close" size={20} color="#fff" />
+                      </Pressable>
+                    </View>
+                  </Pressable>
+                ))}
+              </>
             ) : (
               <View style={styles.noAssignments}>
                 <Ionicons name="person-outline" size={24} color={Colors.textMuted} />
