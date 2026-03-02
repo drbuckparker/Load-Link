@@ -3612,6 +3612,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ CONTRACTOR PROJECTS ============
 
+  app.get("/api/saved-locations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const search = (req.query.search as string || '').toLowerCase().trim();
+
+      const projectResults = await db
+        .select({
+          id: contractorProjects.id,
+          name: contractorProjects.name,
+          site_address: contractorProjects.site_address,
+          site_lat: contractorProjects.site_lat,
+          site_lng: contractorProjects.site_lng,
+        })
+        .from(contractorProjects)
+        .where(and(
+          eq(contractorProjects.contractor_id, userId),
+          isNull(contractorProjects.deleted_at)
+        ))
+        .orderBy(desc(contractorProjects.created_at));
+
+      const jobResults = await db
+        .select({
+          origin_address: jobs.origin_address,
+          origin_lat: jobs.origin_lat,
+          origin_lng: jobs.origin_lng,
+          destination_address: jobs.destination_address,
+          destination_lat: jobs.destination_lat,
+          destination_lng: jobs.destination_lng,
+        })
+        .from(jobs)
+        .where(eq(jobs.contractor_id, userId))
+        .orderBy(desc(jobs.created_at))
+        .limit(50);
+
+      const locations: { type: string; name?: string; address: string; lat: number | null; lng: number | null }[] = [];
+      const seen = new Set<string>();
+
+      for (const p of projectResults) {
+        if (p.site_address) {
+          const key = p.site_address.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            locations.push({
+              type: 'project',
+              name: p.name,
+              address: p.site_address,
+              lat: p.site_lat ? Number(p.site_lat) : null,
+              lng: p.site_lng ? Number(p.site_lng) : null,
+            });
+          }
+        }
+      }
+
+      for (const j of jobResults) {
+        if (j.origin_address) {
+          const key = j.origin_address.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            locations.push({
+              type: 'job',
+              address: j.origin_address,
+              lat: j.origin_lat ? Number(j.origin_lat) : null,
+              lng: j.origin_lng ? Number(j.origin_lng) : null,
+            });
+          }
+        }
+        if (j.destination_address) {
+          const key = j.destination_address.toLowerCase();
+          if (!seen.has(key)) {
+            seen.add(key);
+            locations.push({
+              type: 'job',
+              address: j.destination_address,
+              lat: j.destination_lat ? Number(j.destination_lat) : null,
+              lng: j.destination_lng ? Number(j.destination_lng) : null,
+            });
+          }
+        }
+      }
+
+      if (search) {
+        const filtered = locations.filter(l =>
+          l.address.toLowerCase().includes(search) ||
+          (l.name && l.name.toLowerCase().includes(search))
+        );
+        return res.json(filtered.slice(0, 10));
+      }
+
+      return res.json(locations.slice(0, 10));
+    } catch (err) {
+      console.error("Saved locations error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;

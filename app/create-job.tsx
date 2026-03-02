@@ -349,26 +349,76 @@ export default function CreateJobScreen() {
     setMapPin(null);
   }
 
+  const loadSavedLocations = useCallback(async (target: 'origin' | 'destination', search?: string) => {
+    try {
+      const baseUrl = getApiUrl();
+      const savedUrl = new URL('/api/saved-locations', baseUrl);
+      if (search) savedUrl.searchParams.set('search', search);
+      const res = await fetch(savedUrl.toString(), { credentials: 'include' });
+      if (res.ok) {
+        const savedLocations = await res.json();
+        const savedItems = savedLocations.map((loc: any, i: number) => ({
+          place_id: `saved_${loc.type}_${i}_${loc.address}`,
+          description: loc.address,
+          saved: true,
+          savedType: loc.type,
+          savedName: loc.name,
+          savedLat: loc.lat,
+          savedLng: loc.lng,
+          structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
+        }));
+        if (target === 'origin') { setOriginSuggestions(savedItems); setShowOriginSuggestions(savedItems.length > 0); }
+        else { setDestSuggestions(savedItems); setShowDestSuggestions(savedItems.length > 0); }
+      } else {
+        if (target === 'origin') { setOriginSuggestions([]); setShowOriginSuggestions(false); }
+        else { setDestSuggestions([]); setShowDestSuggestions(false); }
+      }
+    } catch {
+      if (target === 'origin') { setOriginSuggestions([]); setShowOriginSuggestions(false); }
+      else { setDestSuggestions([]); setShowDestSuggestions(false); }
+    }
+  }, []);
+
   const fetchPlaceSuggestions = useCallback(async (input: string, target: 'origin' | 'destination') => {
     if (input.trim().length < 2) {
-      if (target === 'origin') setOriginSuggestions([]);
-      else setDestSuggestions([]);
+      loadSavedLocations(target, input.trim() || undefined);
       return;
     }
     try {
       const baseUrl = getApiUrl();
-      const url = new URL('/api/places/autocomplete', baseUrl);
-      url.searchParams.set('input', input);
-      if (userLat && userLng) {
-        url.searchParams.set('lat', String(userLat));
-        url.searchParams.set('lng', String(userLng));
-      }
-      const res = await fetch(url.toString(), { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        if (target === 'origin') { setOriginSuggestions(data); setShowOriginSuggestions(true); }
-        else { setDestSuggestions(data); setShowDestSuggestions(true); }
-      }
+
+      const savedUrl = new URL('/api/saved-locations', baseUrl);
+      savedUrl.searchParams.set('search', input);
+      const [savedRes, placesRes] = await Promise.all([
+        fetch(savedUrl.toString(), { credentials: 'include' }).catch(() => null),
+        (() => {
+          const url = new URL('/api/places/autocomplete', baseUrl);
+          url.searchParams.set('input', input);
+          if (userLat && userLng) {
+            url.searchParams.set('lat', String(userLat));
+            url.searchParams.set('lng', String(userLng));
+          }
+          return fetch(url.toString(), { credentials: 'include' });
+        })(),
+      ]);
+
+      const savedLocations = savedRes && savedRes.ok ? await savedRes.json() : [];
+      const placesData = placesRes.ok ? await placesRes.json() : [];
+
+      const savedItems = savedLocations.map((loc: any, i: number) => ({
+        place_id: `saved_${loc.type}_${i}_${loc.address}`,
+        description: loc.address,
+        saved: true,
+        savedType: loc.type,
+        savedName: loc.name,
+        savedLat: loc.lat,
+        savedLng: loc.lng,
+        structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
+      }));
+
+      const combined = [...savedItems, ...placesData];
+      if (target === 'origin') { setOriginSuggestions(combined); setShowOriginSuggestions(true); }
+      else { setDestSuggestions(combined); setShowDestSuggestions(true); }
     } catch {}
   }, [userLat, userLng]);
 
@@ -451,13 +501,29 @@ export default function CreateJobScreen() {
     }, 2000);
   }
 
-  async function selectSuggestion(placeId: string, description: string, target: 'origin' | 'destination') {
+  async function selectSuggestion(placeId: string, description: string, target: 'origin' | 'destination', suggestion?: any) {
     if (target === 'origin') {
       setOriginAddress(description); setShowOriginSuggestions(false); setOriginSuggestions([]);
       if (originGeoRef.current) clearTimeout(originGeoRef.current);
     } else {
       setDestinationAddress(description); setShowDestSuggestions(false); setDestSuggestions([]);
       if (destGeoRef.current) clearTimeout(destGeoRef.current);
+    }
+
+    if (suggestion?.saved && suggestion.savedLat && suggestion.savedLng) {
+      if (target === 'origin') {
+        setOriginLat(suggestion.savedLat);
+        setOriginLng(suggestion.savedLng);
+      } else {
+        setDestLat(suggestion.savedLat);
+        setDestLng(suggestion.savedLng);
+      }
+      return;
+    }
+
+    if (suggestion?.saved && (!suggestion.savedLat || !suggestion.savedLng)) {
+      geocodeAddress(description, target);
+      return;
     }
 
     try {
@@ -845,11 +911,11 @@ export default function CreateJobScreen() {
               <View style={styles.addressRow}>
                 <TextInput
                   style={[styles.input, { flex: 1 }]}
-                  placeholder="Search address or business"
+                  placeholder="Search address, business, or project name"
                   placeholderTextColor={Colors.textMuted}
                   value={originAddress}
                   onChangeText={handleOriginTextChange}
-                  onFocus={() => { if (originSuggestions.length > 0) setShowOriginSuggestions(true); }}
+                  onFocus={() => { if (originSuggestions.length > 0) setShowOriginSuggestions(true); else loadSavedLocations('origin'); }}
                 />
                 {originAddress.length > 0 && (
                   <Pressable onPress={() => { setOriginAddress(''); setOriginLat(null); setOriginLng(null); setOriginSuggestions([]); setShowOriginSuggestions(false); setRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>
@@ -859,19 +925,29 @@ export default function CreateJobScreen() {
               </View>
               {showOriginSuggestions && originSuggestions.length > 0 && (
                 <View style={styles.suggestionsDropdown}>
-                  {originSuggestions.map((s: any) => (
+                  {originSuggestions.map((s: any, idx: number) => (
                     <Pressable
-                      key={s.place_id}
-                      style={styles.suggestionItem}
-                      onPress={() => selectSuggestion(s.place_id, s.description, 'origin')}
+                      key={s.place_id + '_' + idx}
+                      style={[styles.suggestionItem, s.saved && styles.savedSuggestionItem]}
+                      onPress={() => selectSuggestion(s.place_id, s.description, 'origin', s)}
                     >
-                      <Ionicons name="location-outline" size={16} color={Colors.textSecondary} style={{ marginTop: 2 }} />
+                      <Ionicons
+                        name={s.saved ? (s.savedType === 'project' ? 'briefcase' : 'time') : 'location-outline'}
+                        size={16}
+                        color={s.saved ? Colors.primary : Colors.textSecondary}
+                        style={{ marginTop: 2 }}
+                      />
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.suggestionMain} numberOfLines={1}>
+                        <Text style={[styles.suggestionMain, s.saved && { color: Colors.textPrimary }]} numberOfLines={1}>
                           {s.structured?.main_text || s.description}
                         </Text>
-                        {s.structured?.secondary_text && (
+                        {s.structured?.secondary_text ? (
                           <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                        ) : null}
+                        {s.saved && !s.structured?.secondary_text && (
+                          <Text style={[styles.suggestionSub, { color: Colors.primary }]} numberOfLines={1}>
+                            {s.savedType === 'project' ? 'Project Site' : 'Recent Job'}
+                          </Text>
                         )}
                       </View>
                     </Pressable>
@@ -899,11 +975,11 @@ export default function CreateJobScreen() {
               <View style={styles.addressRow}>
                 <TextInput
                   style={[styles.input, { flex: 1 }]}
-                  placeholder="Search address or business"
+                  placeholder="Search address, business, or project name"
                   placeholderTextColor={Colors.textMuted}
                   value={destinationAddress}
                   onChangeText={handleDestTextChange}
-                  onFocus={() => { if (destSuggestions.length > 0) setShowDestSuggestions(true); }}
+                  onFocus={() => { if (destSuggestions.length > 0) setShowDestSuggestions(true); else loadSavedLocations('destination'); }}
                 />
                 {destinationAddress.length > 0 && (
                   <Pressable onPress={() => { setDestinationAddress(''); setDestLat(null); setDestLng(null); setDestSuggestions([]); setShowDestSuggestions(false); setRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>
@@ -913,19 +989,29 @@ export default function CreateJobScreen() {
               </View>
               {showDestSuggestions && destSuggestions.length > 0 && (
                 <View style={styles.suggestionsDropdown}>
-                  {destSuggestions.map((s: any) => (
+                  {destSuggestions.map((s: any, idx: number) => (
                     <Pressable
-                      key={s.place_id}
-                      style={styles.suggestionItem}
-                      onPress={() => selectSuggestion(s.place_id, s.description, 'destination')}
+                      key={s.place_id + '_' + idx}
+                      style={[styles.suggestionItem, s.saved && styles.savedSuggestionItem]}
+                      onPress={() => selectSuggestion(s.place_id, s.description, 'destination', s)}
                     >
-                      <Ionicons name="location-outline" size={16} color={Colors.textSecondary} style={{ marginTop: 2 }} />
+                      <Ionicons
+                        name={s.saved ? (s.savedType === 'project' ? 'briefcase' : 'time') : 'location-outline'}
+                        size={16}
+                        color={s.saved ? Colors.primary : Colors.textSecondary}
+                        style={{ marginTop: 2 }}
+                      />
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.suggestionMain} numberOfLines={1}>
+                        <Text style={[styles.suggestionMain, s.saved && { color: Colors.textPrimary }]} numberOfLines={1}>
                           {s.structured?.main_text || s.description}
                         </Text>
-                        {s.structured?.secondary_text && (
+                        {s.structured?.secondary_text ? (
                           <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                        ) : null}
+                        {s.saved && !s.structured?.secondary_text && (
+                          <Text style={[styles.suggestionSub, { color: Colors.primary }]} numberOfLines={1}>
+                            {s.savedType === 'project' ? 'Project Site' : 'Recent Job'}
+                          </Text>
                         )}
                       </View>
                     </Pressable>
@@ -1881,6 +1967,9 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
+  },
+  savedSuggestionItem: {
+    backgroundColor: 'rgba(255, 153, 0, 0.06)',
   },
   suggestionMain: {
     fontFamily: 'Inter_500Medium',

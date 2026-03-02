@@ -73,6 +73,9 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `DELETE /api/projects/:id` - Soft-delete a project (sets deleted_at, cancels associated jobs)
 - `POST /api/projects/:id/restore` - Restore a soft-deleted project
 
+### Saved Locations
+- `GET /api/saved-locations` - Returns contractor's project sites and past job pickup/dropoff addresses (query params: search)
+
 ### Vehicles
 - `GET /api/vehicles` - List user's vehicles
 - `POST /api/vehicles` - Add a vehicle
