@@ -1181,6 +1181,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       const { lat, lng } = req.body;
 
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+      if (job.scheduled_date) {
+        const jobDates = getJobDateRange({
+          scheduled_date: job.scheduled_date,
+          estimated_days: job.estimated_days,
+          listed_days: (job as any).listed_days,
+          includes_weekends: job.includes_weekends,
+        });
+        if (jobDates.length > 0 && !jobDates.includes(todayStr)) {
+          return res.status(400).json({ message: "You can only clock in on a scheduled work day for this job" });
+        }
+      }
+
+      if (job.pickup_time && job.scheduled_date) {
+        const [hours, minutes] = job.pickup_time.split(':').map(Number);
+        const jobStartToday = new Date(now);
+        jobStartToday.setHours(hours, minutes, 0, 0);
+        const earliestClockIn = new Date(jobStartToday.getTime() - 30 * 60 * 1000);
+        if (now < earliestClockIn) {
+          const timeStr = jobStartToday.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+          return res.status(400).json({ message: `You can clock in starting 30 minutes before the job start time (${timeStr})` });
+        }
+      }
+
+      if (lat && lng && job.origin_lat && job.origin_lng) {
+        const driverLat = Number(lat);
+        const driverLng = Number(lng);
+        const jobLat = Number(job.origin_lat);
+        const jobLng = Number(job.origin_lng);
+        if (driverLat !== 0 && driverLng !== 0 && jobLat !== 0 && jobLng !== 0) {
+          const R = 3959;
+          const dLat = (jobLat - driverLat) * Math.PI / 180;
+          const dLon = (jobLng - driverLng) * Math.PI / 180;
+          const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(driverLat * Math.PI / 180) * Math.cos(jobLat * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = R * c;
+          if (distance > 15) {
+            return res.status(400).json({ message: `You must be within 15 miles of the pickup location to clock in (currently ${distance.toFixed(1)} miles away)` });
+          }
+        }
+      }
+
       const [run] = await db
         .insert(jobRuns)
         .values({

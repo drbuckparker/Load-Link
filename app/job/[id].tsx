@@ -317,6 +317,46 @@ export default function JobDetailScreen() {
   const canAccept = (jobStatus === 'open' || jobStatus === 'pending') && !hasApplied && !isContractor;
   const canStart = (jobStatus === 'accepted' || jobStatus === 'in_progress') && isMyJob;
 
+  const clockInRestriction = (() => {
+    if (!canStart || isRunning) return null;
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    if (job.scheduledDate) {
+      const jobDates = getJobDateRange(
+        String(job.scheduledDate),
+        job.estimatedDays,
+        jobData?.includes_weekends ?? false
+      );
+      if (jobDates.length > 0 && !jobDates.includes(todayStr)) {
+        const nextDate = jobDates.find(d => d >= todayStr);
+        if (nextDate) {
+          const [y, m, d] = nextDate.split('-').map(Number);
+          const dt = new Date(y, m - 1, d);
+          return `Available ${dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}`;
+        }
+        return 'Not a scheduled work day';
+      }
+    }
+
+    if (job.pickupTime) {
+      const [h, m] = job.pickupTime.split(':').map(Number);
+      const jobStart = new Date(now);
+      jobStart.setHours(h, m, 0, 0);
+      const earliest = new Date(jobStart.getTime() - 30 * 60 * 1000);
+      if (now < earliest) {
+        const diff = Math.ceil((earliest.getTime() - now.getTime()) / 60000);
+        const timeStr = jobStart.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        if (diff > 60) {
+          return `Clock in opens at ${new Date(earliest.getTime()).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+        }
+        return `Clock in opens in ${diff} min (${timeStr} start)`;
+      }
+    }
+
+    return null;
+  })();
+
   function formatElapsed(sec: number) {
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
@@ -592,22 +632,51 @@ export default function JobDetailScreen() {
     setSubmittingBid(false);
   }
 
-  async function handleStartJob() {
+  async function getDriverLocation(): Promise<{ lat: number; lng: number }> {
     try {
-      await apiRequest('POST', `/api/jobs/${id}/clock-in`, { lat: 0, lng: 0 });
+      if (Platform.OS === 'web') {
+        return await new Promise((resolve) => {
+          if (!navigator.geolocation) return resolve({ lat: 0, lng: 0 });
+          navigator.geolocation.getCurrentPosition(
+            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            () => resolve({ lat: 0, lng: 0 }),
+            { timeout: 10000, enableHighAccuracy: true }
+          );
+        });
+      }
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return { lat: 0, lng: 0 };
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      return { lat: loc.coords.latitude, lng: loc.coords.longitude };
+    } catch {
+      return { lat: 0, lng: 0 };
+    }
+  }
+
+  const [clockInError, setClockInError] = useState('');
+
+  async function handleStartJob() {
+    setClockInError('');
+    try {
+      const loc = await getDriverLocation();
+      const res = await apiRequest('POST', `/api/jobs/${id}/clock-in`, loc);
       if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       setJobStatus('in_progress');
       setIsRunning(true);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to clock in');
+      const msg = e.message || 'Failed to clock in';
+      setClockInError(msg);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   }
 
   async function handleResumeJob() {
+    setClockInError('');
     try {
-      await apiRequest('POST', `/api/jobs/${id}/clock-in`, { lat: 0, lng: 0 });
+      const loc = await getDriverLocation();
+      await apiRequest('POST', `/api/jobs/${id}/clock-in`, loc);
       if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       const completedTime = getCompletedRunsSeconds();
       setElapsedSeconds(completedTime);
@@ -617,7 +686,9 @@ export default function JobDetailScreen() {
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to resume job');
+      const msg = e.message || 'Failed to resume job';
+      setClockInError(msg);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   }
 
@@ -1403,13 +1474,28 @@ export default function JobDetailScreen() {
         )}
 
         {canStart && !isRunning && jobStatus !== 'completed' && (
-          <Pressable
-            style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-            onPress={handleStartJob}
-          >
-            <Ionicons name="play-circle" size={20} color="#fff" />
-            <Text style={styles.startBtnText}>CLOCK IN</Text>
-          </Pressable>
+          <View>
+            {clockInRestriction ? (
+              <View style={styles.clockInRestricted}>
+                <Ionicons name="lock-closed" size={16} color={Colors.textMuted} />
+                <Text style={styles.clockInRestrictedText}>{clockInRestriction}</Text>
+              </View>
+            ) : (
+              <Pressable
+                style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+                onPress={handleStartJob}
+              >
+                <Ionicons name="play-circle" size={20} color="#fff" />
+                <Text style={styles.startBtnText}>CLOCK IN</Text>
+              </Pressable>
+            )}
+            {clockInError ? (
+              <View style={styles.clockInErrorRow}>
+                <Ionicons name="warning" size={14} color={Colors.destructive} />
+                <Text style={styles.clockInErrorText}>{clockInError}</Text>
+              </View>
+            ) : null}
+          </View>
         )}
 
         {isRunning && (
@@ -2386,6 +2472,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.primaryForeground,
     letterSpacing: 1,
+  },
+  clockInRestricted: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: 'rgba(107, 112, 128, 0.15)',
+    borderRadius: 12,
+    height: 52,
+    gap: 8,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(107, 112, 128, 0.3)',
+  },
+  clockInRestrictedText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  clockInErrorRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    marginTop: 6,
+    paddingHorizontal: 4,
+  },
+  clockInErrorText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.destructive,
+    flex: 1,
   },
   startBtn: {
     flexDirection: 'row',
