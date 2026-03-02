@@ -47,6 +47,12 @@ export default function ChatScreen() {
     ? (jobData?.driver_name ?? jobData?.driverName ?? 'Driver')
     : (jobData?.contractor_name ?? jobData?.contractorName ?? 'Chat');
   const jobMaterial = jobData?.material ?? '';
+  const jobDate = jobData?.scheduled_date ?? jobData?.scheduledDate;
+  const jobPickup = jobData?.origin_address ?? jobData?.originAddress ?? '';
+  const jobDropoff = jobData?.destination_address ?? jobData?.destinationAddress ?? '';
+  const jobRate = jobData?.rate ? Number(jobData.rate) : null;
+  const jobRateType = jobData?.rate_type ?? jobData?.rateType ?? '';
+  const jobStatus = jobData?.status ?? '';
 
   async function handleSend() {
     if (!messageText.trim() || !user) return;
@@ -121,6 +127,46 @@ export default function ChatScreen() {
         </View>
         <View style={{ width: 40 }} />
       </View>
+
+      {jobData && (
+        <Pressable
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 10,
+            backgroundColor: 'rgba(255,153,0,0.08)',
+            borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)',
+            paddingHorizontal: 16, paddingVertical: 10,
+          }}
+          onPress={() => {
+            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push(`/job/${jobId}` as any);
+          }}
+        >
+          <View style={{ flex: 1, gap: 2 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.primary }}>
+                {jobMaterial || 'Job'}
+              </Text>
+              {jobStatus ? (
+                <View style={{ backgroundColor: jobStatus === 'open' ? 'rgba(34,197,94,0.15)' : 'rgba(255,153,0,0.15)', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
+                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: jobStatus === 'open' ? '#22c55e' : Colors.primary, textTransform: 'uppercase' }}>{jobStatus}</Text>
+                </View>
+              ) : null}
+            </View>
+            {jobDate && (
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textSecondary }}>
+                {new Date(jobDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                {jobRate ? `  ·  $${jobRate}/${jobRateType === 'per_hour' ? 'hr' : jobRateType === 'per_ton' ? 'ton' : 'load'}` : ''}
+              </Text>
+            )}
+            {jobPickup ? (
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted }} numberOfLines={1}>
+                {jobPickup}{jobDropoff ? ` → ${jobDropoff}` : ''}
+              </Text>
+            ) : null}
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+        </Pressable>
+      )}
 
       <FlatList
         ref={flatListRef}
