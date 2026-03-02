@@ -1585,6 +1585,14 @@ export default function JobDetailScreen() {
                   </View>
                 )}
 
+                <Pressable
+                  style={styles.messageDriverBtn}
+                  onPress={() => { setSelectedDriver(null); router.push(`/chat/${id}`); }}
+                >
+                  <Ionicons name="chatbubble-ellipses" size={20} color="#fff" />
+                  <Text style={styles.messageDriverBtnText}>MESSAGE</Text>
+                </Pressable>
+
                 {selectedDriver.status === 'pending' && (
                   <View style={styles.modalActions}>
                     <Pressable
@@ -2721,6 +2729,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 8,
+  },
+  messageDriverBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    height: 48,
+    borderRadius: 10,
+    backgroundColor: Colors.primary,
+    gap: 8,
+    marginTop: 8,
+  },
+  messageDriverBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: '#fff',
+    letterSpacing: 1,
   },
   modalActionBtn: {
     flex: 1,
