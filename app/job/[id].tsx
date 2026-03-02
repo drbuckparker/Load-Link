@@ -1171,10 +1171,18 @@ export default function JobDetailScreen() {
             <View style={styles.contractorAvatar}>
               <Text style={styles.contractorAvatarText}>{job.contractorName.charAt(0)}</Text>
             </View>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.contractorName}>{job.contractorName}</Text>
               <Text style={styles.contractorCompany}>{job.contractorCompany}</Text>
             </View>
+            {myAssignments.some((a: any) => a.status === 'approved') && (
+              <Pressable
+                style={styles.contractorMsgBtn}
+                onPress={() => router.push(`/chat/${id}`)}
+              >
+                <Ionicons name="chatbubble-ellipses" size={20} color={Colors.primary} />
+              </Pressable>
+            )}
           </View>
         </View>
 
@@ -1585,13 +1593,15 @@ export default function JobDetailScreen() {
                   </View>
                 )}
 
-                <Pressable
-                  style={styles.messageDriverBtn}
-                  onPress={() => { setSelectedDriver(null); router.push(`/chat/${id}`); }}
-                >
-                  <Ionicons name="chatbubble-ellipses" size={20} color="#fff" />
-                  <Text style={styles.messageDriverBtnText}>MESSAGE</Text>
-                </Pressable>
+                {selectedDriver.status === 'approved' && (
+                  <Pressable
+                    style={styles.messageDriverBtn}
+                    onPress={() => { setSelectedDriver(null); router.push(`/chat/${id}`); }}
+                  >
+                    <Ionicons name="chatbubble-ellipses" size={20} color="#fff" />
+                    <Text style={styles.messageDriverBtnText}>MESSAGE</Text>
+                  </Pressable>
+                )}
 
                 {selectedDriver.status === 'pending' && (
                   <View style={styles.modalActions}>
@@ -2298,6 +2308,14 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: Colors.border,
+  },
+  contractorMsgBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 153, 0, 0.15)',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
   },
   contractorAvatar: {
     width: 44,
