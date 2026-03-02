@@ -694,7 +694,15 @@ export default function CalendarScreen() {
                     </View>
                   )}
                   {hasJobs && (
-                    <Text style={[styles.truckCountBadge, allPending && { color: Colors.warning }, hasSomePending && { color: Colors.warning }, allTrucksBooked && { color: '#fff' }]}>{assignedJobCount}</Text>
+                    hasSomePending ? (
+                      <Text style={styles.truckCountBadge}>
+                        <Text style={{ color: allTrucksBooked ? '#fff' : Colors.info }}>{approvedJobCount}</Text>
+                        <Text style={{ color: Colors.textMuted }}>/</Text>
+                        <Text style={{ color: Colors.warning }}>{dayPending?.pending}</Text>
+                      </Text>
+                    ) : (
+                      <Text style={[styles.truckCountBadge, allPending && { color: Colors.warning }, allTrucksBooked && { color: '#fff' }]}>{assignedJobCount}</Text>
+                    )
                   )}
                   {isToday && <View style={styles.todayIndicator} />}
                 </Pressable>
