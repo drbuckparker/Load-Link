@@ -166,6 +166,7 @@ export const users = pgTable("users", {
   suspend_reason: text("suspend_reason"),
   suspended_by: varchar("suspended_by"),
   is_admin: boolean("is_admin").default(false),
+  expo_push_token: text("expo_push_token"),
 });
 
 export const jobs = pgTable("jobs", {

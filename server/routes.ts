@@ -33,6 +33,32 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 const pendingWeightTicketTimers = new Map<string, NodeJS.Timeout>();
 
+async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>) {
+  try {
+    const [u] = await db.select({ token: users.expo_push_token }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!u?.token) return;
+
+    const message = {
+      to: u.token,
+      sound: 'default' as const,
+      title,
+      body,
+      data: data || {},
+    };
+
+    const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    });
+    if (!pushRes.ok) {
+      console.error('Push notification failed:', pushRes.status);
+    }
+  } catch (e) {
+    console.error('Push notification error:', e);
+  }
+}
+
 function getJobDateRange(job: { scheduled_date: Date | null; estimated_days: string | null; listed_days?: string | null; includes_weekends: boolean | null }): string[] {
   if (!job.scheduled_date) return [];
   const startDate = new Date(job.scheduled_date);
@@ -339,6 +365,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     req.session.destroy(() => {
       res.json({ ok: true });
     });
+  });
+
+  app.post("/api/push/register", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { token } = req.body;
+      if (!token) return res.status(400).json({ message: "Token required" });
+      await db.update(users).set({ expo_push_token: token }).where(eq(users.id, userId));
+      return res.json({ ok: true });
+    } catch (err) {
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
@@ -815,15 +853,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const [driverUser] = await db.select({ full_name: users.full_name }).from(users).where(eq(users.id, userId)).limit(1);
       const driverName = driverUser?.full_name || 'A driver';
 
+      const notifTitle = isFavorite ? "Favorite Driver Assigned" : "New Driver Application";
+      const notifMsg = isFavorite
+        ? `${driverName} (favorite) has been auto-assigned to your ${job.material} job`
+        : `${driverName} would like to work on your ${job.material} job`;
       await db.insert(notifications).values({
         user_id: job.contractor_id!,
         type: "load_accepted",
-        title: isFavorite ? "Favorite Driver Assigned" : "New Driver Application",
-        message: isFavorite
-          ? `${driverName} (favorite) has been auto-assigned to your ${job.material} job`
-          : `${driverName} would like to work on your ${job.material} job`,
+        title: notifTitle,
+        message: notifMsg,
         job_id: id,
       });
+      sendPushNotification(job.contractor_id!, notifTitle, notifMsg, { jobId: id, type: 'job_application' });
 
       const truckCount = vIds.length || 1;
       await db.insert(jobMessages).values({
@@ -1210,22 +1251,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const [contractorUser] = contractorId ? await db.select({ full_name: users.full_name, company: users.company }).from(users).where(eq(users.id, contractorId)).limit(1) : [null];
 
           if (driverId) {
+            const drvReviewMsg = `How was your experience hauling ${job.material || 'materials'} for ${contractorUser?.company || contractorUser?.full_name || 'the contractor'}? Tap to leave a review.`;
             await db.insert(notifications).values({
               user_id: driverId,
               type: "load_completed",
               title: "Job Completed - Leave a Review",
-              message: `How was your experience hauling ${job.material || 'materials'} for ${contractorUser?.company || contractorUser?.full_name || 'the contractor'}? Tap to leave a review.`,
+              message: drvReviewMsg,
               job_id: job.id,
             });
+            sendPushNotification(driverId, "Job Completed - Leave a Review", drvReviewMsg, { jobId: job.id, type: 'load_completed' });
           }
           if (contractorId) {
+            const ctrReviewMsg = `How was ${driverUser?.full_name || 'the driver'}'s work on your ${job.material || 'hauling'} job? Tap to leave a review.`;
             await db.insert(notifications).values({
               user_id: contractorId,
               type: "load_completed",
               title: "Job Completed - Leave a Review",
-              message: `How was ${driverUser?.full_name || 'the driver'}'s work on your ${job.material || 'hauling'} job? Tap to leave a review.`,
+              message: ctrReviewMsg,
               job_id: job.id,
             });
+            sendPushNotification(contractorId, "Job Completed - Leave a Review", ctrReviewMsg, { jobId: job.id, type: 'load_completed' });
           }
         }
       } catch (notifErr) {
@@ -1252,24 +1297,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     message: missingMsg,
                     job_id: job.id,
                   });
+                  sendPushNotification(driverId, "Missing Weight Tickets", missingMsg, { jobId: job.id, type: 'weight_tickets' });
                 }
                 if (contractorId) {
+                  const ctrWtMsg = `Driver has not uploaded weight tickets for the ${job.material || 'hauling'} job within 30 minutes of clock-out.`;
                   await db.insert(notifications).values({
                     user_id: contractorId,
                     type: "general",
                     title: "Missing Weight Tickets",
-                    message: `Driver has not uploaded weight tickets for the ${job.material || 'hauling'} job within 30 minutes of clock-out.`,
+                    message: ctrWtMsg,
                     job_id: job.id,
                   });
+                  sendPushNotification(contractorId, "Missing Weight Tickets", ctrWtMsg, { jobId: job.id, type: 'weight_tickets' });
                 }
                 if (job.trucking_company_id) {
+                  const tcWtMsg = `Driver has not uploaded weight tickets for the ${job.material || 'hauling'} job within 30 minutes of clock-out.`;
                   await db.insert(notifications).values({
                     user_id: job.trucking_company_id,
                     type: "general",
                     title: "Missing Weight Tickets",
-                    message: `Driver has not uploaded weight tickets for the ${job.material || 'hauling'} job within 30 minutes of clock-out.`,
+                    message: tcWtMsg,
                     job_id: job.id,
                   });
+                  sendPushNotification(job.trucking_company_id, "Missing Weight Tickets", tcWtMsg, { jobId: job.id, type: 'weight_tickets' });
                 }
               }
               pendingWeightTicketTimers.delete(timerKey);
@@ -1505,6 +1555,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
+
+      const [job] = await db.select({ contractor_id: jobs.contractor_id, driver_id: jobs.driver_id, material: jobs.material }).from(jobs).where(eq(jobs.id, jobId)).limit(1);
+      if (job) {
+        const recipientId = job.contractor_id === userId ? job.driver_id : job.contractor_id;
+        if (recipientId) {
+          sendPushNotification(recipientId, sender?.full_name || 'New Message', body, { jobId, type: 'message' });
+        }
+      }
 
       return res.json({
         ...msg,
@@ -3134,6 +3192,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `Your assignment for the ${job.material} job has been approved`,
         job_id: id,
       });
+      sendPushNotification(assignment.driver_id!, "Assignment Approved", `Your assignment for the ${job.material} job has been approved`, { jobId: id, type: 'job_approved' });
 
       await db.insert(jobMessages).values({
         job_id: id,
@@ -3223,6 +3282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `Your assignment for the ${job.material} job has been rejected`,
         job_id: id,
       });
+      sendPushNotification(assignment.driver_id!, "Assignment Rejected", `Your assignment for the ${job.material} job has been rejected`, { jobId: id, type: 'job_rejected' });
 
       await db.insert(jobMessages).values({
         job_id: id,

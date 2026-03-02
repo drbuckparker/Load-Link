@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { View, Text, FlatList, TextInput, Pressable, StyleSheet, Platform, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { Message } from '@/lib/mock-data';
 import { apiRequest, queryClient } from '@/lib/query-client';
+import { playMessageSound } from '@/lib/sounds';
 
 function mapMessage(m: any): Message {
   return {
@@ -29,9 +30,11 @@ export default function ChatScreen() {
   const [messageText, setMessageText] = useState('');
   const flatListRef = useRef<FlatList>(null);
 
+  const prevMsgCountRef = useRef<number>(0);
   const { data: messagesData, isLoading: messagesLoading } = useQuery<any[]>({
     queryKey: [`/api/messages/${jobId}`],
     enabled: !!jobId,
+    refetchInterval: 5000,
   });
 
   const { data: jobData } = useQuery<any>({
@@ -41,6 +44,18 @@ export default function ChatScreen() {
 
   const messages = (messagesData || []).map(mapMessage);
   const invertedMessages = [...messages].reverse();
+
+  useEffect(() => {
+    if (!messagesData) return;
+    const count = messagesData.length;
+    if (prevMsgCountRef.current > 0 && count > prevMsgCountRef.current) {
+      const latest = messagesData[messagesData.length - 1];
+      if (latest && (latest.sender_id ?? latest.senderId) !== user?.id) {
+        playMessageSound();
+      }
+    }
+    prevMsgCountRef.current = count;
+  }, [messagesData]);
 
   const isMyPostedJob = user?.id && (jobData?.contractor_id === user.id || jobData?.contractorId === user.id);
   const chatPartnerName = isMyPostedJob

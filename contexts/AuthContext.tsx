@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useMemo, ReactNode } fr
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiRequest, getApiUrl } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
+import { registerForPushNotifications } from '@/lib/notifications';
 
 export interface User {
   id: string;
@@ -127,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const mapped = mapDbUser(data.user);
     await safeStore(mapped);
     setUser(mapped);
+    registerForPushNotifications().catch(() => {});
   }
 
   async function register(data: { email: string; password: string; fullName: string; phone: string; role: string }) {
@@ -135,6 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const mapped = mapDbUser(responseData.user);
     await safeStore(mapped);
     setUser(mapped);
+    registerForPushNotifications().catch(() => {});
   }
 
   async function logout() {

@@ -192,3 +192,12 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Dashboard auto-updates secondary location + auth context on app open
 - Calendar open jobs also filtered by location radius
 - Profile shows "Work Location" (editable) and "Current Location" (auto-detected, read-only) with helper text
+- Push notifications via Expo Push: `expo_push_token` column on users table, registration on login/register
+- Push sent on: new driver application, assignment approved/rejected, new message, job completed/review, weight ticket reminders
+- In-app notification sounds: notification.wav (high ding) and message.wav (two-tone) in assets/sounds/
+- Chat screen polls every 5s and plays message sound when new messages arrive from other person
+- Root layout handles push notification taps: messages → chat screen, jobs → job detail, fallback → notifications
+- Android notification channel configured with vibration pattern
+- Sound files: lib/sounds.ts (playNotificationSound, playMessageSound), lib/notifications.ts (registerForPushNotifications)
+- Push registration endpoint: POST `/api/push/register` saves expo_push_token to user record
+- Server-side push: sendPushNotification() utility posts to Expo Push API (exp.host)
