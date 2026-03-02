@@ -470,34 +470,6 @@ export default function DashboardScreen() {
           })}
         </View>
 
-        {(dashboard?.recentActivity || []).length > 0 && (
-          <View style={styles.activitySection}>
-            <View style={styles.activityHeader}>
-              <Text style={styles.activityTitle}>RECENT ACTIVITY</Text>
-              <Pressable onPress={() => router.push('/notifications')}>
-                <Text style={styles.scheduleLink}>View All</Text>
-              </Pressable>
-            </View>
-            {(dashboard?.recentActivity || []).map(a => (
-              <Pressable
-                key={a.id}
-                style={styles.activityRow}
-                onPress={() => {
-                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  router.push('/notifications');
-                }}
-              >
-                <View style={[styles.activityDot, { backgroundColor: a.isRead ? Colors.textMuted : Colors.primary }]} />
-                <View style={styles.activityContent}>
-                  <Text style={styles.activityText}>{a.title}</Text>
-                  <Text style={styles.activityTime}>{timeAgo(a.createdAt)}</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
-              </Pressable>
-            ))}
-          </View>
-        )}
-
         {contractor && (
           <Pressable
             style={styles.createJobBtn}
