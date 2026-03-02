@@ -3661,7 +3661,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
-      const { name, job_number, site_address, notes } = req.body;
+      const { name, job_number, site_address, site_lat, site_lng, notes } = req.body;
 
       const [project] = await db
         .insert(contractorProjects)
@@ -3670,6 +3670,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name,
           ...(job_number ? { job_number } : {}),
           ...(site_address ? { site_address } : {}),
+          ...(site_lat != null ? { site_lat: String(site_lat) } : {}),
+          ...(site_lng != null ? { site_lng: String(site_lng) } : {}),
           ...(notes ? { notes } : {}),
         })
         .returning();
@@ -3685,7 +3687,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req.session as any).userId;
       const projectId = req.params.id;
-      const { name, job_number, site_address, notes, awarded_amount, status } = req.body;
+      const { name, job_number, site_address, site_lat, site_lng, notes, awarded_amount, status } = req.body;
 
       const [existing] = await db
         .select()
@@ -3701,6 +3703,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (name !== undefined) updateData.name = name;
       if (job_number !== undefined) updateData.job_number = job_number;
       if (site_address !== undefined) updateData.site_address = site_address;
+      if (site_lat !== undefined) updateData.site_lat = site_lat != null ? String(site_lat) : null;
+      if (site_lng !== undefined) updateData.site_lng = site_lng != null ? String(site_lng) : null;
       if (notes !== undefined) updateData.notes = notes;
       if (awarded_amount !== undefined) updateData.awarded_amount = awarded_amount;
       if (status !== undefined) updateData.status = status;

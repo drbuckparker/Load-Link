@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, ScrollView, StyleSheet, Platform, ActivityIndicator, Modal, Alert, RefreshControl } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,7 +8,7 @@ import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor, timeAgo } from '@/lib/mock-data';
-import { apiRequest } from '@/lib/query-client';
+import { apiRequest, getApiUrl } from '@/lib/query-client';
 import JobCard from '@/components/JobCard';
 
 function isContractorRole(role?: string) {
@@ -60,6 +60,8 @@ interface ProjectItem {
   status: string;
   notes: string | null;
   site_address: string | null;
+  site_lat: string | null;
+  site_lng: string | null;
   created_at: string;
   job_count: number;
 }
@@ -103,6 +105,16 @@ export default function JobsBrowseScreen() {
   const [editProjectNotes, setEditProjectNotes] = useState('');
   const [editProjectAwarded, setEditProjectAwarded] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [newProjectSiteLat, setNewProjectSiteLat] = useState<number | null>(null);
+  const [newProjectSiteLng, setNewProjectSiteLng] = useState<number | null>(null);
+  const [newSiteSuggestions, setNewSiteSuggestions] = useState<any[]>([]);
+  const [showNewSiteSuggestions, setShowNewSiteSuggestions] = useState(false);
+  const [editProjectSiteLat, setEditProjectSiteLat] = useState<number | null>(null);
+  const [editProjectSiteLng, setEditProjectSiteLng] = useState<number | null>(null);
+  const [editSiteSuggestions, setEditSiteSuggestions] = useState<any[]>([]);
+  const [showEditSiteSuggestions, setShowEditSiteSuggestions] = useState(false);
+  const siteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const siteGeoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const statusParam = useMemo(() => {
     if (activeFilter === 'All') return undefined;
@@ -149,7 +161,7 @@ export default function JobsBrowseScreen() {
   });
 
   const createProjectMutation = useMutation({
-    mutationFn: async (data: { name: string; job_number?: string; site_address?: string; notes?: string }) => {
+    mutationFn: async (data: { name: string; job_number?: string; site_address?: string; site_lat?: number; site_lng?: number; notes?: string }) => {
       const res = await apiRequest('POST', '/api/projects', data);
       return res.json();
     },
@@ -168,7 +180,7 @@ export default function JobsBrowseScreen() {
   });
 
   const updateProjectMutation = useMutation({
-    mutationFn: async (data: { id: string; name?: string; job_number?: string; site_address?: string; notes?: string; awarded_amount?: string }) => {
+    mutationFn: async (data: { id: string; name?: string; job_number?: string; site_address?: string; site_lat?: number; site_lng?: number; notes?: string; awarded_amount?: string }) => {
       const { id, ...body } = data;
       const res = await apiRequest('PUT', `/api/projects/${id}`, body);
       return res.json();
@@ -239,6 +251,8 @@ export default function JobsBrowseScreen() {
     setEditProjectName(project.name || '');
     setEditProjectJobNumber(project.job_number || '');
     setEditProjectSiteAddress(project.site_address || '');
+    setEditProjectSiteLat(project.site_lat ? Number(project.site_lat) : null);
+    setEditProjectSiteLng(project.site_lng ? Number(project.site_lng) : null);
     setEditProjectNotes(project.notes || '');
     setEditProjectAwarded(project.awarded_amount ? String(project.awarded_amount) : '');
   }
@@ -250,10 +264,12 @@ export default function JobsBrowseScreen() {
       name: editProjectName.trim(),
       job_number: editProjectJobNumber.trim(),
       site_address: editProjectSiteAddress.trim(),
+      ...(editProjectSiteLat != null ? { site_lat: editProjectSiteLat } : {}),
+      ...(editProjectSiteLng != null ? { site_lng: editProjectSiteLng } : {}),
       notes: editProjectNotes.trim(),
       awarded_amount: editProjectAwarded.trim(),
     });
-  }, [editingProject, editProjectName, editProjectJobNumber, editProjectSiteAddress, editProjectNotes, editProjectAwarded]);
+  }, [editingProject, editProjectName, editProjectJobNumber, editProjectSiteAddress, editProjectSiteLat, editProjectSiteLng, editProjectNotes, editProjectAwarded]);
 
   const jobs = useMemo(() => {
     if (!rawJobs) return [];
@@ -477,9 +493,81 @@ export default function JobsBrowseScreen() {
       name: newProjectName.trim(),
       ...(newProjectJobNumber.trim() ? { job_number: newProjectJobNumber.trim() } : {}),
       ...(newProjectSiteAddress.trim() ? { site_address: newProjectSiteAddress.trim() } : {}),
+      ...(newProjectSiteLat != null ? { site_lat: newProjectSiteLat } : {}),
+      ...(newProjectSiteLng != null ? { site_lng: newProjectSiteLng } : {}),
       ...(newProjectNotes.trim() ? { notes: newProjectNotes.trim() } : {}),
     });
-  }, [newProjectName, newProjectJobNumber, newProjectSiteAddress, newProjectNotes]);
+  }, [newProjectName, newProjectJobNumber, newProjectSiteAddress, newProjectSiteLat, newProjectSiteLng, newProjectNotes]);
+
+  async function fetchSiteSuggestions(text: string, target: 'new' | 'edit') {
+    if (text.trim().length < 2) {
+      if (target === 'new') { setNewSiteSuggestions([]); setShowNewSiteSuggestions(false); }
+      else { setEditSiteSuggestions([]); setShowEditSiteSuggestions(false); }
+      return;
+    }
+    try {
+      const baseUrl = getApiUrl();
+      const url = new URL('/api/places/autocomplete', baseUrl);
+      url.searchParams.set('input', text);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (target === 'new') { setNewSiteSuggestions(data); setShowNewSiteSuggestions(data.length > 0); }
+      else { setEditSiteSuggestions(data); setShowEditSiteSuggestions(data.length > 0); }
+    } catch {}
+  }
+
+  async function selectSiteSuggestion(placeId: string, description: string, target: 'new' | 'edit') {
+    if (target === 'new') { setNewProjectSiteAddress(description); setShowNewSiteSuggestions(false); setNewSiteSuggestions([]); }
+    else { setEditProjectSiteAddress(description); setShowEditSiteSuggestions(false); setEditSiteSuggestions([]); }
+    try {
+      const baseUrl = getApiUrl();
+      const url = new URL('/api/places/details', baseUrl);
+      url.searchParams.set('place_id', placeId);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        if (target === 'new') {
+          if (data.address) setNewProjectSiteAddress(data.address);
+          setNewProjectSiteLat(data.lat); setNewProjectSiteLng(data.lng);
+        } else {
+          if (data.address) setEditProjectSiteAddress(data.address);
+          setEditProjectSiteLat(data.lat); setEditProjectSiteLng(data.lng);
+        }
+      }
+    } catch {}
+  }
+
+  async function geocodeSiteAddress(address: string, target: 'new' | 'edit') {
+    if (address.trim().length < 3) return;
+    try {
+      const baseUrl = getApiUrl();
+      const geoUrl = new URL('/api/places/geocode', baseUrl);
+      geoUrl.searchParams.set('address', address);
+      const res = await fetch(geoUrl.toString(), { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        if (target === 'new') {
+          setNewProjectSiteLat(data.lat); setNewProjectSiteLng(data.lng);
+          if (data.address) setNewProjectSiteAddress(data.address);
+        } else {
+          setEditProjectSiteLat(data.lat); setEditProjectSiteLng(data.lng);
+          if (data.address) setEditProjectSiteAddress(data.address);
+        }
+      }
+    } catch {}
+  }
+
+  function handleSiteAddressChange(text: string, target: 'new' | 'edit') {
+    if (target === 'new') { setNewProjectSiteAddress(text); setNewProjectSiteLat(null); setNewProjectSiteLng(null); }
+    else { setEditProjectSiteAddress(text); setEditProjectSiteLat(null); setEditProjectSiteLng(null); }
+    if (siteDebounceRef.current) clearTimeout(siteDebounceRef.current);
+    if (siteGeoRef.current) clearTimeout(siteGeoRef.current);
+    siteDebounceRef.current = setTimeout(() => fetchSiteSuggestions(text, target), 300);
+    siteGeoRef.current = setTimeout(() => {
+      if (text.trim().length >= 3) geocodeSiteAddress(text, target);
+    }, 2000);
+  }
 
   return (
     <View style={[styles.container, { paddingTop: topPadding }]}>
@@ -804,8 +892,25 @@ export default function JobsBrowseScreen() {
                 placeholder="e.g. 123 Main St"
                 placeholderTextColor={Colors.textMuted}
                 value={newProjectSiteAddress}
-                onChangeText={setNewProjectSiteAddress}
+                onChangeText={(text) => handleSiteAddressChange(text, 'new')}
+                onFocus={() => { if (newSiteSuggestions.length > 0) setShowNewSiteSuggestions(true); }}
               />
+              {showNewSiteSuggestions && newSiteSuggestions.length > 0 && (
+                <View style={styles.suggestionsBox}>
+                  {newSiteSuggestions.map((s: any) => (
+                    <Pressable key={s.place_id} style={styles.suggestionItem} onPress={() => selectSiteSuggestion(s.place_id, s.description, 'new')}>
+                      <Ionicons name="location-outline" size={16} color={Colors.textSecondary} />
+                      <Text style={styles.suggestionText} numberOfLines={1}>{s.description}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+              {newProjectSiteLat != null && (
+                <View style={styles.coordBadge}>
+                  <Ionicons name="navigate" size={12} color={Colors.primary} />
+                  <Text style={styles.coordText}>{newProjectSiteLat.toFixed(4)}, {newProjectSiteLng?.toFixed(4)}</Text>
+                </View>
+              )}
             </View>
 
             <View style={styles.modalField}>
@@ -884,8 +989,25 @@ export default function JobsBrowseScreen() {
                   placeholder="e.g. 123 Main St"
                   placeholderTextColor={Colors.textMuted}
                   value={editProjectSiteAddress}
-                  onChangeText={setEditProjectSiteAddress}
+                  onChangeText={(text) => handleSiteAddressChange(text, 'edit')}
+                  onFocus={() => { if (editSiteSuggestions.length > 0) setShowEditSiteSuggestions(true); }}
                 />
+                {showEditSiteSuggestions && editSiteSuggestions.length > 0 && (
+                  <View style={styles.suggestionsBox}>
+                    {editSiteSuggestions.map((s: any) => (
+                      <Pressable key={s.place_id} style={styles.suggestionItem} onPress={() => selectSiteSuggestion(s.place_id, s.description, 'edit')}>
+                        <Ionicons name="location-outline" size={16} color={Colors.textSecondary} />
+                        <Text style={styles.suggestionText} numberOfLines={1}>{s.description}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+                {editProjectSiteLat != null && (
+                  <View style={styles.coordBadge}>
+                    <Ionicons name="navigate" size={12} color={Colors.primary} />
+                    <Text style={styles.coordText}>{editProjectSiteLat.toFixed(4)}, {editProjectSiteLng?.toFixed(4)}</Text>
+                  </View>
+                )}
               </View>
 
               <View style={styles.modalField}>
@@ -1511,5 +1633,40 @@ const styles = StyleSheet.create({
   archivedToggleActive: {
     borderColor: Colors.primary,
     backgroundColor: Colors.primaryLight,
+  },
+  suggestionsBox: {
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 4,
+    maxHeight: 160,
+    overflow: 'hidden' as const,
+  },
+  suggestionItem: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  suggestionText: {
+    flex: 1,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.text,
+  },
+  coordBadge: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    marginTop: 4,
+  },
+  coordText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.primary,
   },
 });
