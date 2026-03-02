@@ -65,7 +65,7 @@ interface ProjectItem {
 }
 
 const DRIVER_FILTERS = ['Open', 'My Jobs', 'Completed'] as const;
-const CONTRACTOR_FILTERS = ['Open', 'In Progress', 'Completed', 'All'] as const;
+const CONTRACTOR_FILTERS = ['Open', 'Active', 'Completed', 'All'] as const;
 const TRUCK_TYPES = ['end_dump', 'side_dump', 'belly_dump'] as const;
 
 export default function JobsBrowseScreen() {
@@ -108,7 +108,7 @@ export default function JobsBrowseScreen() {
     if (activeFilter === 'All') return undefined;
     if (activeFilter === 'Open') return 'open';
     if (activeFilter === 'My Jobs') return 'accepted';
-    if (activeFilter === 'In Progress') return 'in_progress';
+    if (activeFilter === 'Active') return 'in_progress';
     if (activeFilter === 'Completed') return 'completed';
     return undefined;
   }, [activeFilter]);

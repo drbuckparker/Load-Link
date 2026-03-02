@@ -208,7 +208,7 @@ export default function DashboardScreen() {
 
     const items = [
       { label: 'OPEN JOBS', value: openJobs.toString(), sub: 'Active Postings', icon: 'briefcase-outline' as const, filter: 'Open' },
-      { label: 'IN PROGRESS', value: inProgress.toString(), sub: 'Being Worked', icon: 'play-circle-outline' as const, filter: 'In Progress' },
+      { label: 'ACTIVE', value: inProgress.toString(), sub: 'Assigned / Working', icon: 'play-circle-outline' as const, filter: 'Active' },
       { label: 'APPLICATIONS', value: totalApps.toString(), sub: 'Total Received', icon: 'people-outline' as const, filter: 'All' },
       { label: 'COMPLETED', value: completed.toString(), sub: 'Total Jobs', icon: 'checkmark-circle-outline' as const, filter: 'Completed' },
     ];

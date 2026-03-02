@@ -2609,6 +2609,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           conditions.push(or(eq(jobs.status, "completed" as any), eq(jobs.status, "cancelled" as any))!);
         } else if (status === "open") {
           conditions.push(eq(jobs.status, "open" as any));
+        } else if (status === "in_progress") {
+          conditions.push(or(eq(jobs.status, "in_progress" as any), eq(jobs.status, "accepted" as any))!);
         } else {
           conditions.push(eq(jobs.status, status as any));
         }
@@ -3182,7 +3184,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await db
         .update(jobs)
-        .set({ status: "in_progress", updated_at: new Date() })
+        .set({ status: "accepted", updated_at: new Date() })
         .where(eq(jobs.id, id));
 
       await db.insert(notifications).values({
