@@ -3848,6 +3848,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/places/geocode", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const address = req.query.address as string;
+      if (!address || address.trim().length < 3) return res.status(400).json({ message: "Address required" });
+
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) return res.status(500).json({ message: "Google Maps API key not configured" });
+
+      const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+      url.searchParams.set("address", address);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("components", "country:US|country:CA");
+
+      const response = await fetch(url.toString());
+      const data = await response.json() as any;
+
+      if (data.status === 'OK' && data.results && data.results.length > 0) {
+        const result = data.results[0];
+        return res.json({
+          address: result.formatted_address,
+          lat: result.geometry.location.lat,
+          lng: result.geometry.location.lng,
+        });
+      }
+      return res.status(404).json({ message: "Address not found" });
+    } catch (err) {
+      console.error("Geocode error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   app.get("/api/directions", requireAuth, async (req: Request, res: Response) => {
     try {
       const { origin_lat, origin_lng, dest_lat, dest_lng } = req.query;

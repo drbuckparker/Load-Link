@@ -382,23 +382,40 @@ export default function CreateJobScreen() {
         url.searchParams.set('lng', String(userLng));
       }
       const res = await fetch(url.toString(), { credentials: 'include' });
-      if (!res.ok) return;
-      const suggestions = await res.json();
-      if (suggestions.length > 0) {
-        const detailUrl = new URL('/api/places/details', baseUrl);
-        detailUrl.searchParams.set('place_id', suggestions[0].place_id);
-        const detailRes = await fetch(detailUrl.toString(), { credentials: 'include' });
-        if (detailRes.ok) {
-          const detail = await detailRes.json();
-          if (target === 'origin') {
-            setOriginLat(detail.lat);
-            setOriginLng(detail.lng);
-            if (detail.address) setOriginAddress(detail.address);
-          } else {
-            setDestLat(detail.lat);
-            setDestLng(detail.lng);
-            if (detail.address) setDestinationAddress(detail.address);
+      if (res.ok) {
+        const suggestions = await res.json();
+        if (suggestions.length > 0) {
+          const detailUrl = new URL('/api/places/details', baseUrl);
+          detailUrl.searchParams.set('place_id', suggestions[0].place_id);
+          const detailRes = await fetch(detailUrl.toString(), { credentials: 'include' });
+          if (detailRes.ok) {
+            const detail = await detailRes.json();
+            if (target === 'origin') {
+              setOriginLat(detail.lat);
+              setOriginLng(detail.lng);
+              if (detail.address) setOriginAddress(detail.address);
+            } else {
+              setDestLat(detail.lat);
+              setDestLng(detail.lng);
+              if (detail.address) setDestinationAddress(detail.address);
+            }
+            return;
           }
+        }
+      }
+      const geoUrl = new URL('/api/places/geocode', baseUrl);
+      geoUrl.searchParams.set('address', address);
+      const geoRes = await fetch(geoUrl.toString(), { credentials: 'include' });
+      if (geoRes.ok) {
+        const geoData = await geoRes.json();
+        if (target === 'origin') {
+          setOriginLat(geoData.lat);
+          setOriginLng(geoData.lng);
+          if (geoData.address) setOriginAddress(geoData.address);
+        } else {
+          setDestLat(geoData.lat);
+          setDestLng(geoData.lng);
+          if (geoData.address) setDestinationAddress(geoData.address);
         }
       }
     } catch {}
