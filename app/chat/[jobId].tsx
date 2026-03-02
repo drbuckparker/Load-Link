@@ -42,7 +42,10 @@ export default function ChatScreen() {
   const messages = (messagesData || []).map(mapMessage);
   const invertedMessages = [...messages].reverse();
 
-  const contractorName = jobData?.contractor_name ?? jobData?.contractorName ?? 'Chat';
+  const isMyPostedJob = user?.id && (jobData?.contractor_id === user.id || jobData?.contractorId === user.id);
+  const chatPartnerName = isMyPostedJob
+    ? (jobData?.driver_name ?? jobData?.driverName ?? 'Driver')
+    : (jobData?.contractor_name ?? jobData?.contractorName ?? 'Chat');
   const jobMaterial = jobData?.material ?? '';
 
   async function handleSend() {
@@ -94,7 +97,7 @@ export default function ChatScreen() {
         </Pressable>
         <View style={styles.topBarInfo}>
           <Text style={styles.topBarName} numberOfLines={1}>
-            {contractorName}
+            {chatPartnerName}
           </Text>
           {jobMaterial ? (
             <Text style={styles.topBarSub}>{jobMaterial}</Text>
