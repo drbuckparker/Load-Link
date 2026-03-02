@@ -422,9 +422,9 @@ export default function DashboardScreen() {
                     </>
                   ) : (
                     <View style={{ flex: 1 }}>
-                      {day.jobs!.map((job) => (
+                      {day.jobs!.map((job, jobIdx) => (
                         <Pressable
-                          key={job.id}
+                          key={`${job.id}-${day.date}-${jobIdx}`}
                           style={styles.weekJobItem}
                           onPress={() => {
                             if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

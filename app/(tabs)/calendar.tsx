@@ -771,9 +771,9 @@ export default function CalendarScreen() {
                 </View>
               ) : (
                 <View style={{ gap: 10, marginTop: 4 }}>
-                  {dateJobs.map((job) => (
+                  {dateJobs.map((job, jobIdx) => (
                     <Pressable
-                      key={job.id}
+                      key={`${job.id}-${jobIdx}`}
                       style={styles.calJobCard}
                       onPress={() => {
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
