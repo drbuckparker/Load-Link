@@ -597,6 +597,12 @@ export default function JobDetailScreen() {
       );
       return;
     }
+    if (vehicleConflict?.lowCapacity) {
+      showTruckWarning(
+        `This truck doesn't have enough capacity. Job requires ${vehicleConflict.requiredTons}T minimum but this truck is rated at ${vehicleConflict.vehicleTons}T.`
+      );
+      return;
+    }
     if (vehicleConflict?.blocked) {
       showTruckWarning(
         `This truck is already booked on ${vehicleConflict.conflictDates[0]} (${vehicleConflict.conflictJobs[0]}). It cannot be double-booked.`
@@ -1843,6 +1849,7 @@ export default function JobDetailScreen() {
                   const conflict = conflictsData?.vehicleConflicts?.[vId];
                   const isBlocked = (conflict?.blocked === true) || isAlreadyOnJob;
                   const isWrongType = conflict?.wrongType === true;
+                  const isLowCapacity = conflict?.lowCapacity === true;
                   return (
                     <Pressable
                       key={vId}
@@ -1882,7 +1889,12 @@ export default function JobDetailScreen() {
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>WRONG TYPE</Text>
                             </View>
                           )}
-                          {conflict?.blocked && !isWrongType && !isAlreadyOnJob && (
+                          {isLowCapacity && !isAlreadyOnJob && (
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>LOW CAPACITY</Text>
+                            </View>
+                          )}
+                          {conflict?.blocked && !isWrongType && !isLowCapacity && !isAlreadyOnJob && (
                             <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>ALREADY BOOKED</Text>
                             </View>
@@ -1902,7 +1914,12 @@ export default function JobDetailScreen() {
                             <Text style={styles.truckOptionMeta}>{v.max_capacity_tons}T</Text>
                           ) : null}
                         </View>
-                        {isBlocked && !isWrongType && !isAlreadyOnJob && conflict?.conflictDates?.length > 0 && (
+                        {isLowCapacity && !isAlreadyOnJob && (
+                          <Text style={[styles.truckConflictInfo, { color: '#8b5cf6' }]}>
+                            Needs {conflict.requiredTons}T min · This truck: {conflict.vehicleTons}T
+                          </Text>
+                        )}
+                        {isBlocked && !isWrongType && !isLowCapacity && !isAlreadyOnJob && conflict?.conflictDates?.length > 0 && (
                           <Text style={styles.truckConflictInfo}>
                             {conflict.conflictJobs?.[0] ? `Assigned to ${conflict.conflictJobs[0]} job` : 'Assigned to another job'} · {conflict.conflictDates.slice(0, 2).map((d: string) => {
                               const dt = new Date(d + 'T12:00:00Z');

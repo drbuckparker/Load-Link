@@ -905,30 +905,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .from(driverVehicles)
         .where(eq(driverVehicles.driver_id, userId));
 
-      const vehicleConflicts: Record<string, { blocked: boolean; wrongType: boolean; conflictDates: string[]; conflictJobs: string[] }> = {};
+      let requiredTonnage: number | null = null;
+      if (job.capacity_needed) {
+        const tonMatch = job.capacity_needed.match(/([\d.]+)\s*ton/i);
+        if (tonMatch) requiredTonnage = parseFloat(tonMatch[1]);
+      }
+
+      const vehicleConflicts: Record<string, { blocked: boolean; wrongType: boolean; lowCapacity: boolean; vehicleTons?: number; requiredTons?: number; conflictDates: string[]; conflictJobs: string[] }> = {};
       for (const v of userVehicles) {
         const wrongType = !!job.truck_type && v.truck_type !== job.truck_type;
         if (wrongType) {
-          vehicleConflicts[v.id] = { blocked: true, wrongType: true, conflictDates: [], conflictJobs: [] };
+          vehicleConflicts[v.id] = { blocked: true, wrongType: true, lowCapacity: false, conflictDates: [], conflictJobs: [] };
+          continue;
+        }
+        const vehicleTons = v.max_capacity_tons ? parseFloat(v.max_capacity_tons as string) : null;
+        const lowCapacity = requiredTonnage !== null && vehicleTons !== null && vehicleTons < requiredTonnage;
+        if (lowCapacity) {
+          vehicleConflicts[v.id] = { blocked: true, wrongType: false, lowCapacity: true, vehicleTons: vehicleTons!, requiredTons: requiredTonnage!, conflictDates: [], conflictJobs: [] };
           continue;
         }
         if (jobDates.length === 0) {
-          vehicleConflicts[v.id] = { blocked: false, wrongType: false, conflictDates: [], conflictJobs: [] };
+          vehicleConflicts[v.id] = { blocked: false, wrongType: false, lowCapacity: false, conflictDates: [], conflictJobs: [] };
           continue;
         }
         const conflicts = await getVehicleConflicts(v.id, jobDates, newJobIsFullDay, id);
         if (conflicts.length > 0) {
           const uniqueDates = [...new Set(conflicts.map(c => c.date))];
           const uniqueJobs = [...new Set(conflicts.map(c => c.jobMaterial))];
-          vehicleConflicts[v.id] = { blocked: true, wrongType: false, conflictDates: uniqueDates, conflictJobs: uniqueJobs };
+          vehicleConflicts[v.id] = { blocked: true, wrongType: false, lowCapacity: false, conflictDates: uniqueDates, conflictJobs: uniqueJobs };
         } else {
-          vehicleConflicts[v.id] = { blocked: false, wrongType: false, conflictDates: [], conflictJobs: [] };
+          vehicleConflicts[v.id] = { blocked: false, wrongType: false, lowCapacity: false, conflictDates: [], conflictJobs: [] };
         }
       }
 
       return res.json({
         jobType: job.job_type || 'single_load',
         requiredTruckType: job.truck_type || null,
+        requiredTonnage,
         jobDates,
         vehicleConflicts,
       });
