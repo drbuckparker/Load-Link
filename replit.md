@@ -187,3 +187,8 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Contractors can view uploaded weight ticket photos on job detail screen
 - Dashboard "ON THE CLOCK" timer: when driver has an active job run, replaces Quick Job card with live HH:MM:SS counter, material/contractor info, green styling; tapping navigates to job detail
 - "Back at it soon" banner: after clock-out on multi-day jobs, shows next scheduled date with smart formatting (day name for tomorrow, full date if further away); dismissible
+- Location-based job filtering: GPS auto-detected as "Current Location" (secondary), user sets "Work Location" (primary) manually
+- Jobs endpoint uses haversine formula to filter jobs within search_radius_miles from either location
+- Dashboard auto-updates secondary location + auth context on app open
+- Calendar open jobs also filtered by location radius
+- Profile shows "Work Location" (editable) and "Current Location" (auto-detected, read-only) with helper text

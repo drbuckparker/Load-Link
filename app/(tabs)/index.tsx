@@ -63,9 +63,23 @@ export default function DashboardScreen() {
         if (Platform.OS === 'web') {
           if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
-              (pos) => {
-                setDeviceLat(pos.coords.latitude);
-                setDeviceLng(pos.coords.longitude);
+              async (pos) => {
+                const lat = pos.coords.latitude;
+                const lng = pos.coords.longitude;
+                setDeviceLat(lat);
+                setDeviceLng(lng);
+                try {
+                  await apiRequest('PUT', '/api/profile', {
+                    last_latitude: lat,
+                    last_longitude: lng,
+                    secondary_location_lat: lat,
+                    secondary_location_lng: lng,
+                  });
+                  updateUser({
+                    secondaryLocationLat: lat,
+                    secondaryLocationLng: lng,
+                  });
+                } catch {}
               },
               () => {}
             );
@@ -77,17 +91,27 @@ export default function DashboardScreen() {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setDeviceLat(loc.coords.latitude);
         setDeviceLng(loc.coords.longitude);
+        let geoAddress: string | undefined;
         try {
           const [geo] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
           if (geo) {
             const parts = [geo.city, geo.region].filter(Boolean);
-            setDeviceAddress(parts.join(', ') || geo.name || null);
+            geoAddress = parts.join(', ') || geo.name || undefined;
+            setDeviceAddress(geoAddress || null);
           }
         } catch {}
         try {
           await apiRequest('PUT', '/api/profile', {
             last_latitude: loc.coords.latitude,
             last_longitude: loc.coords.longitude,
+            secondary_location_lat: loc.coords.latitude,
+            secondary_location_lng: loc.coords.longitude,
+            ...(geoAddress ? { secondary_location_address: geoAddress } : {}),
+          });
+          updateUser({
+            secondaryLocationLat: loc.coords.latitude,
+            secondaryLocationLng: loc.coords.longitude,
+            ...(geoAddress ? { secondaryLocationAddress: geoAddress } : {}),
           });
         } catch {}
       } catch {}

@@ -132,8 +132,21 @@ export default function CalendarScreen() {
     enabled: !!user && !isContractor,
   });
 
+  const dateJobsQueryParams = useMemo(() => {
+    const p = new URLSearchParams();
+    p.set('date', selectedDate || '');
+    p.set('status', 'open');
+    const lat = user?.secondaryLocationLat || user?.primaryLocationLat;
+    const lng = user?.secondaryLocationLng || user?.primaryLocationLng;
+    if (lat && lng) {
+      p.set('lat', String(lat));
+      p.set('lng', String(lng));
+    }
+    return p.toString();
+  }, [selectedDate, user?.secondaryLocationLat, user?.secondaryLocationLng, user?.primaryLocationLat, user?.primaryLocationLng]);
+
   const dateJobsQuery = useQuery<any[]>({
-    queryKey: ['/api/jobs', `?date=${selectedDate}&status=open`],
+    queryKey: ['/api/jobs', `?${dateJobsQueryParams}`],
     enabled: !!user && !!selectedDate && !isContractor,
   });
 

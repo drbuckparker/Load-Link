@@ -464,9 +464,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ JOBS ============
 
+  function haversineDistanceMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 3958.8;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
   app.get("/api/jobs", async (req: Request, res: Response) => {
     try {
-      const { status, truck_type, search, driver_id, date } = req.query;
+      const { status, truck_type, search, driver_id, date, lat, lng } = req.query;
 
       const conditions = [];
 
@@ -523,12 +531,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(jobs.created_at));
 
-      const formattedJobs = result.map((r) => ({
+      let formattedJobs = result.map((r) => ({
         ...r.job,
         contractor_name: r.contractor_name || "Unknown",
         contractor_company: r.contractor_company || "Unknown Company",
         project_name: r.project_name || null,
       }));
+
+      const isMyJobs = status === 'my_jobs' || status === 'completed';
+      if (!isMyJobs && lat && lng) {
+        const userLat = parseFloat(lat as string);
+        const userLng = parseFloat(lng as string);
+
+        if (!isNaN(userLat) && !isNaN(userLng)) {
+          let radiusMiles = 50;
+          let primaryLat: number | null = null;
+          let primaryLng: number | null = null;
+
+          const userId = (req.session as any)?.userId;
+          if (userId) {
+            const [u] = await db.select({
+              search_radius_miles: users.search_radius_miles,
+              primary_location_lat: users.primary_location_lat,
+              primary_location_lng: users.primary_location_lng,
+            }).from(users).where(eq(users.id, userId)).limit(1);
+            if (u?.search_radius_miles) radiusMiles = u.search_radius_miles;
+            if (u?.primary_location_lat && u?.primary_location_lng) {
+              primaryLat = Number(u.primary_location_lat);
+              primaryLng = Number(u.primary_location_lng);
+            }
+          }
+
+          formattedJobs = formattedJobs.filter(job => {
+            const jobLat = job.origin_lat != null ? Number(job.origin_lat) : null;
+            const jobLng = job.origin_lng != null ? Number(job.origin_lng) : null;
+            if (jobLat == null || jobLng == null || isNaN(jobLat) || isNaN(jobLng)) return true;
+
+            const distFromCurrent = haversineDistanceMiles(userLat, userLng, jobLat, jobLng);
+            if (distFromCurrent <= radiusMiles) return true;
+
+            if (primaryLat && primaryLng) {
+              const distFromPrimary = haversineDistanceMiles(primaryLat, primaryLng, jobLat, jobLng);
+              if (distFromPrimary <= radiusMiles) return true;
+            }
+
+            return false;
+          });
+        }
+      }
 
       return res.json(formattedJobs);
     } catch (err) {

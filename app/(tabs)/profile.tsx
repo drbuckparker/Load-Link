@@ -262,27 +262,23 @@ export default function ProfileScreen() {
             }}
           >
             <Ionicons name="location" size={18} color={Colors.success} />
-            <Text style={styles.infoLabel}>Primary</Text>
+            <Text style={styles.infoLabel}>Work Location</Text>
             <Text style={[styles.infoValue, !user.primaryLocationAddress && styles.infoValueMuted]} numberOfLines={1}>
               {user.primaryLocationAddress || 'Tap to set'}
             </Text>
             <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
           </Pressable>
-          <Pressable
-            style={styles.infoRow}
-            onPress={() => {
-              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setLocationPickerType('secondary');
-            }}
-          >
-            <Ionicons name="location-outline" size={18} color={Colors.info} />
-            <Text style={styles.infoLabel}>Secondary</Text>
+          <View style={styles.infoRow}>
+            <Ionicons name="navigate" size={18} color={Colors.info} />
+            <Text style={styles.infoLabel}>Current Location</Text>
             <Text style={[styles.infoValue, !user.secondaryLocationAddress && styles.infoValueMuted]} numberOfLines={1}>
-              {user.secondaryLocationAddress || 'Tap to set'}
+              {user.secondaryLocationAddress || 'Auto-detected'}
             </Text>
-            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-          </Pressable>
+          </View>
         </View>
+        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 4, marginHorizontal: 4 }}>
+          Jobs are shown within your search radius from both locations. Current location updates automatically.
+        </Text>
 
         <Text style={styles.sectionTitle}>SEARCH RADIUS</Text>
         <View style={styles.radiusRow}>

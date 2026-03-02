@@ -123,8 +123,16 @@ export default function JobsBrowseScreen() {
     }
     if (dateFilter) p.set('date', dateFilter);
     if (selectedProjectFilter) p.set('project_id', selectedProjectFilter);
+    if (!isContractor) {
+      const lat = user?.secondaryLocationLat || user?.primaryLocationLat;
+      const lng = user?.secondaryLocationLng || user?.primaryLocationLng;
+      if (lat && lng) {
+        p.set('lat', String(lat));
+        p.set('lng', String(lng));
+      }
+    }
     return p.toString();
-  }, [statusParam, selectedTruckType, search, isContractor, user?.id, activeFilter, dateFilter, selectedProjectFilter]);
+  }, [statusParam, selectedTruckType, search, isContractor, user?.id, activeFilter, dateFilter, selectedProjectFilter, user?.secondaryLocationLat, user?.secondaryLocationLng, user?.primaryLocationLat, user?.primaryLocationLng]);
 
   const endpoint = isContractor ? '/api/contractor/jobs' : '/api/jobs';
   const queryUrl = queryParams ? `${endpoint}?${queryParams}` : endpoint;
