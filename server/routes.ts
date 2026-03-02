@@ -1722,95 +1722,184 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
       const isContractorUser = user.role?.includes('contractor');
 
-      for (let i = 0; i < 5; i++) {
-        const d = new Date(now);
-        d.setDate(d.getDate() + i);
-        const dateStr = d.toISOString().split('T')[0];
-        const dayStart = new Date(dateStr + 'T00:00:00.000Z');
-        const dayEnd = new Date(dateStr + 'T23:59:59.999Z');
+      if (isContractorUser) {
+        const maxJobDays = 60;
+        const lookbackDate = new Date(now);
+        lookbackDate.setDate(lookbackDate.getDate() - maxJobDays);
+        const endDate = new Date(now);
+        endDate.setDate(endDate.getDate() + 6);
+        endDate.setHours(23, 59, 59, 999);
 
-        if (isContractorUser) {
-          const dayJobs = await db
+        const contractorUpcomingJobs = await db
+          .select({
+            id: jobs.id,
+            material: jobs.material,
+            trucks_needed: jobs.trucks_needed,
+            status: jobs.status,
+            scheduled_date: jobs.scheduled_date,
+            estimated_days: jobs.estimated_days,
+            listed_days: jobs.listed_days,
+            includes_weekends: jobs.includes_weekends,
+            project_name: contractorProjects.name,
+          })
+          .from(jobs)
+          .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
+          .where(and(
+            eq(jobs.contractor_id, userId),
+            gte(jobs.scheduled_date, lookbackDate),
+            lte(jobs.scheduled_date, endDate),
+            or(
+              eq(jobs.status, 'open' as any),
+              eq(jobs.status, 'pending' as any),
+              eq(jobs.status, 'accepted' as any),
+              eq(jobs.status, 'in_progress' as any)
+            )!
+          ));
+
+        const allJobIds = contractorUpcomingJobs.map(j => j.id);
+        let appliedCount: Record<string, number> = {};
+        let assignedCount: Record<string, number> = {};
+        let assignedVehicles: Record<string, any[]> = {};
+        if (allJobIds.length > 0) {
+          const assigns = await db
             .select({
-              id: jobs.id,
-              material: jobs.material,
-              trucks_needed: jobs.trucks_needed,
-              status: jobs.status,
-              project_name: contractorProjects.name,
+              job_id: jobAssignments.job_id,
+              status: jobAssignments.status,
+              vehicle_id: jobAssignments.vehicle_id,
+              vehicle_make: driverVehicles.make,
+              vehicle_model: driverVehicles.model,
+              vehicle_year: driverVehicles.year,
+              vehicle_plate: driverVehicles.license_plate,
+              driver_name: users.full_name,
+              driver_company: users.company,
             })
-            .from(jobs)
-            .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
-            .where(and(
-              eq(jobs.contractor_id, userId),
-              gte(jobs.scheduled_date, dayStart),
-              lte(jobs.scheduled_date, dayEnd),
-              or(
-                eq(jobs.status, 'open' as any),
-                eq(jobs.status, 'pending' as any),
-                eq(jobs.status, 'accepted' as any),
-                eq(jobs.status, 'in_progress' as any)
-              )!
-            ));
-
-          const jobIds = dayJobs.map(j => j.id);
-          let appliedCount: Record<string, number> = {};
-          let assignedCount: Record<string, number> = {};
-          let assignedVehicles: Record<string, any[]> = {};
-          if (jobIds.length > 0) {
-            const assigns = await db
-              .select({
-                job_id: jobAssignments.job_id,
-                status: jobAssignments.status,
-                vehicle_id: jobAssignments.vehicle_id,
-                vehicle_make: driverVehicles.make,
-                vehicle_model: driverVehicles.model,
-                vehicle_year: driverVehicles.year,
-                vehicle_plate: driverVehicles.license_plate,
-                driver_name: users.full_name,
-                driver_company: users.company,
-              })
-              .from(jobAssignments)
-              .leftJoin(driverVehicles, eq(jobAssignments.vehicle_id, driverVehicles.id))
-              .leftJoin(users, eq(jobAssignments.driver_id, users.id))
-              .where(inArray(jobAssignments.job_id, jobIds));
-            for (const a of assigns) {
-              if (a.job_id) {
-                appliedCount[a.job_id] = (appliedCount[a.job_id] || 0) + 1;
-                if (a.status === 'accepted' || a.status === 'approved') {
-                  assignedCount[a.job_id] = (assignedCount[a.job_id] || 0) + 1;
-                  if (a.vehicle_id) {
-                    if (!assignedVehicles[a.job_id]) assignedVehicles[a.job_id] = [];
-                    assignedVehicles[a.job_id].push({
-                      make: a.vehicle_make,
-                      model: a.vehicle_model,
-                      year: a.vehicle_year,
-                      plate: a.vehicle_plate,
-                      driverName: a.driver_name,
-                      driverCompany: a.driver_company,
-                    });
-                  }
+            .from(jobAssignments)
+            .leftJoin(driverVehicles, eq(jobAssignments.vehicle_id, driverVehicles.id))
+            .leftJoin(users, eq(jobAssignments.driver_id, users.id))
+            .where(inArray(jobAssignments.job_id, allJobIds));
+          for (const a of assigns) {
+            if (a.job_id) {
+              appliedCount[a.job_id] = (appliedCount[a.job_id] || 0) + 1;
+              if (a.status === 'accepted' || a.status === 'approved') {
+                assignedCount[a.job_id] = (assignedCount[a.job_id] || 0) + 1;
+                if (a.vehicle_id) {
+                  if (!assignedVehicles[a.job_id]) assignedVehicles[a.job_id] = [];
+                  assignedVehicles[a.job_id].push({
+                    make: a.vehicle_make,
+                    model: a.vehicle_model,
+                    year: a.vehicle_year,
+                    plate: a.vehicle_plate,
+                    driverName: a.driver_name,
+                    driverCompany: a.driver_company,
+                  });
                 }
               }
             }
           }
+        }
 
+        const jobsByDate: Record<string, any[]> = {};
+        for (const job of contractorUpcomingJobs) {
+          const dateRange = getJobDateRange({
+            scheduled_date: job.scheduled_date,
+            estimated_days: job.estimated_days,
+            listed_days: job.listed_days,
+            includes_weekends: job.includes_weekends,
+          });
+          const jobData = {
+            id: job.id,
+            material: job.material || 'Unknown',
+            projectName: job.project_name || '',
+            trucksNeeded: job.trucks_needed || 1,
+            applied: appliedCount[job.id] || 0,
+            assigned: assignedCount[job.id] || 0,
+            assignedVehicles: assignedVehicles[job.id] || [],
+            status: job.status || 'open',
+          };
+          for (const key of dateRange) {
+            if (!jobsByDate[key]) jobsByDate[key] = [];
+            jobsByDate[key].push(jobData);
+          }
+        }
+
+        for (let i = 0; i < 5; i++) {
+          const d = new Date(now);
+          d.setDate(d.getDate() + i);
+          const dateStr = d.toISOString().split('T')[0];
+          const dayJobs = jobsByDate[dateStr] || [];
           upcoming5Days.push({
             date: dateStr,
             dayName: dayNames[d.getDay()],
             dayNum: d.getDate(),
             status: dayJobs.length > 0 ? 'has_jobs' : 'available',
-            jobs: dayJobs.map(j => ({
-              id: j.id,
-              material: j.material || 'Unknown',
-              projectName: j.project_name || '',
-              trucksNeeded: j.trucks_needed || 1,
-              applied: appliedCount[j.id] || 0,
-              assigned: assignedCount[j.id] || 0,
-              assignedVehicles: assignedVehicles[j.id] || [],
-              status: j.status || 'open',
-            })),
+            jobs: dayJobs,
           });
-        } else {
+        }
+      }
+
+      if (!isContractorUser) {
+        const maxJobDays = 60;
+        const driverLookback = new Date(now);
+        driverLookback.setDate(driverLookback.getDate() - maxJobDays);
+        const driverEndDate = new Date(now);
+        driverEndDate.setDate(driverEndDate.getDate() + 6);
+        driverEndDate.setHours(23, 59, 59, 999);
+
+        const driverAssignedJobs = await db
+          .select({
+            job_id: jobAssignments.job_id,
+            assignment_status: jobAssignments.status,
+            vehicle_id: jobAssignments.vehicle_id,
+            material: jobs.material,
+            job_status: jobs.status,
+            trucks_needed: jobs.trucks_needed,
+            scheduled_date: jobs.scheduled_date,
+            estimated_days: jobs.estimated_days,
+            listed_days: jobs.listed_days,
+            includes_weekends: jobs.includes_weekends,
+            project_name: contractorProjects.name,
+            contractor_name: sql<string>`(SELECT full_name FROM users WHERE id = ${jobs.contractor_id})`,
+          })
+          .from(jobAssignments)
+          .innerJoin(jobs, eq(jobAssignments.job_id, jobs.id))
+          .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
+          .where(and(
+            eq(jobAssignments.driver_id, userId),
+            sql`${jobAssignments.status}::text IN ('accepted', 'approved', 'pending')`,
+            gte(jobs.scheduled_date, driverLookback),
+            lte(jobs.scheduled_date, driverEndDate),
+            sql`${jobs.status}::text IN ('open', 'pending', 'accepted', 'in_progress')`
+          ));
+
+        const driverJobsByDate: Record<string, any[]> = {};
+        for (const job of driverAssignedJobs) {
+          const dateRange = getJobDateRange({
+            scheduled_date: job.scheduled_date,
+            estimated_days: job.estimated_days,
+            listed_days: job.listed_days,
+            includes_weekends: job.includes_weekends,
+          });
+          const jobData = {
+            id: job.job_id,
+            material: job.material || 'Unknown',
+            projectName: job.project_name || '',
+            contractorName: job.contractor_name || '',
+            trucksNeeded: job.trucks_needed || 1,
+            status: job.job_status || 'open',
+            assignmentStatus: job.assignment_status || 'pending',
+            vehicleId: job.vehicle_id || null,
+          };
+          for (const key of dateRange) {
+            if (!driverJobsByDate[key]) driverJobsByDate[key] = [];
+            driverJobsByDate[key].push(jobData);
+          }
+        }
+
+        for (let i = 0; i < 5; i++) {
+          const d = new Date(now);
+          d.setDate(d.getDate() + i);
+          const dateStr = d.toISOString().split('T')[0];
+
           const avail = await db
             .select()
             .from(driverAvailability)
@@ -1820,53 +1909,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ))
             .then(r => r[0]);
 
-          const driverDayAssignments = await db
-            .select({
-              job_id: jobAssignments.job_id,
-              status: jobAssignments.status,
-              vehicle_id: jobAssignments.vehicle_id,
-            })
-            .from(jobAssignments)
-            .innerJoin(jobs, eq(jobAssignments.job_id, jobs.id))
-            .where(and(
-              eq(jobAssignments.driver_id, userId),
-              sql`${jobAssignments.status}::text IN ('accepted', 'approved', 'pending')`,
-              gte(jobs.scheduled_date, dayStart),
-              lte(jobs.scheduled_date, dayEnd)
-            ));
-
-          let driverDayJobs: any[] = [];
-          if (driverDayAssignments.length > 0) {
-            const assignedJobIds = driverDayAssignments.map(a => a.job_id!);
-            const jobsData = await db
-              .select({
-                id: jobs.id,
-                material: jobs.material,
-                status: jobs.status,
-                trucks_needed: jobs.trucks_needed,
-                project_name: contractorProjects.name,
-                contractor_name: users.full_name,
-              })
-              .from(jobs)
-              .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
-              .leftJoin(users, eq(jobs.contractor_id, users.id))
-              .where(inArray(jobs.id, assignedJobIds));
-
-            driverDayJobs = jobsData.map(j => {
-              const assignment = driverDayAssignments.find(a => a.job_id === j.id);
-              return {
-                id: j.id,
-                material: j.material || 'Unknown',
-                projectName: j.project_name || '',
-                contractorName: j.contractor_name || '',
-                trucksNeeded: j.trucks_needed || 1,
-                status: j.status || 'open',
-                assignmentStatus: assignment?.status || 'pending',
-                vehicleId: assignment?.vehicle_id || null,
-              };
-            });
-          }
-
+          const driverDayJobs = driverJobsByDate[dateStr] || [];
           upcoming5Days.push({
             date: dateStr,
             dayName: dayNames[d.getDay()],
