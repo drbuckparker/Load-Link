@@ -130,6 +130,7 @@ export default function CreateJobScreen() {
   const [pickerMinute, setPickerMinute] = useState(0);
   const [pickerAmPm, setPickerAmPm] = useState<'AM' | 'PM'>('AM');
   const [estimatedDays, setEstimatedDays] = useState('');
+  const [estimatedDaysManual, setEstimatedDaysManual] = useState(false);
   const [includesWeekends, setIncludesWeekends] = useState(false);
   const [rate, setRate] = useState('');
   const [rateType, setRateType] = useState('per_hour');
@@ -559,7 +560,7 @@ export default function CreateJobScreen() {
   }, [calculatedTrips, tripsPerDay]);
 
   useEffect(() => {
-    if (estimatedDaysCalc > 0 && jobType === 'multi_day' && !estimatedDays) {
+    if (estimatedDaysCalc > 0 && !estimatedDaysManual) {
       setEstimatedDays(String(Math.ceil(estimatedDaysCalc)));
     }
   }, [estimatedDaysCalc]);
@@ -1131,7 +1132,7 @@ export default function CreateJobScreen() {
                   placeholder="0"
                   placeholderTextColor={Colors.textMuted}
                   value={estimatedDays}
-                  onChangeText={setEstimatedDays}
+                  onChangeText={(text) => { setEstimatedDays(text); setEstimatedDaysManual(true); }}
                   keyboardType="numeric"
                 />
 
