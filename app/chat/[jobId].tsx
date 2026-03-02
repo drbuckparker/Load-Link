@@ -64,8 +64,11 @@ export default function ChatScreen() {
     }
   }
 
+  const autoMessagePattern = /approved|applied|backing out|rejected|auto-assigned|removed.*truck|cancelled|would like to work/i;
+
   function renderMessage({ item }: { item: Message }) {
     const isMe = item.senderId === user?.id;
+    const isAutoMessage = autoMessagePattern.test(item.body);
 
     return (
       <View style={[styles.msgRow, isMe && styles.msgRowMe]}>
@@ -77,6 +80,19 @@ export default function ChatScreen() {
         <View style={[styles.msgBubble, isMe ? styles.msgBubbleMe : styles.msgBubbleOther]}>
           {!isMe && <Text style={styles.msgSender}>{item.senderName}</Text>}
           <Text style={[styles.msgBody, isMe && styles.msgBodyMe]}>{item.body}</Text>
+          {isAutoMessage && (
+            <Pressable
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push(`/job/${jobId}` as any);
+              }}
+              style={{ marginTop: 6, paddingVertical: 4 }}
+            >
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: isMe ? 'rgba(0,0,0,0.7)' : Colors.primary, textDecorationLine: 'underline' }}>
+                View Job Details →
+              </Text>
+            </Pressable>
+          )}
           <Text style={[styles.msgTime, isMe && styles.msgTimeMe]}>
             {new Date(item.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
           </Text>
