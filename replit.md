@@ -84,9 +84,10 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - `GET /api/invoices/stats` - Invoice stats (outstanding, paid totals)
 
 ### Messages
-- `GET /api/conversations` - List message conversations
+- `GET /api/conversations` - List message conversations (includes jobs from assignments, not just driver_id)
 - `GET /api/messages/:jobId` - Get messages for a job
 - `POST /api/messages/:jobId` - Send a message
+- Auto-messages: Job events (apply, approve, reject, withdraw, truck removal) auto-create messages in job_messages so conversations appear in Messages tab
 
 ### Reviews
 - `POST /api/reviews` - Submit a review (jobId, revieweeId, rating 1-5, comment)

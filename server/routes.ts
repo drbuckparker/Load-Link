@@ -775,6 +775,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         job_id: id,
       });
 
+      const truckCount = vIds.length || 1;
+      await db.insert(jobMessages).values({
+        job_id: id,
+        sender_id: userId,
+        body: isFavorite
+          ? `Hi, I'm a favorite driver and have been auto-assigned to this job with ${truckCount} truck${truckCount > 1 ? 's' : ''}.`
+          : `Hi, we would like to work on this ${job.material || ''} job. We're assigning ${truckCount} truck${truckCount > 1 ? 's' : ''}.`,
+      });
+
       return res.json({
         ok: true,
         isFavorite,
@@ -914,6 +923,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           message: `${driverName} has backed out of your ${job.material || ''} job`,
           job_id: id,
         });
+
+        await db.insert(jobMessages).values({
+          job_id: id,
+          sender_id: userId,
+          body: `I'm backing out of this ${job.material || ''} job. Sorry for the inconvenience.`,
+        });
       }
 
       return res.json({ ok: true });
@@ -966,6 +981,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           title: "Truck Removed from Job",
           message: `${driverName} removed ${vehicleLabel} from your ${job.material || ''} job`,
           job_id: id,
+        });
+
+        await db.insert(jobMessages).values({
+          job_id: id,
+          sender_id: userId,
+          body: `I've removed ${vehicleLabel} from this job.${remaining.length > 0 ? ` I still have ${remaining.length} truck${remaining.length > 1 ? 's' : ''} assigned.` : ''}`,
         });
       }
 
@@ -1290,7 +1311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req.session as any).userId;
 
-      const myJobs = await db
+      const myJobsDirect = await db
         .select({ id: jobs.id, material: jobs.material, contractor_id: jobs.contractor_id })
         .from(jobs)
         .where(
@@ -1299,6 +1320,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eq(jobs.contractor_id, userId)
           )
         );
+
+      const myAssignedJobIds = await db
+        .select({ job_id: jobAssignments.job_id })
+        .from(jobAssignments)
+        .where(eq(jobAssignments.driver_id, userId));
+
+      const assignedIds = myAssignedJobIds.map(a => a.job_id).filter(Boolean) as string[];
+      const directIds = new Set(myJobsDirect.map(j => j.id));
+      const extraIds = assignedIds.filter(id => !directIds.has(id));
+
+      let extraJobs: any[] = [];
+      if (extraIds.length > 0) {
+        extraJobs = await db
+          .select({ id: jobs.id, material: jobs.material, contractor_id: jobs.contractor_id })
+          .from(jobs)
+          .where(inArray(jobs.id, extraIds));
+      }
+
+      const myJobs = [...myJobsDirect, ...extraJobs];
 
       if (myJobs.length === 0) return res.json([]);
 
@@ -1314,8 +1354,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       for (const msg of messages) {
         if (!convMap.has(msg.job_id)) {
           const job = myJobs.find((j) => j.id === msg.job_id);
-          const otherUserId =
-            job?.contractor_id === userId ? msg.sender_id : job?.contractor_id;
+          const isContractor = job?.contractor_id === userId;
+          let otherUserId: string | null = null;
+
+          if (isContractor) {
+            const allMsgSenders = messages
+              .filter(m => m.job_id === msg.job_id && m.sender_id !== userId)
+              .map(m => m.sender_id);
+            if (allMsgSenders.length > 0) {
+              otherUserId = allMsgSenders[0];
+            } else {
+              const [assignedDriver] = await db
+                .select({ driver_id: jobAssignments.driver_id })
+                .from(jobAssignments)
+                .where(eq(jobAssignments.job_id, msg.job_id!))
+                .limit(1);
+              otherUserId = assignedDriver?.driver_id || null;
+            }
+          } else {
+            otherUserId = job?.contractor_id || null;
+          }
 
           let otherUser = null;
           if (otherUserId) {
@@ -1331,8 +1389,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             id: `conv_${msg.job_id}`,
             jobId: msg.job_id,
             jobMaterial: job?.material || "Unknown",
-            contractorName: otherUser?.full_name || "Unknown",
-            contractorCompany: otherUser?.company || "Unknown",
+            contractorName: otherUser?.full_name || otherUser?.company || "Unknown",
+            contractorCompany: otherUser?.company || "",
             lastMessage: msg.body,
             lastMessageAt: msg.created_at,
             unreadCount: 0,
@@ -2986,6 +3044,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         job_id: id,
       });
 
+      await db.insert(jobMessages).values({
+        job_id: id,
+        sender_id: userId,
+        body: `You've been approved for this ${job.material || ''} job! Looking forward to working with you.`,
+      });
+
       return res.json({ ok: true });
     } catch (err) {
       console.error("Approve assignment error:", err);
@@ -3021,6 +3085,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         title: "Assignment Rejected",
         message: `Your assignment for the ${job.material} job has been rejected`,
         job_id: id,
+      });
+
+      await db.insert(jobMessages).values({
+        job_id: id,
+        sender_id: userId,
+        body: `Unfortunately, we're unable to accept your application for this ${job.material || ''} job at this time.`,
       });
 
       return res.json({ ok: true });
