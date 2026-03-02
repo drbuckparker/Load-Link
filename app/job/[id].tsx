@@ -204,6 +204,7 @@ export default function JobDetailScreen() {
   const [showTicketPrompt, setShowTicketPrompt] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const [clockInError, setClockInError] = useState('');
   const [previewBase64, setPreviewBase64] = useState<string | null>(null);
   const [showNextDayBanner, setShowNextDayBanner] = useState(false);
   const [nextDayDate, setNextDayDate] = useState<string>('');
@@ -652,8 +653,6 @@ export default function JobDetailScreen() {
       return { lat: 0, lng: 0 };
     }
   }
-
-  const [clockInError, setClockInError] = useState('');
 
   async function handleStartJob() {
     setClockInError('');
