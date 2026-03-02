@@ -3,8 +3,9 @@ import { Tabs } from "expo-router";
 import { NativeTabs, Icon, Label, Badge } from "expo-router/unstable-native-tabs";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
-import { Platform, StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View, Text } from "react-native";
 import React from "react";
+import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { Redirect } from "expo-router";
@@ -13,8 +14,19 @@ function isContractorRole(role: string): boolean {
   return role.includes('contractor');
 }
 
+function useUnreadCount() {
+  const { isAuthenticated } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ['/api/messages/unread-count'],
+    enabled: isAuthenticated,
+    refetchInterval: 15000,
+  });
+  return data?.count || 0;
+}
+
 function NativeTabLayout({ role }: { role: string }) {
   const contractor = isContractorRole(role);
+  const unreadCount = useUnreadCount();
 
   return (
     <NativeTabs>
@@ -29,6 +41,7 @@ function NativeTabLayout({ role }: { role: string }) {
       <NativeTabs.Trigger name="messages">
         <Icon sf={{ default: "message", selected: "message.fill" }} />
         <Label>Messages</Label>
+        {unreadCount > 0 && <Badge>{unreadCount > 99 ? '99+' : String(unreadCount)}</Badge>}
       </NativeTabs.Trigger>
       {contractor ? (
         <NativeTabs.Trigger name="invoices">
@@ -53,6 +66,7 @@ function ClassicTabLayout({ role }: { role: string }) {
   const isWeb = Platform.OS === "web";
   const isIOS = Platform.OS === "ios";
   const contractor = isContractorRole(role);
+  const unreadCount = useUnreadCount();
 
   return (
     <Tabs
@@ -107,7 +121,14 @@ function ClassicTabLayout({ role }: { role: string }) {
         options={{
           title: "Messages",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubbles" size={size} color={color} />
+            <View>
+              <Ionicons name="chatbubbles" size={size} color={color} />
+              {unreadCount > 0 && (
+                <View style={badgeStyles.badge}>
+                  <Text style={badgeStyles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                </View>
+              )}
+            </View>
           ),
         }}
       />
@@ -149,6 +170,27 @@ function ClassicTabLayout({ role }: { role: string }) {
     </Tabs>
   );
 }
+
+const badgeStyles = StyleSheet.create({
+  badge: {
+    position: 'absolute' as const,
+    top: -4,
+    right: -8,
+    backgroundColor: '#cc3300',
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+    paddingHorizontal: 4,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold' as const,
+    fontFamily: 'Inter_600SemiBold',
+  },
+});
 
 export default function TabLayout() {
   const { isAuthenticated, isLoading, user } = useAuth();

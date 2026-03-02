@@ -1572,9 +1572,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/messages/unread-count", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+
+      const result = await db.execute(sql`
+        SELECT COUNT(DISTINCT jm.id)::int as count
+        FROM job_messages jm
+        INNER JOIN jobs j ON jm.job_id = j.id
+        LEFT JOIN job_assignments ja ON ja.job_id = j.id AND ja.driver_id = ${userId}
+          AND ja.status IN ('pending', 'approved')
+        WHERE jm.sender_id != ${userId}
+          AND (jm.read IS NULL OR jm.read = false)
+          AND (j.contractor_id = ${userId} OR j.driver_id = ${userId} OR ja.driver_id = ${userId})
+      `);
+      const count = (result.rows?.[0] as any)?.count || 0;
+      return res.json({ count });
+    } catch (err) {
+      console.error("Unread count error:", err);
+      return res.json({ count: 0 });
+    }
+  });
+
   app.get("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
     try {
+      const userId = (req.session as any).userId;
       const { jobId } = req.params;
+
+      const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+
+      const isParticipant = job.contractor_id === userId || job.driver_id === userId;
+      if (!isParticipant) {
+        const [assignment] = await db.select().from(jobAssignments)
+          .where(and(eq(jobAssignments.job_id, jobId), eq(jobAssignments.driver_id, userId)))
+          .limit(1);
+        if (!assignment) return res.status(403).json({ message: "Not authorized" });
+      }
+
+      await db
+        .update(jobMessages)
+        .set({ read: true })
+        .where(and(
+          eq(jobMessages.job_id, jobId),
+          sql`${jobMessages.sender_id} != ${userId}`,
+          or(eq(jobMessages.read, false), isNull(jobMessages.read))
+        ));
 
       const msgs = await db
         .select({

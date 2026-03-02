@@ -88,8 +88,9 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 
 ### Messages
 - `GET /api/conversations` - List message conversations (includes jobs from assignments, not just driver_id)
-- `GET /api/messages/:jobId` - Get messages for a job
+- `GET /api/messages/:jobId` - Get messages for a job (also marks unread messages as read)
 - `POST /api/messages/:jobId` - Send a message
+- `GET /api/messages/unread-count` - Count of unread messages for tab badge (polled every 15s)
 - Auto-messages: Job events (apply, approve, reject, withdraw, truck removal) auto-create messages in job_messages so conversations appear in Messages tab
 
 ### Reviews

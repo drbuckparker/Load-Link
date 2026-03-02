@@ -55,6 +55,7 @@ export default function ChatScreen() {
       }
     }
     prevMsgCountRef.current = count;
+    queryClient.invalidateQueries({ queryKey: ['/api/messages/unread-count'] });
   }, [messagesData]);
 
   const isMyPostedJob = user?.id && (jobData?.contractor_id === user.id || jobData?.contractorId === user.id);
@@ -80,6 +81,7 @@ export default function ChatScreen() {
       await apiRequest('POST', `/api/messages/${jobId}`, { body: text });
       queryClient.invalidateQueries({ queryKey: [`/api/messages/${jobId}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/messages/unread-count'] });
     } catch (e) {
       console.log('Failed to send message:', e);
     }
