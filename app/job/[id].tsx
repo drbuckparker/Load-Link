@@ -78,6 +78,19 @@ function mapAssignment(a: any): Assignment {
   };
 }
 
+function formatDriverShortName(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length < 2) return fullName;
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
+}
+
+function formatDriverDisplay(a: { driverName: string; driverCompany: string; truckingCompanyName: string }): string {
+  const company = a.truckingCompanyName || a.driverCompany;
+  const shortName = formatDriverShortName(a.driverName);
+  if (company) return `${company} (${shortName})`;
+  return shortName;
+}
+
 function getJobDateRange(scheduledDate: string, estimatedDays: number | string | null, includesWeekends: boolean): string[] {
   if (!scheduledDate) return [];
   const startDate = new Date(scheduledDate);
@@ -1174,13 +1187,10 @@ export default function JobDetailScreen() {
                   <Pressable key={a.id} style={[styles.assignmentCard, { borderColor: 'rgba(34, 197, 94, 0.3)' }]} onPress={() => setSelectedDriver(a)}>
                     <View style={styles.assignmentInfo}>
                       <View style={[styles.driverAvatar, { borderColor: Colors.success }]}>
-                        <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{a.driverName.charAt(0)}</Text>
+                        <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{(a.truckingCompanyName || a.driverCompany || a.driverName).charAt(0)}</Text>
                       </View>
                       <View style={{ flex: 1 }}>
-                        {a.truckingCompanyName ? (
-                          <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
-                        ) : null}
-                        <Text style={styles.driverNameText}>{a.driverName}</Text>
+                        <Text style={styles.driverNameText}>{formatDriverDisplay(a)}</Text>
                         <View style={styles.driverMeta}>
                           {a.driverTruckType ? (
                             <View style={styles.driverMetaItem}>
@@ -1210,13 +1220,10 @@ export default function JobDetailScreen() {
                   <Pressable key={a.id} style={styles.assignmentCard} onPress={() => setSelectedDriver(a)}>
                     <View style={styles.assignmentInfo}>
                       <View style={styles.driverAvatar}>
-                        <Text style={styles.driverAvatarText}>{a.driverName.charAt(0)}</Text>
+                        <Text style={styles.driverAvatarText}>{(a.truckingCompanyName || a.driverCompany || a.driverName).charAt(0)}</Text>
                       </View>
                       <View style={{ flex: 1 }}>
-                        {a.truckingCompanyName ? (
-                          <Text style={styles.companyLabel}>{a.truckingCompanyName}</Text>
-                        ) : null}
-                        <Text style={styles.driverNameText}>{a.driverName}</Text>
+                        <Text style={styles.driverNameText}>{formatDriverDisplay(a)}</Text>
                         <View style={styles.driverMeta}>
                           {a.driverTruckType ? (
                             <View style={styles.driverMetaItem}>

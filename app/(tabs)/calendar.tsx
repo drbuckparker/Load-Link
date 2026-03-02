@@ -647,7 +647,15 @@ export default function CalendarScreen() {
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, paddingLeft: 2, flexWrap: 'wrap' }}>
                           <Ionicons name="checkmark-circle" size={12} color={Colors.success} />
                           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.success }} numberOfLines={1}>
-                            {job.assignedVehicles.map((v: any) => `${v.driverName || ''} - ${[v.year, v.make].filter(Boolean).join(' ')}`).join(', ')}
+                            {job.assignedVehicles.map((v: any) => {
+                              const company = v.driverCompany;
+                              const fullName = v.driverName || '';
+                              const nameParts = fullName.trim().split(/\s+/);
+                              const shortName = nameParts.length >= 2 ? `${nameParts[0]} ${nameParts[nameParts.length - 1].charAt(0)}.` : fullName;
+                              const nameDisplay = company ? `${company} (${shortName})` : shortName;
+                              const truckInfo = [v.year, v.make].filter(Boolean).join(' ');
+                              return truckInfo ? `${nameDisplay} - ${truckInfo}` : nameDisplay;
+                            }).join(', ')}
                           </Text>
                         </View>
                       )}

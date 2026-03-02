@@ -1659,6 +1659,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 vehicle_year: driverVehicles.year,
                 vehicle_plate: driverVehicles.license_plate,
                 driver_name: users.full_name,
+                driver_company: users.company,
               })
               .from(jobAssignments)
               .leftJoin(driverVehicles, eq(jobAssignments.vehicle_id, driverVehicles.id))
@@ -1677,6 +1678,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                       year: a.vehicle_year,
                       plate: a.vehicle_plate,
                       driverName: a.driver_name,
+                      driverCompany: a.driver_company,
                     });
                   }
                 }
@@ -2703,6 +2705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             vehicle_year: driverVehicles.year,
             vehicle_plate: driverVehicles.license_plate,
             driver_name: users.full_name,
+            driver_company: users.company,
           })
           .from(jobAssignments)
           .leftJoin(driverVehicles, eq(jobAssignments.vehicle_id, driverVehicles.id))
@@ -2721,6 +2724,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   year: a.vehicle_year,
                   plate: a.vehicle_plate,
                   driverName: a.driver_name,
+                  driverCompany: a.driver_company,
                 });
               }
             }
