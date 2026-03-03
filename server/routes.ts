@@ -577,6 +577,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }));
 
       const isMyJobs = status === 'my_jobs' || status === 'completed';
+
+      if (!isMyJobs) {
+        const jobIds = formattedJobs.map(j => j.id);
+        if (jobIds.length > 0) {
+          const approvedCounts = await db
+            .select({
+              job_id: jobAssignments.job_id,
+              count: sql<number>`count(*)::int`,
+            })
+            .from(jobAssignments)
+            .where(
+              and(
+                inArray(jobAssignments.job_id, jobIds),
+                eq(jobAssignments.status, 'approved')
+              )
+            )
+            .groupBy(jobAssignments.job_id);
+
+          const approvedMap = new Map(approvedCounts.map(a => [a.job_id, a.count]));
+
+          formattedJobs = formattedJobs.filter(job => {
+            const needed = job.trucks_needed || 1;
+            const approved = approvedMap.get(job.id) || 0;
+            return approved < needed;
+          });
+        }
+      }
+
       if (!isMyJobs && lat && lng) {
         const userLat = parseFloat(lat as string);
         const userLng = parseFloat(lng as string);
