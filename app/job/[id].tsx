@@ -217,6 +217,8 @@ export default function JobDetailScreen() {
   const [pickerAmPm, setPickerAmPm] = useState<'AM' | 'PM'>('AM');
   const [timeManuallyAdjusted, setTimeManuallyAdjusted] = useState(false);
   const pickerOriginalTime = useRef<{ hour: number; minute: number; amPm: 'AM' | 'PM' }>({ hour: 12, minute: 0, amPm: 'AM' });
+  const hourScrollRef = useRef<ScrollView>(null);
+  const minuteScrollRef = useRef<ScrollView>(null);
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -685,6 +687,10 @@ export default function JobDetailScreen() {
     setTimeManuallyAdjusted(false);
     pickerOriginalTime.current = { hour: hour12, minute: m, amPm };
     setShowTimePicker(mode);
+    setTimeout(() => {
+      hourScrollRef.current?.scrollTo({ y: (hour12 - 1) * 50, animated: false });
+      minuteScrollRef.current?.scrollTo({ y: m * 50, animated: false });
+    }, 100);
   }
 
   function getPickerDate(): Date {
@@ -1280,6 +1286,7 @@ export default function JobDetailScreen() {
                   <Text style={{ color: Colors.textMuted, fontSize: 10, fontFamily: 'ChakraPetch_700Bold', letterSpacing: 0.5, marginBottom: 4 }}>HOUR</Text>
                   <View style={styles.loadsPickerContainer}>
                     <ScrollView
+                      ref={hourScrollRef}
                       style={[styles.loadsScroller, { width: 70 }]}
                       contentContainerStyle={styles.loadsScrollContent}
                       showsVerticalScrollIndicator={false}
@@ -1290,7 +1297,6 @@ export default function JobDetailScreen() {
                         setPickerHour(Math.max(1, Math.min(12, idx + 1)));
                         setTimeManuallyAdjusted(true);
                       }}
-                      contentOffset={{ x: 0, y: (pickerHour - 1) * 50 }}
                     >
                       {Array.from({ length: 12 }, (_, i) => i + 1).map((num) => (
                         <Pressable key={num} style={styles.loadsItem} onPress={() => { setPickerHour(num); setTimeManuallyAdjusted(true); }}>
@@ -1306,6 +1312,7 @@ export default function JobDetailScreen() {
                   <Text style={{ color: Colors.textMuted, fontSize: 10, fontFamily: 'ChakraPetch_700Bold', letterSpacing: 0.5, marginBottom: 4 }}>MIN</Text>
                   <View style={styles.loadsPickerContainer}>
                     <ScrollView
+                      ref={minuteScrollRef}
                       style={[styles.loadsScroller, { width: 70 }]}
                       contentContainerStyle={styles.loadsScrollContent}
                       showsVerticalScrollIndicator={false}
@@ -1316,7 +1323,6 @@ export default function JobDetailScreen() {
                         setPickerMinute(Math.max(0, Math.min(59, idx)));
                         setTimeManuallyAdjusted(true);
                       }}
-                      contentOffset={{ x: 0, y: pickerMinute * 50 }}
                     >
                       {Array.from({ length: 60 }, (_, i) => i).map((num) => (
                         <Pressable key={num} style={styles.loadsItem} onPress={() => { setPickerMinute(num); setTimeManuallyAdjusted(true); }}>
