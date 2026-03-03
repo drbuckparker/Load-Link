@@ -734,30 +734,32 @@ export default function CalendarScreen() {
             </View>
           </View>
         ) : (
-          <View style={styles.legendRow}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.success }]} />
-              <Text style={styles.legendText}>Available</Text>
+          <>
+            <View style={styles.legendRow}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: Colors.success }]} />
+                <Text style={styles.legendText}>Available</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
+                <Text style={styles.legendText}>Unavailable</Text>
+              </View>
             </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
-              <Text style={styles.legendText}>Unavailable</Text>
+            <View style={[styles.legendRow, { marginTop: 4 }]}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
+                <Text style={styles.legendText}>Booked</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: Colors.warning }]} />
+                <Text style={styles.legendText}>Pending</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: 'rgba(59,130,246,0.25)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.4)' }} />
+                <Text style={styles.legendText}>Full</Text>
+              </View>
             </View>
-          </View>
-          <View style={[styles.legendRow, { marginTop: 4 }]}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
-              <Text style={styles.legendText}>Booked</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.warning }]} />
-              <Text style={styles.legendText}>Pending</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: 'rgba(59,130,246,0.25)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.4)' }} />
-              <Text style={styles.legendText}>Full</Text>
-            </View>
-          </View>
+          </>
         )}
 
         {isContractor && selectedDate && (() => {
