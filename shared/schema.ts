@@ -238,6 +238,7 @@ export const jobRuns = pgTable("job_runs", {
   total_miles: numeric("total_miles", { precision: 8, scale: 2 }),
   loads_hauled: integer("loads_hauled"),
   created_at: timestamp("created_at").defaultNow(),
+  updated_at: timestamp("updated_at"),
 });
 
 export const notifications = pgTable("notifications", {
