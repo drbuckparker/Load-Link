@@ -16,6 +16,7 @@ import {
   reviews,
   contractorFavoriteDrivers,
   weightTickets,
+  conversationActions,
 } from "@shared/schema";
 import bcrypt from "bcrypt";
 import session from "express-session";
@@ -1597,9 +1598,141 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      return res.json(Array.from(convMap.values()));
+      const archivedActions = await db
+        .select({ job_id: conversationActions.job_id })
+        .from(conversationActions)
+        .where(
+          and(
+            eq(conversationActions.user_id, userId),
+            or(
+              eq(conversationActions.action, 'archived'),
+              eq(conversationActions.action, 'deleted')
+            )
+          )
+        );
+      const hiddenJobIds = new Set(archivedActions.map(a => a.job_id));
+
+      const allConvs = Array.from(convMap.values());
+      const visibleConvs = allConvs.filter((c: any) => !hiddenJobIds.has(c.jobId));
+
+      return res.json(visibleConvs);
     } catch (err) {
       console.error("Conversations error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.get("/api/conversations/archived", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+
+      const archivedActions = await db
+        .select({ job_id: conversationActions.job_id, action: conversationActions.action })
+        .from(conversationActions)
+        .where(
+          and(
+            eq(conversationActions.user_id, userId),
+            eq(conversationActions.action, 'archived')
+          )
+        );
+
+      const archivedJobIds = archivedActions.map(a => a.job_id).filter(Boolean) as string[];
+      if (archivedJobIds.length === 0) return res.json([]);
+
+      const archivedJobs = await db
+        .select({ id: jobs.id, material: jobs.material, contractor_id: jobs.contractor_id })
+        .from(jobs)
+        .where(inArray(jobs.id, archivedJobIds));
+
+      const jobIds = archivedJobs.map(j => j.id);
+      const messages = await db
+        .select()
+        .from(jobMessages)
+        .where(inArray(jobMessages.job_id, jobIds))
+        .orderBy(desc(jobMessages.created_at));
+
+      const convs: any[] = [];
+      const seen = new Set<string>();
+      for (const msg of messages) {
+        if (seen.has(msg.job_id)) continue;
+        seen.add(msg.job_id);
+        const job = archivedJobs.find(j => j.id === msg.job_id);
+        const isContractorUser = job?.contractor_id === userId;
+        let otherUserId = isContractorUser
+          ? messages.find(m => m.job_id === msg.job_id && m.sender_id !== userId)?.sender_id || null
+          : job?.contractor_id || null;
+
+        let otherUser = null;
+        if (otherUserId) {
+          const [u] = await db.select({ full_name: users.full_name, company: users.company }).from(users).where(eq(users.id, otherUserId)).limit(1);
+          otherUser = u;
+        }
+
+        convs.push({
+          id: `conv_${msg.job_id}`,
+          jobId: msg.job_id,
+          jobMaterial: job?.material || "Unknown",
+          contractorName: otherUser?.full_name || otherUser?.company || "Unknown",
+          contractorCompany: otherUser?.company || "",
+          lastMessage: msg.body,
+          lastMessageAt: msg.created_at,
+          unreadCount: 0,
+        });
+      }
+
+      return res.json(convs);
+    } catch (err) {
+      console.error("Archived conversations error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/conversations/:jobId/archive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { jobId } = req.params;
+
+      await db.delete(conversationActions).where(
+        and(eq(conversationActions.user_id, userId), eq(conversationActions.job_id, jobId))
+      );
+      await db.insert(conversationActions).values({ user_id: userId, job_id: jobId, action: 'archived' });
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Archive conversation error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/conversations/:jobId/unarchive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { jobId } = req.params;
+
+      await db.delete(conversationActions).where(
+        and(eq(conversationActions.user_id, userId), eq(conversationActions.job_id, jobId))
+      );
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Unarchive conversation error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.post("/api/conversations/:jobId/delete", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const { jobId } = req.params;
+
+      await db.delete(conversationActions).where(
+        and(eq(conversationActions.user_id, userId), eq(conversationActions.job_id, jobId))
+      );
+      await db.insert(conversationActions).values({ user_id: userId, job_id: jobId, action: 'deleted' });
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Delete conversation error:", err);
       return res.status(500).json({ message: "Server error" });
     }
   });

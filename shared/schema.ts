@@ -405,6 +405,18 @@ export const weightTickets = pgTable("weight_tickets", {
   created_at: timestamp("created_at").defaultNow(),
 });
 
+export const conversationActions = pgTable("conversation_actions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  user_id: varchar("user_id").references(() => users.id),
+  job_id: varchar("job_id").references(() => jobs.id),
+  action: varchar("action", { length: 20 }),
+  created_at: timestamp("created_at").defaultNow(),
+});
+
+export type ConversationAction = typeof conversationActions.$inferSelect;
+
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type Job = typeof jobs.$inferSelect;

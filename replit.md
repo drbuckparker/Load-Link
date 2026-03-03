@@ -1,211 +1,45 @@
 # LoadLink Mobile Companion App
 
 ## Overview
-Mobile companion app for LoadLink, an existing logistics web platform for short-haul trucking and construction. The app supports all user roles: truck drivers (owner-operators), contractors, trucking companies, and foremen.
+The LoadLink Mobile Companion App is designed to extend the functionality of the existing LoadLink logistics web platform to mobile devices. It serves all user roles within the short-haul trucking and construction industries, including truck drivers, contractors, trucking companies, and foremen. The app aims to streamline job management, communication, and financial tracking for all stakeholders, providing a comprehensive mobile solution for logistics operations.
 
-## Current State
-- Connected to existing LoadLink web app database (Neon PostgreSQL) via `EXTERNAL_DATABASE_URL`
-- Real API routes built with Express + Drizzle ORM querying 28 tables
-- Authentication via email/password with bcrypt + express-session (sessions stored in DB)
-- All screens fetch from real API instead of mock data
-- Role-aware UI: contractors see job management/invoices, drivers see job browsing/earnings
+## User Preferences
+I want to prioritize a clean, maintainable, and well-structured codebase. I prefer clear and concise explanations for any proposed changes, focusing on the "why" as much as the "what." For development, I prefer an iterative approach, with small, testable changes. Please ask for confirmation before implementing major architectural changes or refactoring large portions of the codebase. When making changes, ensure that all existing features continue to function as expected, especially role-based access and UI elements.
 
-## Tech Stack
-- **Frontend**: Expo Router (file-based routing), React Native, TypeScript
-- **Backend**: Express + Drizzle ORM + PostgreSQL (Neon)
-- **State**: React Query (@tanstack/react-query) for server state, AuthContext for user state
-- **Styling**: React Native StyleSheet, dark "Industrial Modern" theme
+## System Architecture
 
-## Design System
-- **Theme**: Dark only - optimized for outdoor/sunlight use
-- **Primary**: Safety Orange (#FF9900) on Deep Asphalt (#161a22)
-- **Fonts**: Chakra Petch (headings, bold, uppercase) + Inter (body)
-- **Touch targets**: 44pt minimum for gloved hands
-- **Tab bar**: Liquid glass on iOS 26+, BlurView fallback
+### Frontend
+- **Framework**: React Native with Expo Router for file-based routing.
+- **State Management**: React Query for server state synchronization and AuthContext for user authentication state.
+- **Styling**: React Native StyleSheet, adhering to a dark "Industrial Modern" theme optimized for outdoor visibility.
+- **UI/UX**:
+    - **Color Scheme**: Primary Safety Orange (#FF9900) on Deep Asphalt (#161a22) background.
+    - **Typography**: Chakra Petch for headings (bold, uppercase) and Inter for body text.
+    - **Accessibility**: Minimum 44pt touch targets for gloved hands.
+    - **Interactive Elements**: Liquid glass tab bar on iOS 26+ with BlurView fallback.
+    - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
 
-## User Roles
-- **driver**: Browse jobs, accept/clock-in/out, track earnings, manage vehicles
-- **contractor**: Post jobs, manage driver assignments (approve/reject), view invoices
-- **trucking_company**, **trucking_company_contractor**, **driver_contractor**, **foreman**, **driver_trucking_company**: Compound roles
-- Role detection: `isContractorRole(role)` checks if role includes 'contractor'
-- Tab layout changes based on role (contractors see "My Jobs"/"Invoices" tabs, drivers see "Jobs"/"Earnings")
+### Backend
+- **Technology**: Express.js with Drizzle ORM.
+- **Database Interaction**: Connects to an external Neon PostgreSQL database, sharing schema with the existing LoadLink web application.
+- **Authentication**: Email/password authentication using bcrypt for password hashing and express-session for session management, with sessions stored in the database.
+- **Core Features**:
+    - **Job Management**: Drivers can browse, accept, clock-in/out, and track earnings. Contractors can post, manage assignments (approve/reject drivers), and view invoices.
+    - **User Roles**: Supports `driver`, `contractor`, `trucking_company`, `trucking_company_contractor`, `driver_contractor`, `foreman`, `driver_trucking_company` with role-based feature access.
+    - **Messaging**: Real-time messaging between users related to specific jobs, including auto-messages for job events.
+    - **Review System**: Allows users to submit and view reviews for completed jobs, impacting user ratings.
+    - **Vehicle Management**: Users can add, update, and delete their vehicles.
+    - **Project Management**: Contractors can create, update, and manage projects, linking jobs to specific projects.
+    - **Weight Ticket System**: Supports uploading weight tickets for job runs, with reminders and viewing capabilities.
+    - **Location Services**: GPS tracking for clock-in/out, location-based job filtering using haversine formula, and integration with Google Places/Maps for location input and navigation.
+    - **Push Notifications**: Utilizes Expo Push for critical updates such as new applications, message alerts, job status changes, and weight ticket reminders.
 
-## Database
-- External Neon PostgreSQL (shared with LoadLink web app)
-- 28 tables: users, jobs, job_runs, notifications, job_messages, driver_availability, monthly_invoices, driver_vehicles, job_assignments, etc.
-- Schema defined in `shared/schema.ts` using Drizzle ORM with snake_case field names
-- DB connection in `server/db.ts` using `EXTERNAL_DATABASE_URL`
-
-## API Routes (server/routes.ts)
-
-### Auth
-- `POST /api/auth/login` - Email/password login
-- `POST /api/auth/register` - New account registration
-- `POST /api/auth/logout` - Logout
-- `GET /api/auth/me` - Check session
-- `POST /api/auth/forgot-password` - Sends 6-char reset code via Resend email
-- `POST /api/auth/reset-password` - Verifies code and updates password
-- `POST /api/auth/set-password` - Sets password for accounts that used Replit auth on web
-
-### Calendar
-- `GET /api/calendar/jobs` - Driver's assigned jobs with truck info by month (query params: month, year)
-
-### Jobs (Driver)
-- `GET /api/jobs` - List jobs (query params: status, truck_type, search, driver_id)
-- `GET /api/jobs/:id` - Job detail with contractor info, runs, assignments
-- `POST /api/jobs/:id/accept` - Accept a job
-- `POST /api/jobs/:id/withdraw` - Withdraw from a job
-- `POST /api/jobs/:id/clock-in` - Start a job run
-- `POST /api/job-runs/:runId/clock-out` - End a job run (1hr min, 15min increments)
-
-### Jobs (Contractor)
-- `GET /api/contractor/jobs` - List contractor's posted jobs with application counts (query params: status, search, date, project_id)
-- `POST /api/contractor/jobs` - Create a new job posting
-- `DELETE /api/jobs/:id` - Cancel/delete a job
-- `GET /api/jobs/:id/assignments` - Get driver applications for a job
-- `POST /api/jobs/:id/assignments/:assignmentId/approve` - Approve a driver
-- `POST /api/jobs/:id/assignments/:assignmentId/reject` - Reject a driver
-
-### Projects (Contractor)
-- `GET /api/projects` - List contractor's projects with job counts
-- `POST /api/projects` - Create a new project (name, job_number, site_address, notes)
-- `PUT /api/projects/:id` - Update a project (name, job_number, site_address, notes, awarded_amount, status)
-- `DELETE /api/projects/:id` - Soft-delete a project (sets deleted_at, cancels associated jobs)
-- `POST /api/projects/:id/restore` - Restore a soft-deleted project
-
-### Saved Locations
-- `GET /api/saved-locations` - Returns contractor's project sites and past job pickup/dropoff addresses (query params: search)
-
-### Vehicles
-- `GET /api/vehicles` - List user's vehicles
-- `POST /api/vehicles` - Add a vehicle
-- `PUT /api/vehicles/:id` - Update a vehicle
-- `DELETE /api/vehicles/:id` - Delete a vehicle
-
-### Invoices
-- `GET /api/invoices` - List invoices (query params: status)
-- `GET /api/invoices/stats` - Invoice stats (outstanding, paid totals)
-
-### Messages
-- `GET /api/conversations` - List message conversations (includes jobs from assignments, not just driver_id)
-- `GET /api/messages/:jobId` - Get messages for a job (also marks unread messages as read)
-- `POST /api/messages/:jobId` - Send a message
-- `GET /api/messages/unread-count` - Count of unread messages for tab badge (polled every 15s)
-- Auto-messages: Job events (apply, approve, reject, withdraw, truck removal) auto-create messages in job_messages so conversations appear in Messages tab
-
-### Reviews
-- `POST /api/reviews` - Submit a review (jobId, revieweeId, rating 1-5, comment)
-- `GET /api/reviews/pending` - Get jobs where current user hasn't reviewed the other party yet
-- `GET /api/reviews/:userId` - Get all reviews for a user (with reviewer info, average rating)
-
-### Other
-- `GET /api/notifications` - Get user notifications
-- `POST /api/notifications/mark-read` - Mark all notifications read
-- `GET /api/earnings` - Earnings with period filter (week/month/all)
-- `GET /api/availability` - Calendar availability
-- `POST /api/availability` - Set availability for a date
-- `GET /api/profile` - User profile with vehicles
-- `PUT /api/profile` - Update profile
-- `PUT /api/profile/status` - Toggle online/offline
-- `PUT /api/profile/role` - Switch user role
-
-## App Screens
-- **(auth)**: login, register, forgot-password
-- **(tabs)**: jobs (index), calendar, messages, my-jobs/invoices, profile
-- **job/[id]**: Job detail with timer (drivers), driver assignments (contractors)
-- **chat/[jobId]**: Chat messages for a job
-- **notifications**: Notification center
-- **create-job**: Contractor job creation form
-- **vehicles**: Vehicle management (add/edit/delete)
-- **invoice/[id]**: Invoice detail with amount, contractor/driver info, and linked jobs
-- **review**: Review submission screen (star rating + comment)
-
-## Key Files
-- `shared/schema.ts` - Drizzle ORM schema (snake_case field names matching DB)
-- `server/routes.ts` - All API routes
-- `server/db.ts` - Database connection
-- `contexts/AuthContext.tsx` - Auth state with API login/register
-- `lib/query-client.ts` - React Query setup with default fetcher
-- `lib/mock-data.ts` - TypeScript interfaces, role helpers, utility functions
-- `constants/colors.ts` - Color system
-
-## Email
-- Uses Resend (RESEND_API_KEY secret) with loadlinklive.com domain
-- Sends password reset codes styled in LoadLink dark theme branding
-
-## Recent Changes (Feb 2026)
-- Rebuilt profile screen as full Settings page matching web app with 5 tabs: Profile, Role, Help, Account, Billing
-- Added role-switching: users can change between driver, contractor, trucking company, foreman roles
-- Help tab: Contact LoadLink, Tutorials, App Suggestions
-- Account tab: Security Settings, Connected Accounts (Coming Soon)
-- Billing tab: Current Plan, Payment Methods (Coming Soon)
-- Made app role-aware: contractors and drivers see different tab layouts
-- Added contractor job creation screen with full form (material, locations, rates, schedule)
-- Built contractor job management: view posted jobs with application counts
-- Added driver assignment management in job detail (approve/reject with haptic feedback)
-- Built vehicle management screen with add/edit/delete and primary vehicle support
-- Created invoicing tab with Outstanding/Paid stats and filter chips
-- Added cancel job functionality for contractors
-- Connected to real LoadLink database via EXTERNAL_DATABASE_URL
-- Built complete Drizzle schema matching all 28 DB tables
-- Created API routes for auth, jobs, messages, earnings, calendar, profile
-- Updated all frontend screens to use React Query + real API
-- Removed all mock data arrays, kept interfaces and utility functions
-- Added password reset flow via Resend email (6-char code, 30min expiry)
-- Added set-password flow for web accounts using Replit auth
-- Added Google Places Autocomplete for pickup/dropoff location inputs with suggestions dropdown
-- Added route duration estimator card (per trip time with 1.4x dump truck speed adjustment, distance, estimated work days)
-- API endpoints: `/api/places/autocomplete`, `/api/places/details`, `/api/directions`
-- Calendar date picker for scheduled date (Month Day, Year format)
-- Materials autocomplete dropdown from past jobs
-- Built review system: reviews table, POST/GET API endpoints, star rating + comment UI
-- Review notifications auto-sent to both driver and contractor on job clock-out
-- Tapping "load_completed" notification opens review screen for that job
-- Pending reviews banner shown at top of Messages tab
-- Submitted reviews update user's average rating in users table
-- Moved Earnings from tab bar to Profile screen (as Earnings sub-tab)
-- Replaced Earnings tab with Jobs tab showing driver's assigned jobs with vehicle assignment
-- Added truck availability validation on job accept: drivers can't accept more jobs than qualifying trucks per date
-- Cleanup endpoint `/api/cleanup-duplicate-assignments` removes excess assignments when driver has more jobs than trucks on a date (keeps earliest accepted)
-- Calendar auto-detects conflicting assignments and triggers cleanup on load
-- Fixed withdraw endpoint to also delete job_assignments (not just reset job status)
-- Calendar "X TRUCKS BOOKED" label changed to "X JOBS BOOKED" for accuracy
-- Dashboard shows role-aware job info: drivers see contractor name + assignment status, contractors see truck counts
-- Fixed react-native-maps web compatibility: split into platform-specific files (RouteMapView.native.tsx / RouteMapView.web.tsx)
-- Web map view uses Google Maps JavaScript API via /api/map-embed iframe with dark theme, route directions, and markers
-- Native map view uses react-native-maps with MapView, Marker, and Polyline components
-- Calendar day popup: direct "Mark Available" / "Mark Unavailable" toggle buttons (no more long-press-only modal)
-- Bulk availability actions: "All Weekdays Available" and "All Weekends Available" buttons in day popup
-- Individual day overrides: tap any day after bulk action to toggle that specific day's availability
-- Driver calendar availability controls mirrored from contractor view (inline Mark Available/Unavailable + bulk actions)
-- Jobs/Projects toggle on contractor My Jobs screen: switch between job list and project list
-- Create Project modal with name, job number, site address, notes
-- Project cards show job count, site address, awarded amount, status
-- Tapping a project filters jobs view to show only that project's jobs
-- FAB context-aware: creates project on Projects tab, creates job on Jobs tab (pre-fills project when inside project view)
-- create-job.tsx accepts projectId URL param to pre-fill project selection
-- Weight ticket upload system: weight_tickets table, photo upload via expo-image-picker (camera or library)
-- After clock-out on weight-ticket-required jobs, driver gets prompt to upload tickets
-- 30-minute timer: if no tickets uploaded within 30 min of clock-out, notifications sent to driver, contractor, and fleet manager
-- Weight ticket API: POST `/api/job-runs/:runId/weight-tickets`, GET `/api/jobs/:jobId/weight-tickets`
-- Contractors can view uploaded weight ticket photos on job detail screen
-- Dashboard "ON THE CLOCK" timer: when driver has an active job run, replaces Quick Job card with live HH:MM:SS counter, material/contractor info, green styling; tapping navigates to job detail
-- "Back at it soon" banner: after clock-out on multi-day jobs, shows next scheduled date with smart formatting (day name for tomorrow, full date if further away); dismissible
-- Location-based job filtering: GPS auto-detected as "Current Location" (secondary), user sets "Work Location" (primary) manually
-- Jobs endpoint uses haversine formula to filter jobs within search_radius_miles from either location
-- Dashboard auto-updates secondary location + auth context on app open
-- Calendar open jobs also filtered by location radius
-- Profile shows "Work Location" (editable) and "Current Location" (auto-detected, read-only) with helper text
-- Push notifications via Expo Push: `expo_push_token` column on users table, registration on login/register
-- Push sent on: new driver application, assignment approved/rejected, new message, job completed/review, weight ticket reminders
-- In-app notification sounds: notification.wav (high ding) and message.wav (two-tone) in assets/sounds/
-- Chat screen polls every 5s and plays message sound when new messages arrive from other person
-- Root layout handles push notification taps: messages → chat screen, jobs → job detail, fallback → notifications
-- Android notification channel configured with vibration pattern
-- Sound files: lib/sounds.ts (playNotificationSound, playMessageSound), lib/notifications.ts (registerForPushNotifications)
-- Push registration endpoint: POST `/api/push/register` saves expo_push_token to user record
-- Server-side push: sendPushNotification() utility posts to Expo Push API (exp.host)
-- GPS location tracking on clock-in/clock-out: job_runs stores start_lat/lng and end_lat/lng
-- Clock-out now captures actual GPS coordinates (was sending 0,0 before)
-- Work Sessions section on job detail: shows completed runs with clock-in/out times and clickable "View location" links
-- Tapping location link opens native Maps app (iOS Maps / Android Geo) or falls back to Google Maps web
+## External Dependencies
+- **Database**: Neon PostgreSQL (`EXTERNAL_DATABASE_URL`).
+- **Email Service**: Resend (for password reset emails, uses `RESEND_API_KEY`).
+- **Mapping/Location Services**:
+    - Google Places API (for autocomplete and details).
+    - Google Maps JavaScript API (for web map view and directions).
+    - React Native Maps (for native map view).
+    - Native device map applications (iOS Maps / Android Geo) for external navigation.
+- **Push Notification Service**: Expo Push API (exp.host).

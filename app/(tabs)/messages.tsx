@@ -1,13 +1,13 @@
-import { useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
+import { useState, useRef, useCallback } from 'react';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl, Animated, PanResponder } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { Conversation, timeAgo } from '@/lib/mock-data';
-import { queryClient } from '@/lib/query-client';
+import { queryClient, apiRequest } from '@/lib/query-client';
 
 function mapConversation(c: any): Conversation {
   return {
@@ -65,15 +65,207 @@ function PendingReviewsBanner() {
   );
 }
 
+function SwipeableConversation({ item, onArchive, onDelete, onPress }: {
+  item: Conversation;
+  onArchive: () => void;
+  onDelete: () => void;
+  onPress: () => void;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const isSwipedOpen = useRef(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > 10 && Math.abs(gestureState.dy) < 20;
+      },
+      onPanResponderGrant: () => {
+        translateX.stopAnimation();
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const currentOffset = isSwipedOpen.current ? -150 : 0;
+        const newValue = Math.min(0, Math.max(-150, currentOffset + gestureState.dx));
+        translateX.setValue(newValue);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const currentOffset = isSwipedOpen.current ? -150 : 0;
+        const finalPosition = currentOffset + gestureState.dx;
+
+        if (finalPosition < -75) {
+          Animated.spring(translateX, { toValue: -150, useNativeDriver: true, friction: 8 }).start();
+          isSwipedOpen.current = true;
+        } else {
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true, friction: 8 }).start();
+          isSwipedOpen.current = false;
+        }
+      },
+    })
+  ).current;
+
+  const closeSwipe = useCallback(() => {
+    Animated.spring(translateX, { toValue: 0, useNativeDriver: true, friction: 8 }).start();
+    isSwipedOpen.current = false;
+  }, []);
+
+  return (
+    <View style={swipeStyles.container}>
+      <View style={swipeStyles.actionsContainer}>
+        <Pressable
+          style={[swipeStyles.actionButton, swipeStyles.archiveButton]}
+          onPress={() => {
+            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            closeSwipe();
+            onArchive();
+          }}
+        >
+          <Ionicons name="archive-outline" size={22} color="#fff" />
+          <Text style={swipeStyles.actionText}>Archive</Text>
+        </Pressable>
+        <Pressable
+          style={[swipeStyles.actionButton, swipeStyles.deleteButton]}
+          onPress={() => {
+            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+            closeSwipe();
+            onDelete();
+          }}
+        >
+          <Ionicons name="trash-outline" size={22} color="#fff" />
+          <Text style={swipeStyles.actionText}>Delete</Text>
+        </Pressable>
+      </View>
+
+      <Animated.View
+        style={[swipeStyles.foreground, { transform: [{ translateX }] }]}
+        {...panResponder.panHandlers}
+      >
+        <Pressable
+          style={({ pressed }) => [styles.convCard, pressed && styles.convCardPressed]}
+          onPress={onPress}
+        >
+          <View style={styles.convAvatar}>
+            <Text style={styles.convAvatarText}>{item.contractorName.charAt(0)}</Text>
+          </View>
+          <View style={styles.convContent}>
+            <View style={styles.convTop}>
+              <Text style={styles.convName} numberOfLines={1}>{item.contractorName}</Text>
+              <Text style={styles.convTime}>{timeAgo(item.lastMessageAt)}</Text>
+            </View>
+            <Text style={styles.convCompany}>{item.contractorCompany}</Text>
+            <View style={styles.convBottom}>
+              <View style={styles.jobTag}>
+                <Ionicons name="briefcase-outline" size={10} color={Colors.textMuted} />
+                <Text style={styles.jobTagText}>{item.jobMaterial}</Text>
+              </View>
+              <Text style={[styles.convMessage, item.unreadCount > 0 && styles.convMessageUnread]} numberOfLines={1}>
+                {item.lastMessage}
+              </Text>
+            </View>
+          </View>
+          {item.unreadCount > 0 && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadText}>{item.unreadCount}</Text>
+            </View>
+          )}
+        </Pressable>
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   const { data: convsData, isLoading } = useQuery<any[]>({
     queryKey: ['/api/conversations'],
   });
 
+  const { data: archivedData, isLoading: archivedLoading } = useQuery<any[]>({
+    queryKey: ['/api/conversations/archived'],
+  });
+
   const conversations = (convsData || []).map(mapConversation);
+  const archivedConversations = (archivedData || []).map(mapConversation);
+
+  const archiveMutation = useMutation({
+    mutationFn: (jobId: string) => apiRequest('POST', `/api/conversations/${jobId}/archive`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/conversations/archived'] });
+    },
+  });
+
+  const unarchiveMutation = useMutation({
+    mutationFn: (jobId: string) => apiRequest('POST', `/api/conversations/${jobId}/unarchive`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/conversations/archived'] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (jobId: string) => apiRequest('POST', `/api/conversations/${jobId}/delete`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/conversations/archived'] });
+    },
+  });
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await queryClient.invalidateQueries({ queryKey: ['/api/conversations'] });
+    await queryClient.invalidateQueries({ queryKey: ['/api/conversations/archived'] });
+    await queryClient.invalidateQueries({ queryKey: ['/api/reviews/pending'] });
+    setRefreshing(false);
+  };
+
+  if (showArchived) {
+    return (
+      <View style={styles.container}>
+        <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
+          <Pressable onPress={() => setShowArchived(false)} style={styles.backButton} hitSlop={8}>
+            <Ionicons name="chevron-back" size={24} color={Colors.text} />
+          </Pressable>
+          <Text style={styles.headerTitle}>ARCHIVED</Text>
+          <View style={{ width: 32 }} />
+        </View>
+
+        <FlatList
+          data={archivedConversations}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}
+          renderItem={({ item }) => (
+            <SwipeableConversation
+              item={item}
+              onArchive={() => unarchiveMutation.mutate(item.jobId)}
+              onDelete={() => deleteMutation.mutate(item.jobId)}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push({ pathname: '/chat/[jobId]', params: { jobId: item.jobId } });
+              }}
+            />
+          )}
+          keyExtractor={item => item.id}
+          contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          ListEmptyComponent={
+            archivedLoading ? (
+              <View style={styles.emptyState}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                <Ionicons name="archive-outline" size={48} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No Archived Messages</Text>
+                <Text style={styles.emptyText}>Swipe left on a conversation to archive it</Text>
+              </View>
+            )
+          }
+          showsVerticalScrollIndicator={false}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -85,44 +277,39 @@ export default function MessagesScreen() {
 
       <FlatList
         data={conversations}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/conversations'] }); await queryClient.invalidateQueries({ queryKey: ['/api/reviews/pending'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}
         renderItem={({ item }) => (
-          <Pressable
-            style={({ pressed }) => [styles.convCard, pressed && styles.convCardPressed]}
+          <SwipeableConversation
+            item={item}
+            onArchive={() => archiveMutation.mutate(item.jobId)}
+            onDelete={() => deleteMutation.mutate(item.jobId)}
             onPress={() => {
               if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.push({ pathname: '/chat/[jobId]', params: { jobId: item.jobId } });
             }}
-          >
-            <View style={styles.convAvatar}>
-              <Text style={styles.convAvatarText}>{item.contractorName.charAt(0)}</Text>
-            </View>
-            <View style={styles.convContent}>
-              <View style={styles.convTop}>
-                <Text style={styles.convName} numberOfLines={1}>{item.contractorName}</Text>
-                <Text style={styles.convTime}>{timeAgo(item.lastMessageAt)}</Text>
-              </View>
-              <Text style={styles.convCompany}>{item.contractorCompany}</Text>
-              <View style={styles.convBottom}>
-                <View style={styles.jobTag}>
-                  <Ionicons name="briefcase-outline" size={10} color={Colors.textMuted} />
-                  <Text style={styles.jobTagText}>{item.jobMaterial}</Text>
-                </View>
-                <Text style={[styles.convMessage, item.unreadCount > 0 && styles.convMessageUnread]} numberOfLines={1}>
-                  {item.lastMessage}
-                </Text>
-              </View>
-            </View>
-            {item.unreadCount > 0 && (
-              <View style={styles.unreadBadge}>
-                <Text style={styles.unreadText}>{item.unreadCount}</Text>
-              </View>
-            )}
-          </Pressable>
+          />
         )}
         keyExtractor={item => item.id}
         contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
+        ListFooterComponent={
+          archivedConversations.length > 0 ? (
+            <Pressable
+              style={styles.archivedFolder}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowArchived(true);
+              }}
+            >
+              <Ionicons name="archive-outline" size={20} color={Colors.textSecondary} />
+              <Text style={styles.archivedFolderText}>Archived</Text>
+              <View style={styles.archivedCount}>
+                <Text style={styles.archivedCountText}>{archivedConversations.length}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+            </Pressable>
+          ) : null
+        }
         ListEmptyComponent={
           isLoading ? (
             <View style={styles.emptyState}>
@@ -142,15 +329,61 @@ export default function MessagesScreen() {
   );
 }
 
+const swipeStyles = StyleSheet.create({
+  container: {
+    overflow: 'hidden',
+    borderRadius: 12,
+  },
+  actionsContainer: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    width: 150,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  actionButton: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 2,
+  },
+  archiveButton: {
+    backgroundColor: Colors.info,
+  },
+  deleteButton: {
+    backgroundColor: Colors.destructive,
+  },
+  actionText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 10,
+    color: '#fff',
+  },
+  foreground: {
+    backgroundColor: Colors.background,
+  },
+});
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: {
-    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
   },
+  backButton: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   headerTitle: {
+    flex: 1,
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 18,
     color: Colors.text,
@@ -267,6 +500,34 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 13,
     color: Colors.textMuted,
+  },
+  archivedFolder: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  archivedFolderText: {
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.textSecondary,
+  },
+  archivedCount: {
+    backgroundColor: Colors.muted,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  archivedCountText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.textSecondary,
   },
 });
 
