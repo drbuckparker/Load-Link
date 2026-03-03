@@ -980,10 +980,8 @@ export default function JobDetailScreen() {
                 const clockInManual = createdAt && Math.abs(startTime.getTime() - createdAt.getTime()) > 60000;
                 const clockOutManual = updatedAt
                   ? Math.abs(endTime.getTime() - updatedAt.getTime()) > 60000
-                  : (clockInManual && createdAt && Math.abs(endTime.getTime() - createdAt.getTime() - (run.actual_duration_minutes || 0) * 60000) > 120000);
-                const clockOutSubmittedAt = updatedAt || (clockOutManual && createdAt
-                  ? new Date(createdAt.getTime() + (run.actual_duration_minutes || 0) * 60000)
-                  : null);
+                  : false;
+                const clockOutSubmittedAt = clockOutManual ? updatedAt : null;
                 const hasStartLoc = run.start_lat && run.start_lng && Number(run.start_lat) !== 0;
                 const hasEndLoc = run.end_lat && run.end_lng && Number(run.end_lat) !== 0;
                 const duration = run.actual_duration_minutes || Math.round((endTime.getTime() - startTime.getTime()) / 60000);
