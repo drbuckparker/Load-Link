@@ -976,11 +976,9 @@ export default function JobDetailScreen() {
                 const startTime = new Date(run.started_at);
                 const endTime = new Date(run.ended_at);
                 const createdAt = run.created_at ? new Date(run.created_at) : null;
+                const updatedAt = run.updated_at ? new Date(run.updated_at) : null;
                 const clockInManual = createdAt && Math.abs(startTime.getTime() - createdAt.getTime()) > 60000;
-                const clockOutManual = createdAt && run.actual_duration_minutes != null && (() => {
-                  const expectedEnd = new Date(startTime.getTime() + run.actual_duration_minutes * 60000);
-                  return Math.abs(endTime.getTime() - expectedEnd.getTime()) > 120000;
-                })();
+                const clockOutManual = updatedAt && Math.abs(endTime.getTime() - updatedAt.getTime()) > 60000;
                 const hasStartLoc = run.start_lat && run.start_lng && Number(run.start_lat) !== 0;
                 const hasEndLoc = run.end_lat && run.end_lng && Number(run.end_lat) !== 0;
                 const duration = run.actual_duration_minutes || Math.round((endTime.getTime() - startTime.getTime()) / 60000);
@@ -1007,7 +1005,9 @@ export default function JobDetailScreen() {
                         {clockInManual ? (
                           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
                             <Ionicons name="pencil" size={11} color={Colors.warning} />
-                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>Time manually entered</Text>
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>
+                              Time manually entered at {createdAt!.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                            </Text>
                           </View>
                         ) : null}
                         {hasStartLoc ? (
@@ -1033,7 +1033,9 @@ export default function JobDetailScreen() {
                         {clockOutManual ? (
                           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
                             <Ionicons name="pencil" size={11} color={Colors.warning} />
-                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>Time manually entered</Text>
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>
+                              Time manually entered at {updatedAt!.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                            </Text>
                           </View>
                         ) : null}
                         {hasEndLoc ? (

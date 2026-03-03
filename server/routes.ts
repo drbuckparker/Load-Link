@@ -1327,6 +1327,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         end_lng: lng?.toString(),
         actual_duration_minutes: actualMinutes,
         billed_duration_minutes: billedMinutes,
+        updated_at: new Date(),
       };
       if (loads_hauled !== undefined && loads_hauled !== null) {
         updateData.loads_hauled = parseInt(loads_hauled);
