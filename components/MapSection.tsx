@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
@@ -12,44 +12,79 @@ interface MapSectionProps {
 
 export default function MapSection({ address, defaultLat, defaultLng }: MapSectionProps) {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(true);
+  const mapRef = useRef<MapView>(null);
 
   useEffect(() => {
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          setUserLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+          setUserLocation(coords);
+          mapRef.current?.animateToRegion({
+            latitude: coords.lat,
+            longitude: coords.lng,
+            latitudeDelta: 0.05,
+            longitudeDelta: 0.05,
+          }, 500);
         }
       } catch {}
+      setLocationLoading(false);
     })();
   }, []);
 
-  const mapLat = userLocation?.lat || defaultLat || 40.7608;
-  const mapLng = userLocation?.lng || defaultLng || -111.891;
+  useEffect(() => {
+    if (defaultLat && defaultLng && !userLocation) {
+      mapRef.current?.animateToRegion({
+        latitude: defaultLat,
+        longitude: defaultLng,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      }, 300);
+    }
+  }, [defaultLat, defaultLng]);
+
+  const displayLat = userLocation?.lat || defaultLat;
+  const displayLng = userLocation?.lng || defaultLng;
+
+  const hasCoordinates = displayLat !== undefined && displayLng !== undefined;
 
   return (
     <View style={styles.mapWrapper}>
-      <MapView
-        style={styles.map}
-        initialRegion={{
-          latitude: mapLat,
-          longitude: mapLng,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        }}
-        scrollEnabled={false}
-        zoomEnabled={false}
-        pitchEnabled={false}
-        rotateEnabled={false}
-      >
-        {userLocation && (
+      {hasCoordinates ? (
+        <MapView
+          ref={mapRef}
+          style={styles.map}
+          region={{
+            latitude: userLocation?.lat || displayLat!,
+            longitude: userLocation?.lng || displayLng!,
+            latitudeDelta: 0.05,
+            longitudeDelta: 0.05,
+          }}
+          scrollEnabled={false}
+          zoomEnabled={false}
+          pitchEnabled={false}
+          rotateEnabled={false}
+        >
           <Marker
-            coordinate={{ latitude: userLocation.lat, longitude: userLocation.lng }}
+            coordinate={{
+              latitude: userLocation?.lat || displayLat!,
+              longitude: userLocation?.lng || displayLng!,
+            }}
             title="You"
           />
-        )}
-      </MapView>
+        </MapView>
+      ) : (
+        <View style={[styles.map, styles.mapPlaceholder]}>
+          {locationLoading ? (
+            <ActivityIndicator color={Colors.primary} />
+          ) : (
+            <Text style={styles.noLocationText}>Location unavailable</Text>
+          )}
+        </View>
+      )}
       {userLocation && (
         <View style={styles.liveTag}>
           <View style={styles.liveDot} />
@@ -70,6 +105,16 @@ const styles = StyleSheet.create({
   map: {
     width: '100%',
     height: '100%',
+  },
+  mapPlaceholder: {
+    backgroundColor: Colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noLocationText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
   },
   liveTag: {
     position: 'absolute',

@@ -88,7 +88,7 @@ export default function DashboardScreen() {
         }
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
         setDeviceLat(loc.coords.latitude);
         setDeviceLng(loc.coords.longitude);
         let geoAddress: string | undefined;
