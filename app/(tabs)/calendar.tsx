@@ -607,36 +607,39 @@ export default function CalendarScreen() {
                 const booked = cap?.booked || 0;
                 const needed = cap?.needed || 0;
                 const jobCount = cap?.jobCount || 0;
-                let capacityStatus: 'partial' | 'open' | null = null;
+                let capacityStatus: 'full' | 'partial' | 'open' | null = null;
                 if (jobCount > 0) {
-                  if (booked > 0) capacityStatus = 'partial';
+                  if (needed > 0 && booked >= needed) capacityStatus = 'full';
+                  else if (booked > 0) capacityStatus = 'partial';
                   else capacityStatus = 'open';
                 }
 
                 return (
                   <Pressable
                     key={key}
-                    style={[styles.dayCell, isSelected && styles.dayCellSelected]}
+                    style={[styles.dayCell, isSelected && styles.dayCellSelected, capacityStatus === 'full' && styles.dayCellAllBooked]}
                     onPress={() => { setSelectedDate(key); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
                   >
                     <Text style={[
                       styles.dayNumber,
                       isToday && styles.dayNumberToday,
+                      capacityStatus === 'full' && { color: Colors.info },
                     ]}>
                       {day.date}
                     </Text>
-                    {capacityStatus === 'partial' && (
-                      <View style={styles.capacityDotsRow}>
+                    <View style={styles.capacityDotsRow}>
+                      {capacityStatus === 'full' && (
+                        <View style={[styles.statusDot, { backgroundColor: Colors.info }]} />
+                      )}
+                      {capacityStatus === 'partial' && (
                         <View style={[styles.statusDot, { backgroundColor: Colors.warning }]} />
-                      </View>
-                    )}
-                    {capacityStatus === 'open' && (
-                      <View style={styles.capacityDotsRow}>
+                      )}
+                      {capacityStatus === 'open' && (
                         <View style={[styles.statusDot, { backgroundColor: Colors.success }]} />
-                      </View>
-                    )}
+                      )}
+                    </View>
                     {jobCount > 0 && (
-                      <Text style={styles.truckCountBadge}>{booked}/{needed}</Text>
+                      <Text style={[styles.truckCountBadge, capacityStatus === 'full' && { color: Colors.info }]}>{booked}/{needed}</Text>
                     )}
                     {isToday && <View style={styles.todayIndicator} />}
                   </Pressable>
@@ -726,8 +729,8 @@ export default function CalendarScreen() {
               <Text style={styles.legendText}>Partial</Text>
             </View>
             <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
-              <Text style={styles.legendText}>Unavail</Text>
+              <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
+              <Text style={styles.legendText}>Full</Text>
             </View>
           </View>
         ) : (
