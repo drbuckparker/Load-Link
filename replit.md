@@ -205,3 +205,7 @@ Mobile companion app for LoadLink, an existing logistics web platform for short-
 - Sound files: lib/sounds.ts (playNotificationSound, playMessageSound), lib/notifications.ts (registerForPushNotifications)
 - Push registration endpoint: POST `/api/push/register` saves expo_push_token to user record
 - Server-side push: sendPushNotification() utility posts to Expo Push API (exp.host)
+- GPS location tracking on clock-in/clock-out: job_runs stores start_lat/lng and end_lat/lng
+- Clock-out now captures actual GPS coordinates (was sending 0,0 before)
+- Work Sessions section on job detail: shows completed runs with clock-in/out times and clickable "View location" links
+- Tapping location link opens native Maps app (iOS Maps / Android Geo) or falls back to Google Maps web

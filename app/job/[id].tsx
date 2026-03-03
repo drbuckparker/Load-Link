@@ -720,7 +720,8 @@ export default function JobDetailScreen() {
       const runs = (jobData as any)?.runs;
       const activeRun = runs?.find?.((r: any) => !r.clock_out_time && !r.clockOutTime);
       if (activeRun) {
-        await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, { lat: 0, lng: 0, loads_hauled: loadsHauled });
+        const loc = await getDriverLocation();
+        await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, { lat: loc.lat || 0, lng: loc.lng || 0, loads_hauled: loadsHauled });
       }
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsRunning(false);
@@ -889,6 +890,86 @@ export default function JobDetailScreen() {
             </Text>
           </Pressable>
         )}
+
+        {(() => {
+          const completedRuns = (jobData?.runs || []).filter((r: any) => r.status === 'completed' && r.ended_at);
+          if (completedRuns.length === 0) return null;
+          const openLocationMap = (lat: number, lng: number) => {
+            const url = Platform.OS === 'ios'
+              ? `maps:0,0?q=${lat},${lng}`
+              : `geo:${lat},${lng}?q=${lat},${lng}`;
+            Linking.openURL(url).catch(() => {
+              Linking.openURL(`https://www.google.com/maps?q=${lat},${lng}`);
+            });
+          };
+          return (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>WORK SESSIONS</Text>
+              {completedRuns.map((run: any, idx: number) => {
+                const startTime = new Date(run.started_at);
+                const endTime = new Date(run.ended_at);
+                const hasStartLoc = run.start_lat && run.start_lng && Number(run.start_lat) !== 0;
+                const hasEndLoc = run.end_lat && run.end_lng && Number(run.end_lat) !== 0;
+                const duration = run.actual_duration_minutes || Math.round((endTime.getTime() - startTime.getTime()) / 60000);
+                const hours = Math.floor(duration / 60);
+                const mins = duration % 60;
+                return (
+                  <View key={run.id || idx} style={{ backgroundColor: Colors.card, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.border }}>
+                    {completedRuns.length > 1 && (
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textMuted, letterSpacing: 1, marginBottom: 6 }}>
+                        SESSION {idx + 1}
+                      </Text>
+                    )}
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginBottom: 8 }}>
+                      {hours > 0 ? `${hours}h ${mins}m` : `${mins}m`} · {run.billed_duration_minutes || duration} min billed
+                      {run.loads_hauled ? ` · ${run.loads_hauled} load${run.loads_hauled !== 1 ? 's' : ''}` : ''}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 }}>
+                      <Ionicons name="log-in-outline" size={16} color={Colors.success} style={{ marginTop: 1, marginRight: 8 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success, letterSpacing: 0.5 }}>CLOCK IN</Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
+                          {startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                        </Text>
+                        {hasStartLoc ? (
+                          <Pressable
+                            onPress={() => openLocationMap(Number(run.start_lat), Number(run.start_lng))}
+                            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}
+                          >
+                            <Ionicons name="location" size={13} color={Colors.info} />
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.info, marginLeft: 4, textDecorationLine: 'underline' }}>
+                              View location
+                            </Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                      <Ionicons name="log-out-outline" size={16} color={Colors.primary} style={{ marginTop: 1, marginRight: 8 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.primary, letterSpacing: 0.5 }}>CLOCK OUT</Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
+                          {endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                        </Text>
+                        {hasEndLoc ? (
+                          <Pressable
+                            onPress={() => openLocationMap(Number(run.end_lat), Number(run.end_lng))}
+                            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}
+                          >
+                            <Ionicons name="location" size={13} color={Colors.info} />
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.info, marginLeft: 4, textDecorationLine: 'underline' }}>
+                              View location
+                            </Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        })()}
 
         <View style={styles.headerSection}>
           {job.projectName && (
