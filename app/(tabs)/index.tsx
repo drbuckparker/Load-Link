@@ -172,8 +172,6 @@ export default function DashboardScreen() {
     const items = [
       { label: 'TOTAL EARNINGS', value: stats.total, sub: 'Total Earnings', tab: 'earnings' },
       { label: 'AWAITING PAYMENT', value: stats.awaiting, sub: 'Pending Jobs', tab: 'earnings' },
-      { label: 'THIS MONTH', value: stats.thisMonth, sub: 'Earnings', tab: 'earnings' },
-      { label: 'THIS WEEK', value: stats.thisWeek, sub: 'Earnings', tab: 'earnings' },
     ];
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
