@@ -2,6 +2,7 @@ import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicato
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
+import { router } from 'expo-router';
 import Colors from '@/constants/colors';
 import { Earning } from '@/lib/mock-data';
 import { queryClient } from '@/lib/query-client';
@@ -135,7 +136,11 @@ export default function EarningsScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
+        <Pressable onPress={() => router.back()} style={styles.backButton} hitSlop={8}>
+          <Ionicons name="chevron-back" size={24} color={Colors.text} />
+        </Pressable>
         <Text style={styles.headerTitle}>EARNINGS</Text>
+        <View style={{ width: 32 }} />
       </View>
 
       <FlatList
@@ -168,12 +173,22 @@ export default function EarningsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: {
-    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
   },
+  backButton: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   headerTitle: {
+    flex: 1,
+    textAlign: 'center',
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 18,
     color: Colors.text,
