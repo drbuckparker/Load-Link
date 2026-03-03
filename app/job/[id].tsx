@@ -211,6 +211,17 @@ export default function JobDetailScreen() {
   const [backingOut, setBackingOut] = useState(false);
   const [confirmBackOut, setConfirmBackOut] = useState(false);
   const [removingAssignmentId, setRemovingAssignmentId] = useState<string | null>(null);
+  const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [editingRun, setEditingRun] = useState<any>(null);
+  const [editStartHour, setEditStartHour] = useState(0);
+  const [editStartMinute, setEditStartMinute] = useState(0);
+  const [editStartAmPm, setEditStartAmPm] = useState<'AM' | 'PM'>('AM');
+  const [editEndHour, setEditEndHour] = useState(0);
+  const [editEndMinute, setEditEndMinute] = useState(0);
+  const [editEndAmPm, setEditEndAmPm] = useState<'AM' | 'PM'>('AM');
+  const [editLoads, setEditLoads] = useState(1);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState<'clock-in' | 'clock-out' | null>(null);
   const [pickerHour, setPickerHour] = useState(0);
   const [pickerMinute, setPickerMinute] = useState(0);
@@ -531,6 +542,71 @@ export default function JobDetailScreen() {
       setBackingOut(false);
       setConfirmBackOut(false);
     }
+  }
+
+  async function handleDeleteRun(runId: string) {
+    setDeletingRunId(runId);
+    try {
+      await apiRequest('DELETE', `/api/job-runs/${runId}`);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+    } catch (e: any) {}
+    setDeletingRunId(null);
+    setConfirmDeleteRunId(null);
+  }
+
+  function openEditRun(run: any) {
+    const start = new Date(run.started_at);
+    const end = new Date(run.ended_at);
+    let sH = start.getHours();
+    const sM = start.getMinutes();
+    const sAP = sH >= 12 ? 'PM' as const : 'AM' as const;
+    sH = sH % 12 || 12;
+    let eH = end.getHours();
+    const eM = end.getMinutes();
+    const eAP = eH >= 12 ? 'PM' as const : 'AM' as const;
+    eH = eH % 12 || 12;
+    setEditStartHour(sH);
+    setEditStartMinute(sM);
+    setEditStartAmPm(sAP);
+    setEditEndHour(eH);
+    setEditEndMinute(eM);
+    setEditEndAmPm(eAP);
+    setEditLoads(run.loads_hauled || 1);
+    setEditingRun(run);
+  }
+
+  async function handleSaveEditRun() {
+    if (!editingRun) return;
+    setSavingEdit(true);
+    try {
+      const orig = new Date(editingRun.started_at);
+      const startH = editStartAmPm === 'PM' ? (editStartHour === 12 ? 12 : editStartHour + 12) : (editStartHour === 12 ? 0 : editStartHour);
+      const newStart = new Date(orig);
+      newStart.setHours(startH, editStartMinute, 0, 0);
+
+      const origEnd = new Date(editingRun.ended_at);
+      const endH = editEndAmPm === 'PM' ? (editEndHour === 12 ? 12 : editEndHour + 12) : (editEndHour === 12 ? 0 : editEndHour);
+      const newEnd = new Date(origEnd);
+      newEnd.setHours(endH, editEndMinute, 0, 0);
+
+      if (newEnd.getTime() <= newStart.getTime()) {
+        setSavingEdit(false);
+        return;
+      }
+
+      await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, {
+        started_at: newStart.toISOString(),
+        ended_at: newEnd.toISOString(),
+        loads_hauled: editLoads,
+      });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+      setEditingRun(null);
+    } catch (e: any) {}
+    setSavingEdit(false);
   }
 
   function showTruckWarning(msg: string) {
@@ -987,12 +1063,57 @@ export default function JobDetailScreen() {
                 const duration = run.actual_duration_minutes || Math.round((endTime.getTime() - startTime.getTime()) / 60000);
                 const hours = Math.floor(duration / 60);
                 const mins = duration % 60;
+                const isDriverOwner = run.driver_id === user?.id;
                 return (
                   <View key={run.id || idx} style={{ backgroundColor: Colors.card, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.border }}>
-                    {completedRuns.length > 1 && (
-                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textMuted, letterSpacing: 1, marginBottom: 6 }}>
-                        SESSION {idx + 1}
-                      </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <View style={{ flex: 1 }}>
+                        {completedRuns.length > 1 && (
+                          <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textMuted, letterSpacing: 1 }}>
+                            SESSION {idx + 1}
+                          </Text>
+                        )}
+                      </View>
+                      {isDriverOwner && (
+                        <View style={{ flexDirection: 'row', gap: 4 }}>
+                          <Pressable
+                            onPress={() => openEditRun(run)}
+                            hitSlop={8}
+                            style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}
+                          >
+                            <Ionicons name="create-outline" size={16} color={Colors.textSecondary} />
+                          </Pressable>
+                          <Pressable
+                            onPress={() => setConfirmDeleteRunId(run.id)}
+                            hitSlop={8}
+                            style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}
+                          >
+                            <Ionicons name="trash-outline" size={16} color={Colors.error || '#ef4444'} />
+                          </Pressable>
+                        </View>
+                      )}
+                    </View>
+                    {confirmDeleteRunId === run.id && (
+                      <View style={{ backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 8, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: '#ef4444', marginBottom: 8 }}>Delete this session?</Text>
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                          <Pressable
+                            onPress={() => setConfirmDeleteRunId(null)}
+                            style={{ flex: 1, paddingVertical: 8, borderRadius: 8, backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, alignItems: 'center' }}
+                          >
+                            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.text }}>Cancel</Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => handleDeleteRun(run.id)}
+                            disabled={deletingRunId === run.id}
+                            style={{ flex: 1, paddingVertical: 8, borderRadius: 8, backgroundColor: '#ef4444', alignItems: 'center', opacity: deletingRunId === run.id ? 0.6 : 1 }}
+                          >
+                            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: '#fff' }}>
+                              {deletingRunId === run.id ? 'Deleting...' : 'Delete'}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
                     )}
                     <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginBottom: 8 }}>
                       {hours > 0 ? `${hours}h ${mins}m` : `${mins}m`} · {run.billed_duration_minutes || duration} min billed
@@ -1393,6 +1514,82 @@ export default function JobDetailScreen() {
                   <Text style={{ color: '#fff', fontFamily: 'ChakraPetch_700Bold', fontSize: 14 }}>
                     {showTimePicker === 'clock-in' ? 'CLOCK IN' : 'NEXT'}
                   </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={!!editingRun} transparent animationType="fade" onRequestClose={() => setEditingRun(null)}>
+          <View style={styles.wtModalOverlay}>
+            <View style={[styles.wtModalContent, { paddingTop: 20, paddingBottom: 20 }]} onStartShouldSetResponder={() => true}>
+              <Text style={[styles.wtModalTitle, { marginBottom: 16 }]}>Edit Session</Text>
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success, letterSpacing: 0.5, marginBottom: 6 }}>CLOCK IN TIME</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                  <Pressable onPress={() => setEditStartHour(h => h >= 12 ? 1 : h + 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-up" size={16} color={Colors.text} />
+                  </Pressable>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editStartHour}</Text>
+                  <Pressable onPress={() => setEditStartHour(h => h <= 1 ? 12 : h - 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-down" size={16} color={Colors.text} />
+                  </Pressable>
+                </View>
+                <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>:</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                  <Pressable onPress={() => setEditStartMinute(m => m >= 59 ? 0 : m + 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-up" size={16} color={Colors.text} />
+                  </Pressable>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editStartMinute.toString().padStart(2, '0')}</Text>
+                  <Pressable onPress={() => setEditStartMinute(m => m <= 0 ? 59 : m - 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-down" size={16} color={Colors.text} />
+                  </Pressable>
+                </View>
+                <Pressable onPress={() => setEditStartAmPm(v => v === 'AM' ? 'PM' : 'AM')} style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.primary }}>{editStartAmPm}</Text>
+                </Pressable>
+              </View>
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.primary, letterSpacing: 0.5, marginBottom: 6 }}>CLOCK OUT TIME</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                  <Pressable onPress={() => setEditEndHour(h => h >= 12 ? 1 : h + 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-up" size={16} color={Colors.text} />
+                  </Pressable>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editEndHour}</Text>
+                  <Pressable onPress={() => setEditEndHour(h => h <= 1 ? 12 : h - 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-down" size={16} color={Colors.text} />
+                  </Pressable>
+                </View>
+                <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>:</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                  <Pressable onPress={() => setEditEndMinute(m => m >= 59 ? 0 : m + 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-up" size={16} color={Colors.text} />
+                  </Pressable>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editEndMinute.toString().padStart(2, '0')}</Text>
+                  <Pressable onPress={() => setEditEndMinute(m => m <= 0 ? 59 : m - 1)} style={{ padding: 8 }}>
+                    <Ionicons name="chevron-down" size={16} color={Colors.text} />
+                  </Pressable>
+                </View>
+                <Pressable onPress={() => setEditEndAmPm(v => v === 'AM' ? 'PM' : 'AM')} style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.primary }}>{editEndAmPm}</Text>
+                </Pressable>
+              </View>
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.5, marginBottom: 6 }}>LOADS HAULED</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+                <Pressable onPress={() => setEditLoads(l => Math.max(0, l - 1))} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name="remove" size={18} color={Colors.text} />
+                </Pressable>
+                <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 20, color: Colors.text, minWidth: 30, textAlign: 'center' }}>{editLoads}</Text>
+                <Pressable onPress={() => setEditLoads(l => l + 1)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name="add" size={18} color={Colors.text} />
+                </Pressable>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Pressable onPress={() => setEditingRun(null)} style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, alignItems: 'center' }}>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 15, color: Colors.text }}>Cancel</Text>
+                </Pressable>
+                <Pressable onPress={handleSaveEditRun} disabled={savingEdit} style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: Colors.primary, alignItems: 'center', opacity: savingEdit ? 0.6 : 1 }}>
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 15, color: '#000' }}>{savingEdit ? 'Saving...' : 'Save'}</Text>
                 </Pressable>
               </View>
             </View>

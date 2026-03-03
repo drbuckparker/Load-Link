@@ -1437,6 +1437,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.delete("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runId } = req.params;
+      const userId = (req as any).session?.userId;
+
+      const [run] = await db.select().from(jobRuns).where(eq(jobRuns.id, runId)).limit(1);
+      if (!run) return res.status(404).json({ message: "Run not found" });
+      if (run.driver_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      await db.delete(jobRuns).where(eq(jobRuns.id, runId));
+      return res.json({ message: "Session deleted" });
+    } catch (err) {
+      console.error("Delete run error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runId } = req.params;
+      const userId = (req as any).session?.userId;
+      const { started_at, ended_at, loads_hauled } = req.body;
+
+      const [run] = await db.select().from(jobRuns).where(eq(jobRuns.id, runId)).limit(1);
+      if (!run) return res.status(404).json({ message: "Run not found" });
+      if (run.driver_id !== userId) return res.status(403).json({ message: "Not authorized" });
+
+      const updateData: any = { updated_at: new Date() };
+      if (started_at) updateData.started_at = new Date(started_at);
+      if (ended_at) updateData.ended_at = new Date(ended_at);
+      if (loads_hauled !== undefined) updateData.loads_hauled = parseInt(loads_hauled);
+
+      const startedAtVal = updateData.started_at || new Date(run.started_at!);
+      const endedAtVal = updateData.ended_at || (run.ended_at ? new Date(run.ended_at) : null);
+      if (startedAtVal && endedAtVal) {
+        const actualMinutes = Math.round((endedAtVal.getTime() - startedAtVal.getTime()) / 60000);
+        updateData.actual_duration_minutes = actualMinutes;
+        updateData.billed_duration_minutes = Math.max(60, Math.ceil(actualMinutes / 15) * 15);
+      }
+
+      const [updated] = await db.update(jobRuns).set(updateData).where(eq(jobRuns.id, runId)).returning();
+      return res.json(updated);
+    } catch (err) {
+      console.error("Edit run error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   // ============ WEIGHT TICKETS ============
 
   app.post("/api/job-runs/:runId/weight-tickets", requireAuth, upload.single('image'), async (req: Request, res: Response) => {
