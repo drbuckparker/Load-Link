@@ -582,14 +582,12 @@ export default function JobDetailScreen() {
     setSavingEdit(true);
     try {
       const orig = new Date(editingRun.started_at);
-      const startH = editStartAmPm === 'PM' ? (editStartHour === 12 ? 12 : editStartHour + 12) : (editStartHour === 12 ? 0 : editStartHour);
-      const newStart = new Date(orig);
-      newStart.setHours(startH, editStartMinute, 0, 0);
+      const startH24 = editStartAmPm === 'PM' ? (editStartHour === 12 ? 12 : editStartHour + 12) : (editStartHour === 12 ? 0 : editStartHour);
+      const newStart = new Date(orig.getFullYear(), orig.getMonth(), orig.getDate(), startH24, editStartMinute, 0, 0);
 
       const origEnd = new Date(editingRun.ended_at);
-      const endH = editEndAmPm === 'PM' ? (editEndHour === 12 ? 12 : editEndHour + 12) : (editEndHour === 12 ? 0 : editEndHour);
-      const newEnd = new Date(origEnd);
-      newEnd.setHours(endH, editEndMinute, 0, 0);
+      const endH24 = editEndAmPm === 'PM' ? (editEndHour === 12 ? 12 : editEndHour + 12) : (editEndHour === 12 ? 0 : editEndHour);
+      const newEnd = new Date(origEnd.getFullYear(), origEnd.getMonth(), origEnd.getDate(), endH24, editEndMinute, 0, 0);
 
       if (newEnd.getTime() <= newStart.getTime()) {
         setSavingEdit(false);
@@ -605,7 +603,9 @@ export default function JobDetailScreen() {
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
       setEditingRun(null);
-    } catch (e: any) {}
+    } catch (e: any) {
+      console.error('Edit run error:', e);
+    }
     setSavingEdit(false);
   }
 
