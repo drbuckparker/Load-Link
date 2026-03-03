@@ -211,6 +211,12 @@ export default function JobDetailScreen() {
   const [backingOut, setBackingOut] = useState(false);
   const [confirmBackOut, setConfirmBackOut] = useState(false);
   const [removingAssignmentId, setRemovingAssignmentId] = useState<string | null>(null);
+  const [showTimePicker, setShowTimePicker] = useState<'clock-in' | 'clock-out' | null>(null);
+  const [pickerHour, setPickerHour] = useState(0);
+  const [pickerMinute, setPickerMinute] = useState(0);
+  const [pickerAmPm, setPickerAmPm] = useState<'AM' | 'PM'>('AM');
+  const [timeManuallyAdjusted, setTimeManuallyAdjusted] = useState(false);
+  const pickerOriginalTime = useRef<{ hour: number; minute: number; amPm: 'AM' | 'PM' }>({ hour: 12, minute: 0, amPm: 'AM' });
 
   const { data: vehiclesData } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -667,11 +673,48 @@ export default function JobDetailScreen() {
     }
   }
 
+  function openTimePicker(mode: 'clock-in' | 'clock-out') {
+    const now = new Date();
+    const h = now.getHours();
+    const m = now.getMinutes();
+    const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    const amPm = h >= 12 ? 'PM' as const : 'AM' as const;
+    setPickerHour(hour12);
+    setPickerMinute(m);
+    setPickerAmPm(amPm);
+    setTimeManuallyAdjusted(false);
+    pickerOriginalTime.current = { hour: hour12, minute: m, amPm };
+    setShowTimePicker(mode);
+  }
+
+  function getPickerDate(): Date {
+    const now = new Date();
+    let h24 = pickerAmPm === 'AM' ? (pickerHour === 12 ? 0 : pickerHour) : (pickerHour === 12 ? 12 : pickerHour + 12);
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h24, pickerMinute, 0, 0);
+    return d;
+  }
+
+  function isTimeAdjusted(): boolean {
+    const orig = pickerOriginalTime.current;
+    return pickerHour !== orig.hour || pickerMinute !== orig.minute || pickerAmPm !== orig.amPm;
+  }
+
   async function handleStartJob() {
+    openTimePicker('clock-in');
+  }
+
+  async function confirmClockIn() {
     setClockInError('');
+    setShowTimePicker(null);
     try {
       const loc = await getDriverLocation();
-      const res = await apiRequest('POST', `/api/jobs/${id}/clock-in`, loc);
+      const adjusted = isTimeAdjusted();
+      const body: any = { ...loc };
+      if (adjusted) {
+        body.custom_time = getPickerDate().toISOString();
+        body.time_manually_entered = true;
+      }
+      await apiRequest('POST', `/api/jobs/${id}/clock-in`, body);
       if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       setJobStatus('in_progress');
       setIsRunning(true);
@@ -685,16 +728,27 @@ export default function JobDetailScreen() {
   }
 
   async function handleResumeJob() {
+    setShowResumeModal(false);
+    openTimePicker('clock-in');
+  }
+
+  async function confirmResumeClockIn() {
     setClockInError('');
+    setShowTimePicker(null);
     try {
       const loc = await getDriverLocation();
-      await apiRequest('POST', `/api/jobs/${id}/clock-in`, loc);
+      const adjusted = isTimeAdjusted();
+      const body: any = { ...loc };
+      if (adjusted) {
+        body.custom_time = getPickerDate().toISOString();
+        body.time_manually_entered = true;
+      }
+      await apiRequest('POST', `/api/jobs/${id}/clock-in`, body);
       if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       const completedTime = getCompletedRunsSeconds();
       setElapsedSeconds(completedTime);
       setJobStatus('in_progress');
       setIsRunning(true);
-      setShowResumeModal(false);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
@@ -705,14 +759,7 @@ export default function JobDetailScreen() {
   }
 
   function handleStopJob() {
-    if (Platform.OS === 'web') {
-      setShowLoadsModal(true);
-      return;
-    }
-    Alert.alert('Clock Out', 'Are you sure you want to clock out?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Clock Out', style: 'destructive', onPress: () => setShowLoadsModal(true) },
-    ]);
+    openTimePicker('clock-out');
   }
 
   async function doStop() {
@@ -721,7 +768,12 @@ export default function JobDetailScreen() {
       const activeRun = runs?.find?.((r: any) => !r.clock_out_time && !r.clockOutTime);
       if (activeRun) {
         const loc = await getDriverLocation();
-        await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, { lat: loc.lat || 0, lng: loc.lng || 0, loads_hauled: loadsHauled });
+        const body: any = { lat: loc.lat || 0, lng: loc.lng || 0, loads_hauled: loadsHauled };
+        if (timeManuallyAdjusted) {
+          body.custom_time = getPickerDate().toISOString();
+          body.time_manually_entered = true;
+        }
+        await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, body);
       }
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsRunning(false);
@@ -908,6 +960,12 @@ export default function JobDetailScreen() {
               {completedRuns.map((run: any, idx: number) => {
                 const startTime = new Date(run.started_at);
                 const endTime = new Date(run.ended_at);
+                const createdAt = run.created_at ? new Date(run.created_at) : null;
+                const clockInManual = createdAt && Math.abs(startTime.getTime() - createdAt.getTime()) > 60000;
+                const clockOutManual = createdAt && run.actual_duration_minutes != null && (() => {
+                  const expectedEnd = new Date(startTime.getTime() + run.actual_duration_minutes * 60000);
+                  return Math.abs(endTime.getTime() - expectedEnd.getTime()) > 120000;
+                })();
                 const hasStartLoc = run.start_lat && run.start_lng && Number(run.start_lat) !== 0;
                 const hasEndLoc = run.end_lat && run.end_lng && Number(run.end_lat) !== 0;
                 const duration = run.actual_duration_minutes || Math.round((endTime.getTime() - startTime.getTime()) / 60000);
@@ -931,6 +989,12 @@ export default function JobDetailScreen() {
                         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
                           {startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                         </Text>
+                        {clockInManual ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                            <Ionicons name="pencil" size={11} color={Colors.warning} />
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>Time manually entered</Text>
+                          </View>
+                        ) : null}
                         {hasStartLoc ? (
                           <Pressable
                             onPress={() => openLocationMap(Number(run.start_lat), Number(run.start_lng))}
@@ -951,6 +1015,12 @@ export default function JobDetailScreen() {
                         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
                           {endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                         </Text>
+                        {clockOutManual ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                            <Ionicons name="pencil" size={11} color={Colors.warning} />
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>Time manually entered</Text>
+                          </View>
+                        ) : null}
                         {hasEndLoc ? (
                           <Pressable
                             onPress={() => openLocationMap(Number(run.end_lat), Number(run.end_lng))}
@@ -1194,6 +1264,120 @@ export default function JobDetailScreen() {
             </Pressable>
           </View>
         )}
+
+        <Modal visible={!!showTimePicker} transparent animationType="fade" onRequestClose={() => setShowTimePicker(null)}>
+          <View style={styles.wtModalOverlay}>
+            <View style={[styles.wtModalContent, { alignItems: 'center', paddingTop: 24, paddingBottom: 24 }]} onStartShouldSetResponder={() => true}>
+              <Ionicons name={showTimePicker === 'clock-in' ? 'play-circle' : 'stop-circle'} size={48} color={showTimePicker === 'clock-in' ? Colors.success : Colors.destructive} />
+              <Text style={[styles.wtModalTitle, { marginTop: 12 }]}>
+                {showTimePicker === 'clock-in' ? 'Clock In Time' : 'Clock Out Time'}
+              </Text>
+              <Text style={[styles.wtModalSubtitle, { textAlign: 'center', marginBottom: 16 }]}>
+                Adjust time if needed, or confirm current time
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: Colors.textMuted, fontSize: 10, fontFamily: 'ChakraPetch_700Bold', letterSpacing: 0.5, marginBottom: 4 }}>HOUR</Text>
+                  <View style={styles.loadsPickerContainer}>
+                    <ScrollView
+                      style={[styles.loadsScroller, { width: 70 }]}
+                      contentContainerStyle={styles.loadsScrollContent}
+                      showsVerticalScrollIndicator={false}
+                      snapToInterval={50}
+                      decelerationRate="fast"
+                      onMomentumScrollEnd={(e) => {
+                        const idx = Math.round(e.nativeEvent.contentOffset.y / 50);
+                        setPickerHour(Math.max(1, Math.min(12, idx + 1)));
+                        setTimeManuallyAdjusted(true);
+                      }}
+                      contentOffset={{ x: 0, y: (pickerHour - 1) * 50 }}
+                    >
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((num) => (
+                        <Pressable key={num} style={styles.loadsItem} onPress={() => { setPickerHour(num); setTimeManuallyAdjusted(true); }}>
+                          <Text style={[styles.loadsItemText, num === pickerHour && styles.loadsItemTextSelected]}>{num}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                    <View style={styles.loadsHighlight} pointerEvents="none" />
+                  </View>
+                </View>
+                <Text style={{ fontSize: 28, color: Colors.text, fontFamily: 'ChakraPetch_700Bold', marginTop: 18 }}>:</Text>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: Colors.textMuted, fontSize: 10, fontFamily: 'ChakraPetch_700Bold', letterSpacing: 0.5, marginBottom: 4 }}>MIN</Text>
+                  <View style={styles.loadsPickerContainer}>
+                    <ScrollView
+                      style={[styles.loadsScroller, { width: 70 }]}
+                      contentContainerStyle={styles.loadsScrollContent}
+                      showsVerticalScrollIndicator={false}
+                      snapToInterval={50}
+                      decelerationRate="fast"
+                      onMomentumScrollEnd={(e) => {
+                        const idx = Math.round(e.nativeEvent.contentOffset.y / 50);
+                        setPickerMinute(Math.max(0, Math.min(59, idx)));
+                        setTimeManuallyAdjusted(true);
+                      }}
+                      contentOffset={{ x: 0, y: pickerMinute * 50 }}
+                    >
+                      {Array.from({ length: 60 }, (_, i) => i).map((num) => (
+                        <Pressable key={num} style={styles.loadsItem} onPress={() => { setPickerMinute(num); setTimeManuallyAdjusted(true); }}>
+                          <Text style={[styles.loadsItemText, num === pickerMinute && styles.loadsItemTextSelected]}>{String(num).padStart(2, '0')}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                    <View style={styles.loadsHighlight} pointerEvents="none" />
+                  </View>
+                </View>
+                <View style={{ alignItems: 'center', marginLeft: 4 }}>
+                  <Text style={{ color: Colors.textMuted, fontSize: 10, fontFamily: 'ChakraPetch_700Bold', letterSpacing: 0.5, marginBottom: 4 }}> </Text>
+                  <View style={{ gap: 6, marginTop: 18 }}>
+                    <Pressable
+                      style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, backgroundColor: pickerAmPm === 'AM' ? Colors.primary : Colors.card, borderWidth: 1, borderColor: pickerAmPm === 'AM' ? Colors.primary : Colors.border }}
+                      onPress={() => { setPickerAmPm('AM'); setTimeManuallyAdjusted(true); }}
+                    >
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: pickerAmPm === 'AM' ? '#fff' : Colors.textMuted }}>AM</Text>
+                    </Pressable>
+                    <Pressable
+                      style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, backgroundColor: pickerAmPm === 'PM' ? Colors.primary : Colors.card, borderWidth: 1, borderColor: pickerAmPm === 'PM' ? Colors.primary : Colors.border }}
+                      onPress={() => { setPickerAmPm('PM'); setTimeManuallyAdjusted(true); }}
+                    >
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: pickerAmPm === 'PM' ? '#fff' : Colors.textMuted }}>PM</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+              {isTimeAdjusted() && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12, backgroundColor: 'rgba(245,158,11,0.12)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
+                  <Ionicons name="time-outline" size={14} color={Colors.warning} />
+                  <Text style={{ color: Colors.warning, fontSize: 12, fontFamily: 'Inter_400Regular' }}>Time manually adjusted</Text>
+                </View>
+              )}
+              <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+                <Pressable
+                  style={{ flex: 1, paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, alignItems: 'center' }}
+                  onPress={() => setShowTimePicker(null)}
+                >
+                  <Text style={{ color: Colors.text, fontFamily: 'ChakraPetch_700Bold', fontSize: 14 }}>CANCEL</Text>
+                </Pressable>
+                <Pressable
+                  style={{ flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: showTimePicker === 'clock-in' ? Colors.success : Colors.destructive, alignItems: 'center' }}
+                  onPress={() => {
+                    setTimeManuallyAdjusted(isTimeAdjusted());
+                    if (showTimePicker === 'clock-in') {
+                      confirmClockIn();
+                    } else {
+                      setShowTimePicker(null);
+                      setShowLoadsModal(true);
+                    }
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontFamily: 'ChakraPetch_700Bold', fontSize: 14 }}>
+                    {showTimePicker === 'clock-in' ? 'CLOCK IN' : 'NEXT'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={showLoadsModal} transparent animationType="fade" onRequestClose={() => setShowLoadsModal(false)}>
           <View style={styles.wtModalOverlay}>

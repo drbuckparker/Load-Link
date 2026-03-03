@@ -1192,7 +1192,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req.session as any).userId;
       const { id } = req.params;
-      const { lat, lng } = req.body;
+      const { lat, lng, custom_time, time_manually_entered } = req.body;
 
       const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
       if (!job) return res.status(404).json({ message: "Job not found" });
@@ -1244,15 +1244,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      const startTime = custom_time ? new Date(custom_time) : new Date();
+      const runValues: any = {
+        job_id: id,
+        driver_id: userId,
+        status: "active",
+        start_lat: lat?.toString(),
+        start_lng: lng?.toString(),
+        started_at: startTime,
+      };
+
       const [run] = await db
         .insert(jobRuns)
-        .values({
-          job_id: id,
-          driver_id: userId,
-          status: "active",
-          start_lat: lat?.toString(),
-          start_lng: lng?.toString(),
-        })
+        .values(runValues)
         .returning();
 
       await db
@@ -1270,7 +1274,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
     try {
       const { runId } = req.params;
-      const { lat, lng, loads_hauled } = req.body;
+      const { lat, lng, loads_hauled, custom_time, time_manually_entered } = req.body;
 
       const [run] = await db
         .select()
@@ -1281,7 +1285,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!run) return res.status(404).json({ message: "Run not found" });
 
       const startedAt = new Date(run.started_at!);
-      const endedAt = new Date();
+      const endedAt = custom_time ? new Date(custom_time) : new Date();
       const actualMinutes = Math.round(
         (endedAt.getTime() - startedAt.getTime()) / 60000
       );
