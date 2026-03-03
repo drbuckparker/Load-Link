@@ -743,6 +743,8 @@ export default function CalendarScreen() {
               <View style={[styles.legendDot, { backgroundColor: Colors.destructive }]} />
               <Text style={styles.legendText}>Unavailable</Text>
             </View>
+          </View>
+          <View style={[styles.legendRow, { marginTop: 4 }]}>
             <View style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
               <Text style={styles.legendText}>Booked</Text>
