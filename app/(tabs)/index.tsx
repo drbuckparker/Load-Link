@@ -181,7 +181,7 @@ export default function DashboardScreen() {
             style={styles.statCard}
             onPress={() => {
               if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.navigate('/earnings' as any);
+              router.push('/earnings' as any);
             }}
           >
             <Text style={styles.statLabel}>{item.label}</Text>

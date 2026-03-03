@@ -143,12 +143,6 @@ function ClassicTabLayout({ role }: { role: string }) {
         }}
       />
       <Tabs.Screen
-        name="earnings"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
         name="invoices"
         options={{
           title: "Invoices",

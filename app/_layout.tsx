@@ -57,6 +57,7 @@ function RootLayoutNav() {
           headerShown: false,
         }}
       />
+      <Stack.Screen name="earnings" options={{ headerShown: false }} />
       <Stack.Screen name="jobs-browse" options={{ headerShown: false }} />
       <Stack.Screen name="edit-job/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="invoice/[id]" options={{ headerShown: false }} />
