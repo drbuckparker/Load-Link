@@ -950,7 +950,7 @@ export default function JobDetailScreen() {
         )}
 
         {(() => {
-          const completedRuns = (jobData?.runs || []).filter((r: any) => r.status === 'completed' && r.ended_at);
+          const completedRuns = (jobData?.runs || []).filter((r: any) => r.status === 'completed' && r.ended_at).sort((a: any, b: any) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
           if (completedRuns.length === 0) return null;
           const openLocationMap = (lat: number, lng: number) => {
             if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
