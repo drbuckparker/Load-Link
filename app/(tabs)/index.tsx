@@ -174,7 +174,7 @@ export default function DashboardScreen() {
       { label: 'AWAITING PAYMENT', value: stats.awaiting, sub: 'Pending Jobs', tab: 'earnings' },
     ];
     return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
+      <View style={styles.earningsRow}>
         {items.map((item, i) => (
           <Pressable
             key={i}
@@ -193,7 +193,7 @@ export default function DashboardScreen() {
             <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={styles.statChevron} />
           </Pressable>
         ))}
-      </ScrollView>
+      </View>
     );
   }
 
@@ -727,11 +727,18 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     marginBottom: 16,
   },
+  earningsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
   statCard: {
     backgroundColor: Colors.card,
     borderRadius: 12,
     padding: 14,
-    width: 150,
+    flex: 1,
     borderWidth: 1,
     borderColor: Colors.border,
   },
