@@ -953,12 +953,21 @@ export default function JobDetailScreen() {
           const completedRuns = (jobData?.runs || []).filter((r: any) => r.status === 'completed' && r.ended_at);
           if (completedRuns.length === 0) return null;
           const openLocationMap = (lat: number, lng: number) => {
-            const url = Platform.OS === 'ios'
-              ? `maps:0,0?q=${lat},${lng}`
-              : `geo:${lat},${lng}?q=${lat},${lng}`;
-            Linking.openURL(url).catch(() => {
-              Linking.openURL(`https://www.google.com/maps?q=${lat},${lng}`);
-            });
+            if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
+            const googleMapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+            if (Platform.OS === 'ios') {
+              const appleUrl = `https://maps.apple.com/?q=${lat},${lng}&ll=${lat},${lng}`;
+              Linking.openURL(appleUrl).catch(() => {
+                Linking.openURL(googleMapsUrl);
+              });
+            } else if (Platform.OS === 'android') {
+              const geoUrl = `geo:${lat},${lng}?q=${lat},${lng}`;
+              Linking.openURL(geoUrl).catch(() => {
+                Linking.openURL(googleMapsUrl);
+              });
+            } else {
+              Linking.openURL(googleMapsUrl);
+            }
           };
           return (
             <View style={styles.section}>
