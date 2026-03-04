@@ -257,16 +257,16 @@ export default function JobDetailScreen() {
     }
   }, [job?.status]);
 
-  const isToday = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const now = new Date();
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  const isSameLocalDay = (dateA: string | Date, dateB: string | Date) => {
+    const a = new Date(dateA);
+    const b = new Date(dateB);
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
   };
 
-  const getTodayCompletedRunsSeconds = () => {
+  const getRunsSecondsForDay = (referenceDate: Date) => {
     if (!jobData?.runs) return 0;
     return (jobData.runs as any[])
-      .filter((r: any) => r.driver_id === user?.id && r.ended_at && isToday(r.started_at || r.startedAt))
+      .filter((r: any) => r.driver_id === user?.id && r.ended_at && isSameLocalDay(r.started_at || r.startedAt, referenceDate))
       .reduce((total: number, r: any) => {
         const start = new Date(r.started_at || r.startedAt).getTime();
         const end = new Date(r.ended_at || r.endedAt).getTime();
@@ -289,10 +289,10 @@ export default function JobDetailScreen() {
     if (jobData?.runs && !isRunning) {
       const activeRun = (jobData.runs as any[]).find((r: any) => r.status === 'active' && !r.ended_at && !r.clock_out_time);
       if (activeRun && activeRun.driver_id === user?.id) {
-        const startedAt = new Date(activeRun.started_at || activeRun.startedAt).getTime();
-        const activeElapsed = Math.floor((Date.now() - startedAt) / 1000);
-        const todayCompleted = getTodayCompletedRunsSeconds();
-        setElapsedSeconds(todayCompleted + activeElapsed);
+        const activeStartDate = new Date(activeRun.started_at || activeRun.startedAt);
+        const activeElapsed = Math.floor((Date.now() - activeStartDate.getTime()) / 1000);
+        const sameDayCompleted = getRunsSecondsForDay(activeStartDate);
+        setElapsedSeconds(sameDayCompleted + activeElapsed);
         setIsRunning(true);
       } else if (jobStatus === 'completed') {
         const completedTime = getAllCompletedRunsSeconds();
@@ -1017,9 +1017,10 @@ export default function JobDetailScreen() {
         {isRunning && (() => {
           const allCompletedSeconds = getAllCompletedRunsSeconds();
           const activeRun = (jobData?.runs as any[])?.find((r: any) => r.status === 'active' && !r.ended_at);
-          const activeStarted = activeRun ? new Date(activeRun.started_at || activeRun.startedAt).getTime() : 0;
-          const activeRunningSeconds = activeStarted ? Math.floor((Date.now() - activeStarted) / 1000) : 0;
-          const previousDaysSeconds = allCompletedSeconds - getTodayCompletedRunsSeconds();
+          const activeStartDate = activeRun ? new Date(activeRun.started_at || activeRun.startedAt) : new Date();
+          const activeRunningSeconds = activeRun ? Math.floor((Date.now() - activeStartDate.getTime()) / 1000) : 0;
+          const sameDayCompletedSeconds = getRunsSecondsForDay(activeStartDate);
+          const previousDaysSeconds = allCompletedSeconds - sameDayCompletedSeconds;
           const totalJobSeconds = allCompletedSeconds + activeRunningSeconds;
           const totalJobMinutes = Math.floor(totalJobSeconds / 60);
           const totalJobBilled = getBilledMinutes(totalJobMinutes);
