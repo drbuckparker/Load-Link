@@ -376,6 +376,31 @@ export default function DashboardScreen() {
           </View>
         </View>
 
+        {(() => {
+          const todayJobs = dashboard?.upcomingDays?.[0]?.jobs || [];
+          if (todayJobs.length === 0) return null;
+          return (
+            <Pressable
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push(`/job/${todayJobs[0].id}` as any);
+              }}
+              style={{ backgroundColor: 'rgba(76,175,80,0.15)', borderRadius: 12, padding: 14, marginHorizontal: 16, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(76,175,80,0.3)', flexDirection: 'row', alignItems: 'center' }}
+            >
+              <Ionicons name="alert-circle" size={22} color={Colors.success} style={{ marginRight: 10 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.success, letterSpacing: 0.5 }}>
+                  YOU HAVE {todayJobs.length} JOB{todayJobs.length > 1 ? 'S' : ''} TODAY
+                </Text>
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginTop: 2 }}>
+                  {todayJobs.map((j: any) => j.material).join(', ')} — Tap to view
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={Colors.success} />
+            </Pressable>
+          );
+        })()}
+
         <View style={styles.upcomingSection}>
           <View style={styles.upcomingHeader}>
             <View style={styles.upcomingHeaderLeft}>
