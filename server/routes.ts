@@ -2243,12 +2243,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       }
 
+      let fleetActiveRuns: any[] = [];
+      if (user.role === 'trucking_company' || user.role === 'driver_trucking_company') {
+        const fleetRows = await db.execute(sql`
+          SELECT jr.id as "runId", jr.job_id as "jobId", jr.started_at as "clockInTime",
+                 jr.driver_id as "driverId",
+                 j.material, j.origin_address as "originAddress",
+                 drv.full_name as "driverName", drv.company as "driverCompany",
+                 ja.vehicle_id as "vehicleId",
+                 dv.truck_number as "truckNumber", dv.make as "vehicleMake", dv.model as "vehicleModel"
+          FROM job_runs jr
+          INNER JOIN jobs j ON jr.job_id = j.id
+          LEFT JOIN users drv ON jr.driver_id = drv.id
+          LEFT JOIN job_assignments ja ON ja.job_id = j.id AND ja.driver_id = jr.driver_id AND ja.status IN ('approved', 'accepted')
+          LEFT JOIN driver_vehicles dv ON ja.vehicle_id = dv.id
+          WHERE (j.contractor_id = ${userId} OR jr.driver_id = ${userId}
+                 OR jr.driver_id IN (SELECT id FROM users WHERE company = ${user.company || ''}))
+            AND jr.status = 'active'
+            AND jr.ended_at IS NULL
+          ORDER BY jr.started_at ASC
+        `);
+        fleetActiveRuns = (fleetRows.rows || []).map((r: any) => {
+          const fullName = r.driverName || '';
+          const parts = fullName.trim().split(/\s+/);
+          const displayName = parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1][0]}.` : parts[0] || 'Driver';
+          return {
+            runId: r.runId,
+            jobId: r.jobId,
+            clockInTime: r.clockInTime,
+            driverId: r.driverId,
+            driverName: displayName,
+            driverFullName: fullName,
+            truckNumber: r.truckNumber || null,
+            vehicleDesc: r.vehicleMake && r.vehicleModel ? `${r.vehicleMake} ${r.vehicleModel}` : null,
+            material: r.material,
+          };
+        });
+      }
+
       return res.json({
         userName: user.full_name,
         role: user.role,
         activeJobs: activeJobsCount,
         isConnected: user.is_connected,
         activeRun,
+        fleetActiveRuns,
         quickJob: nearbyOpenJobs.length > 0 ? {
           material: nearbyOpenJobs[0].material,
           address: nearbyOpenJobs[0].origin_address,

@@ -16,6 +16,36 @@ function isContractorRole(role: string): boolean {
   return role.includes('contractor');
 }
 
+function FleetRunTimer({ clockInTime }: { clockInTime: string }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    let raw = String(clockInTime);
+    if (!raw.endsWith('Z') && !raw.includes('+')) raw += 'Z';
+    const clockIn = new Date(raw).getTime();
+    const update = () => setElapsed(Math.max(0, Math.floor((Date.now() - clockIn) / 1000)));
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [clockInTime]);
+  const h = Math.floor(elapsed / 3600);
+  const m = Math.floor((elapsed % 3600) / 60);
+  const s = elapsed % 60;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.text }}>{pad(h)}:{pad(m)}:{pad(s)}</Text>;
+}
+
+interface FleetActiveRun {
+  runId: string;
+  jobId: string;
+  clockInTime: string;
+  driverId: string;
+  driverName: string;
+  driverFullName: string;
+  truckNumber: string | null;
+  vehicleDesc: string | null;
+  material: string;
+}
+
 interface DashboardData {
   userName: string;
   role: string;
@@ -23,6 +53,7 @@ interface DashboardData {
   isConnected: boolean;
   quickJob: { material: string; address: string } | null;
   activeRun: { runId: string; jobId: string; clockInTime: string; material: string; originAddress: string; contractorName: string } | null;
+  fleetActiveRuns?: FleetActiveRun[];
   earnings: { total: number; awaiting: number; thisMonth: number; thisWeek: number };
   location: { lat: number | null; lng: number | null; address: string | null };
   upcomingDays: { date: string; dayName: string; dayNum: number; status: string; jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[] }[];
@@ -289,7 +320,39 @@ export default function DashboardScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries(); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
       >
-        {!contractor && dashboard?.activeRun ? (
+        {!contractor && (dashboard?.fleetActiveRuns?.length || 0) > 0 ? (
+          <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 6 }}>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success }} />
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.success, letterSpacing: 0.5 }}>ON THE CLOCK — {dashboard!.fleetActiveRuns!.length} TRUCK{dashboard!.fleetActiveRuns!.length !== 1 ? 'S' : ''}</Text>
+            </View>
+            {dashboard!.fleetActiveRuns!.map((fr: FleetActiveRun) => {
+              let raw = String(fr.clockInTime);
+              if (!raw.endsWith('Z') && !raw.includes('+')) raw += 'Z';
+              const clockIn = new Date(raw).getTime();
+              const elapsed = Math.max(0, Math.floor((Date.now() - clockIn) / 1000));
+              return (
+                <Pressable
+                  key={fr.runId}
+                  style={styles.activeRunCard}
+                  onPress={() => router.push(`/job/${fr.jobId}` as any)}
+                >
+                  <View style={styles.activeRunPulse}>
+                    <View style={styles.activeRunDot} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.activeRunLabel}>{fr.driverName}{fr.truckNumber ? ` • #${fr.truckNumber}` : ''}</Text>
+                    <Text style={styles.activeRunMaterial} numberOfLines={1}>{fr.material}</Text>
+                  </View>
+                  <View style={styles.activeRunTimerBox}>
+                    <FleetRunTimer clockInTime={fr.clockInTime} />
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} style={{ marginLeft: 8 }} />
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : !contractor && dashboard?.activeRun ? (
           <Pressable
             style={styles.activeRunCard}
             onPress={() => router.push(`/job/${dashboard.activeRun!.jobId}` as any)}
