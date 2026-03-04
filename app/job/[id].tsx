@@ -1063,8 +1063,9 @@ export default function JobDetailScreen() {
         )}
 
         {(() => {
-          const completedRuns = (jobData?.runs || []).filter((r: any) => r.status === 'completed' && r.ended_at).sort((a: any, b: any) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
-          if (completedRuns.length === 0) return null;
+          const allRuns = (jobData?.runs || []).filter((r: any) => r.status === 'completed' || r.status === 'active').sort((a: any, b: any) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
+          if (allRuns.length === 0) return null;
+          const completedRuns = allRuns.filter((r: any) => r.status === 'completed' && r.ended_at);
           const openLocationMap = (lat: number, lng: number) => {
             if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
             const googleMapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
@@ -1085,33 +1086,43 @@ export default function JobDetailScreen() {
           return (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>WORK SESSIONS</Text>
-              {completedRuns.map((run: any, idx: number) => {
+              {allRuns.map((run: any, idx: number) => {
                 const startTime = new Date(run.started_at);
-                const endTime = new Date(run.ended_at);
+                const isActive = run.status === 'active' && !run.ended_at;
+                const endTime = run.ended_at ? new Date(run.ended_at) : null;
                 const createdAt = run.created_at ? new Date(run.created_at) : null;
                 const updatedAt = run.updated_at ? new Date(run.updated_at) : null;
                 const clockInManual = createdAt && Math.abs(startTime.getTime() - createdAt.getTime()) > 60000;
-                const clockOutManual = updatedAt
+                const clockOutManual = !isActive && endTime && updatedAt
                   ? Math.abs(endTime.getTime() - updatedAt.getTime()) > 60000
                   : false;
                 const clockOutSubmittedAt = clockOutManual ? updatedAt : null;
                 const hasStartLoc = run.start_lat && run.start_lng && Number(run.start_lat) !== 0;
-                const hasEndLoc = run.end_lat && run.end_lng && Number(run.end_lat) !== 0;
-                const duration = run.actual_duration_minutes || Math.round((endTime.getTime() - startTime.getTime()) / 60000);
+                const hasEndLoc = !isActive && run.end_lat && run.end_lng && Number(run.end_lat) !== 0;
+                const duration = isActive ? 0 : (run.actual_duration_minutes || (endTime ? Math.round((endTime.getTime() - startTime.getTime()) / 60000) : 0));
                 const hours = Math.floor(duration / 60);
                 const mins = duration % 60;
                 const isDriverOwner = run.driver_id === user?.id;
+                const driverCompany = run.driver_company || run.driver_name || '';
                 return (
-                  <View key={run.id || idx} style={{ backgroundColor: Colors.card, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.border }}>
+                  <View key={run.id || idx} style={{ backgroundColor: isActive ? 'rgba(76,175,80,0.08)' : Colors.card, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: isActive ? 2 : 1, borderColor: isActive ? 'rgba(76,175,80,0.4)' : Colors.border }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <View style={{ flex: 1 }}>
-                        {completedRuns.length > 1 && (
-                          <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textMuted, letterSpacing: 1 }}>
-                            SESSION {idx + 1}
+                      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: isActive ? Colors.success : Colors.textMuted, letterSpacing: 1 }}>
+                          SESSION {idx + 1}
+                        </Text>
+                        {driverCompany ? (
+                          <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: Colors.textSecondary }}>
+                            — {driverCompany}
                           </Text>
+                        ) : null}
+                        {isActive && (
+                          <View style={{ backgroundColor: 'rgba(76,175,80,0.2)', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
+                            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 9, color: Colors.success, letterSpacing: 0.5 }}>ACTIVE</Text>
+                          </View>
                         )}
                       </View>
-                      {isDriverOwner && (
+                      {isDriverOwner && !isActive && (
                         <View style={{ flexDirection: 'row', gap: 4 }}>
                           <Pressable
                             onPress={() => openEditRun(run)}
@@ -1125,7 +1136,7 @@ export default function JobDetailScreen() {
                             hitSlop={8}
                             style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}
                           >
-                            <Ionicons name="trash-outline" size={16} color={Colors.error || '#ef4444'} />
+                            <Ionicons name="trash-outline" size={16} color={'#ef4444'} />
                           </Pressable>
                         </View>
                       )}
@@ -1152,11 +1163,13 @@ export default function JobDetailScreen() {
                         </View>
                       </View>
                     )}
-                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginBottom: 8 }}>
-                      {hours > 0 ? `${hours}h ${mins}m` : `${mins}m`} · {run.billed_duration_minutes || duration} min billed
-                      {run.loads_hauled ? ` · ${run.loads_hauled} load${run.loads_hauled !== 1 ? 's' : ''}` : ''}
-                    </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 }}>
+                    {!isActive && (
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginBottom: 8 }}>
+                        {hours > 0 ? `${hours}h ${mins}m` : `${mins}m`} · {run.billed_duration_minutes || duration} min billed
+                        {run.loads_hauled ? ` · ${run.loads_hauled} load${run.loads_hauled !== 1 ? 's' : ''}` : ''}
+                      </Text>
+                    )}
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: isActive ? 0 : 6 }}>
                       <Ionicons name="log-in-outline" size={16} color={Colors.success} style={{ marginTop: 1, marginRight: 8 }} />
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success, letterSpacing: 0.5 }}>CLOCK IN</Text>
@@ -1184,34 +1197,42 @@ export default function JobDetailScreen() {
                         ) : null}
                       </View>
                     </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                      <Ionicons name="log-out-outline" size={16} color={Colors.primary} style={{ marginTop: 1, marginRight: 8 }} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.primary, letterSpacing: 0.5 }}>CLOCK OUT</Text>
-                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
-                          {endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                        </Text>
-                        {clockOutManual ? (
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                            <Ionicons name="pencil" size={11} color={Colors.warning} />
-                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>
-                              Time manually entered{clockOutSubmittedAt ? ` at ${clockOutSubmittedAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : ''}
-                            </Text>
-                          </View>
-                        ) : null}
-                        {hasEndLoc ? (
-                          <Pressable
-                            onPress={() => openLocationMap(Number(run.end_lat), Number(run.end_lng))}
-                            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}
-                          >
-                            <Ionicons name="location" size={13} color={Colors.info} />
-                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.info, marginLeft: 4, textDecorationLine: 'underline' }}>
-                              View location
-                            </Text>
-                          </Pressable>
-                        ) : null}
+                    {isActive && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: 'rgba(76,175,80,0.2)' }}>
+                        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success, marginRight: 8 }} />
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.success }}>Currently working</Text>
                       </View>
-                    </View>
+                    )}
+                    {!isActive && endTime && (
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                        <Ionicons name="log-out-outline" size={16} color={Colors.primary} style={{ marginTop: 1, marginRight: 8 }} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.primary, letterSpacing: 0.5 }}>CLOCK OUT</Text>
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
+                            {endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                          </Text>
+                          {clockOutManual ? (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                              <Ionicons name="pencil" size={11} color={Colors.warning} />
+                              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>
+                                Time manually entered{clockOutSubmittedAt ? ` at ${clockOutSubmittedAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : ''}
+                              </Text>
+                            </View>
+                          ) : null}
+                          {hasEndLoc ? (
+                            <Pressable
+                              onPress={() => openLocationMap(Number(run.end_lat), Number(run.end_lng))}
+                              style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}
+                            >
+                              <Ionicons name="location" size={13} color={Colors.info} />
+                              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.info, marginLeft: 4, textDecorationLine: 'underline' }}>
+                                View location
+                              </Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      </View>
+                    )}
                   </View>
                 );
               })}

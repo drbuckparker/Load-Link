@@ -687,11 +687,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         project_name: r.project_name || null,
       };
 
-      const runs = await db
-        .select()
+      const runsRaw = await db
+        .select({
+          id: jobRuns.id,
+          job_id: jobRuns.job_id,
+          driver_id: jobRuns.driver_id,
+          status: jobRuns.status,
+          started_at: jobRuns.started_at,
+          ended_at: jobRuns.ended_at,
+          start_lat: jobRuns.start_lat,
+          start_lng: jobRuns.start_lng,
+          end_lat: jobRuns.end_lat,
+          end_lng: jobRuns.end_lng,
+          actual_duration_minutes: jobRuns.actual_duration_minutes,
+          billed_duration_minutes: jobRuns.billed_duration_minutes,
+          total_miles: jobRuns.total_miles,
+          loads_hauled: jobRuns.loads_hauled,
+          created_at: jobRuns.created_at,
+          updated_at: jobRuns.updated_at,
+          driver_name: users.full_name,
+          driver_company: users.company,
+        })
         .from(jobRuns)
+        .leftJoin(users, eq(jobRuns.driver_id, users.id))
         .where(eq(jobRuns.job_id, id))
         .orderBy(desc(jobRuns.started_at));
+      const runs = runsRaw;
 
       const rawAssignments = await db
         .select()
