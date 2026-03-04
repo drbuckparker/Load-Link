@@ -257,7 +257,24 @@ export default function JobDetailScreen() {
     }
   }, [job?.status]);
 
-  const getCompletedRunsSeconds = () => {
+  const isToday = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  };
+
+  const getTodayCompletedRunsSeconds = () => {
+    if (!jobData?.runs) return 0;
+    return (jobData.runs as any[])
+      .filter((r: any) => r.driver_id === user?.id && r.ended_at && isToday(r.started_at || r.startedAt))
+      .reduce((total: number, r: any) => {
+        const start = new Date(r.started_at || r.startedAt).getTime();
+        const end = new Date(r.ended_at || r.endedAt).getTime();
+        return total + Math.floor((end - start) / 1000);
+      }, 0);
+  };
+
+  const getAllCompletedRunsSeconds = () => {
     if (!jobData?.runs) return 0;
     return (jobData.runs as any[])
       .filter((r: any) => r.driver_id === user?.id && r.ended_at)
@@ -274,11 +291,11 @@ export default function JobDetailScreen() {
       if (activeRun && activeRun.driver_id === user?.id) {
         const startedAt = new Date(activeRun.started_at || activeRun.startedAt).getTime();
         const activeElapsed = Math.floor((Date.now() - startedAt) / 1000);
-        const completedTime = getCompletedRunsSeconds();
-        setElapsedSeconds(completedTime + activeElapsed);
+        const todayCompleted = getTodayCompletedRunsSeconds();
+        setElapsedSeconds(todayCompleted + activeElapsed);
         setIsRunning(true);
       } else if (jobStatus === 'completed') {
-        const completedTime = getCompletedRunsSeconds();
+        const completedTime = getAllCompletedRunsSeconds();
         if (completedTime > 0) setElapsedSeconds(completedTime);
       }
     }
@@ -997,23 +1014,42 @@ export default function JobDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 24 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}>
-        {isRunning && (
-          <View style={styles.timerCard}>
-            <Text style={styles.timerLabel}>ACTIVE JOB TIMER</Text>
-            <Text style={styles.timerDisplay}>{formatElapsed(elapsedSeconds)}</Text>
-            <View style={styles.timerStats}>
-              <View style={styles.timerStat}>
-                <Text style={styles.timerStatLabel}>Actual</Text>
-                <Text style={styles.timerStatValue}>{actualMinutes} min</Text>
+        {isRunning && (() => {
+          const allCompletedSeconds = getAllCompletedRunsSeconds();
+          const activeRun = (jobData?.runs as any[])?.find((r: any) => r.status === 'active' && !r.ended_at);
+          const activeStarted = activeRun ? new Date(activeRun.started_at || activeRun.startedAt).getTime() : 0;
+          const activeRunningSeconds = activeStarted ? Math.floor((Date.now() - activeStarted) / 1000) : 0;
+          const previousDaysSeconds = allCompletedSeconds - getTodayCompletedRunsSeconds();
+          const totalJobSeconds = allCompletedSeconds + activeRunningSeconds;
+          const totalJobMinutes = Math.floor(totalJobSeconds / 60);
+          const totalJobBilled = getBilledMinutes(totalJobMinutes);
+          const showTotal = previousDaysSeconds > 0;
+          return (
+            <View style={styles.timerCard}>
+              <Text style={styles.timerLabel}>TODAY'S TIMER</Text>
+              <Text style={styles.timerDisplay}>{formatElapsed(elapsedSeconds)}</Text>
+              <View style={styles.timerStats}>
+                <View style={styles.timerStat}>
+                  <Text style={styles.timerStatLabel}>Today</Text>
+                  <Text style={styles.timerStatValue}>{actualMinutes} min</Text>
+                </View>
+                <View style={styles.timerStatDivider} />
+                <View style={styles.timerStat}>
+                  <Text style={styles.timerStatLabel}>Billed</Text>
+                  <Text style={styles.timerStatValue}>{billedMinutes} min</Text>
+                </View>
               </View>
-              <View style={styles.timerStatDivider} />
-              <View style={styles.timerStat}>
-                <Text style={styles.timerStatLabel}>Billed</Text>
-                <Text style={styles.timerStatValue}>{billedMinutes} min</Text>
-              </View>
+              {showTotal && (
+                <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="time-outline" size={14} color={Colors.textSecondary} />
+                  <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textSecondary }}>
+                    Total Job Time: {formatElapsed(totalJobSeconds)} ({totalJobBilled} min billed)
+                  </Text>
+                </View>
+              )}
             </View>
-          </View>
-        )}
+          );
+        })()}
 
         {jobStatus === 'completed' && elapsedSeconds > 0 && (
           <Pressable style={styles.completedCard} onPress={() => setShowResumeModal(true)}>
@@ -1178,6 +1214,51 @@ export default function JobDetailScreen() {
                   </View>
                 );
               })}
+              {(() => {
+                const allSeconds = getAllCompletedRunsSeconds();
+                if (allSeconds <= 0) return null;
+                const allMinutes = Math.floor(allSeconds / 60);
+                const allBilled = getBilledMinutes(allMinutes);
+                const allHrs = Math.floor(allMinutes / 60);
+                const allMins = allMinutes % 60;
+                const totalLoads = completedRuns.reduce((sum: number, r: any) => sum + (r.loads_hauled || 0), 0);
+                const dayGroups: Record<string, number> = {};
+                for (const r of completedRuns) {
+                  const d = new Date(r.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                  const start = new Date(r.started_at).getTime();
+                  const end = new Date(r.ended_at).getTime();
+                  dayGroups[d] = (dayGroups[d] || 0) + Math.floor((end - start) / 1000);
+                }
+                const dayCount = Object.keys(dayGroups).length;
+                return (
+                  <View style={{ backgroundColor: 'rgba(255,153,0,0.08)', borderRadius: 10, padding: 12, marginTop: 10, borderWidth: 1, borderColor: 'rgba(255,153,0,0.2)' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                      <Ionicons name="stats-chart" size={14} color={Colors.primary} />
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primary, letterSpacing: 0.5 }}>TOTAL JOB SUMMARY</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <View style={{ alignItems: 'center', flex: 1 }}>
+                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{allHrs}h {allMins}m</Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Total Time</Text>
+                      </View>
+                      <View style={{ alignItems: 'center', flex: 1 }}>
+                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{allBilled}</Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Min Billed</Text>
+                      </View>
+                      <View style={{ alignItems: 'center', flex: 1 }}>
+                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{totalLoads}</Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Loads</Text>
+                      </View>
+                      {dayCount > 1 && (
+                        <View style={{ alignItems: 'center', flex: 1 }}>
+                          <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{dayCount}</Text>
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Days</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                );
+              })()}
             </View>
           );
         })()}
