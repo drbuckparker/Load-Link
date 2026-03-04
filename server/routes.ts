@@ -2498,71 +2498,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dateFilter.setMonth(dateFilter.getMonth() - 1);
       }
 
-      let conditions: any[] = [
-        eq(jobs.driver_id, userId),
-        eq(jobs.status, "completed"),
+      const runConditions: any[] = [
+        eq(jobRuns.driver_id, userId),
+        eq(jobRuns.status, "completed"),
       ];
-
       if (dateFilter) {
-        conditions.push(gte(jobs.completed_date, dateFilter));
+        runConditions.push(gte(jobRuns.started_at, dateFilter));
       }
 
-      const completedJobs = await db
+      const completedRuns = await db
         .select({
-          job: jobs,
+          run_id: jobRuns.id,
+          job_id: jobRuns.job_id,
+          started_at: jobRuns.started_at,
+          ended_at: jobRuns.ended_at,
+          actual_duration_minutes: jobRuns.actual_duration_minutes,
+          billed_duration_minutes: jobRuns.billed_duration_minutes,
+          loads_hauled: jobRuns.loads_hauled,
+          job_material: jobs.material,
+          job_rate: jobs.rate,
+          job_rate_type: jobs.rate_type,
+          job_status: jobs.status,
+          job_payment_status: jobs.payment_status,
+          job_estimated_cost: jobs.estimated_cost,
+          job_scheduled_date: jobs.scheduled_date,
+          job_completed_date: jobs.completed_date,
           contractor_company: users.company,
         })
-        .from(jobs)
-        .leftJoin(users, eq(jobs.contractor_id, users.id))
-        .where(and(...conditions))
-        .orderBy(desc(jobs.completed_date));
-
-      const runs = await db
-        .select()
         .from(jobRuns)
-        .where(
-          and(
-            eq(jobRuns.driver_id, userId),
-            eq(jobRuns.status, "completed")
-          )
-        );
+        .innerJoin(jobs, eq(jobRuns.job_id, jobs.id))
+        .leftJoin(users, eq(jobs.contractor_id, users.id))
+        .where(and(...runConditions))
+        .orderBy(desc(jobRuns.started_at));
 
-      const earnings = completedJobs.map((r) => {
-        const jobRun = runs.find((run) => run.job_id === r.job.id);
-        const billedHours = jobRun
-          ? (jobRun.billed_duration_minutes || 0) / 60
-          : 0;
-        const rate = Number(r.job.rate) || 0;
+      const jobGrouped: Record<string, { runs: typeof completedRuns; totalBilledMin: number; totalActualMin: number; totalLoads: number }> = {};
+      for (const r of completedRuns) {
+        const jid = r.job_id || '';
+        if (!jobGrouped[jid]) jobGrouped[jid] = { runs: [], totalBilledMin: 0, totalActualMin: 0, totalLoads: 0 };
+        jobGrouped[jid].runs.push(r);
+        jobGrouped[jid].totalBilledMin += r.billed_duration_minutes || r.actual_duration_minutes || 0;
+        jobGrouped[jid].totalActualMin += r.actual_duration_minutes || 0;
+        jobGrouped[jid].totalLoads += r.loads_hauled || 0;
+      }
+
+      const earnings = Object.entries(jobGrouped).map(([jobId, group]) => {
+        const first = group.runs[0];
+        const billedHours = group.totalBilledMin / 60;
+        const rate = Number(first.job_rate) || 0;
         let amount = 0;
 
-        if (r.job.rate_type === "per_hour") {
+        if (first.job_rate_type === "per_hour") {
           amount = billedHours * rate;
-        } else if (r.job.rate_type === "flat_rate") {
+        } else if (first.job_rate_type === "flat_rate") {
           amount = rate;
-        } else if (r.job.rate_type === "per_load" || r.job.rate_type === "per_ton") {
-          amount = rate;
+        } else if (first.job_rate_type === "per_load" || first.job_rate_type === "per_ton") {
+          amount = group.totalLoads * rate;
         }
 
-        if (amount === 0) amount = Number(r.job.estimated_cost) || rate;
+        if (amount === 0) amount = Number(first.job_estimated_cost) || rate;
+
+        const isPaid = first.job_payment_status === "payment_received";
+        const isJobComplete = first.job_status === "completed";
 
         return {
-          id: r.job.id,
-          jobId: r.job.id,
-          material: r.job.material,
-          contractorCompany: r.contractor_company || "Unknown",
-          date: r.job.completed_date || r.job.scheduled_date,
+          id: jobId,
+          jobId,
+          material: first.job_material,
+          contractorCompany: first.contractor_company || "Unknown",
+          date: first.job_completed_date || group.runs[group.runs.length - 1].started_at,
           billedHours,
           rate,
-          rateType: r.job.rate_type,
+          rateType: first.job_rate_type,
           amount,
-          status: r.job.payment_status === "payment_received" ? "paid" as const : "pending" as const,
+          status: isPaid ? "paid" as const : isJobComplete ? "pending" as const : "in_progress" as const,
+          sessions: group.runs.length,
+          totalLoads: group.totalLoads,
         };
       });
 
       const totalEarnings = earnings.reduce((sum, e) => sum + e.amount, 0);
       const totalJobs = earnings.length;
       const pendingAmount = earnings
-        .filter((e) => e.status === "pending")
+        .filter((e) => e.status !== "paid")
         .reduce((sum, e) => sum + e.amount, 0);
 
       return res.json({

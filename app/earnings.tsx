@@ -10,7 +10,7 @@ import { useState, useMemo } from 'react';
 
 type Period = 'week' | 'month' | 'all';
 
-function mapEarning(e: any): Earning {
+function mapEarning(e: any): Earning & { sessions?: number; totalLoads?: number } {
   return {
     id: e.id,
     jobId: e.job_id ?? e.jobId ?? '',
@@ -22,6 +22,8 @@ function mapEarning(e: any): Earning {
     rateType: e.rate_type ?? e.rateType ?? '',
     amount: Number(e.amount) || 0,
     status: e.status ?? e.payment_status ?? e.paymentStatus ?? 'pending',
+    sessions: e.sessions ?? 1,
+    totalLoads: e.totalLoads ?? e.total_loads ?? 0,
   };
 }
 
@@ -43,8 +45,8 @@ export default function EarningsScreen() {
 
   const stats = earningsData?.stats;
   const totalEarnings = stats?.totalEarnings ?? stats?.total_earnings ?? earnings.reduce((sum: number, e: Earning) => sum + e.amount, 0);
-  const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? earnings.filter((e: Earning) => e.status === 'pending').reduce((sum: number, e: Earning) => sum + e.amount, 0);
-  const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? earnings.filter((e: Earning) => e.status === 'paid').reduce((sum: number, e: Earning) => sum + e.amount, 0);
+  const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? earnings.filter((e: any) => e.status !== 'paid').reduce((sum: number, e: any) => sum + e.amount, 0);
+  const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? earnings.filter((e: any) => e.status === 'paid').reduce((sum: number, e: any) => sum + e.amount, 0);
   const totalHours = earnings.reduce((sum: number, e: Earning) => sum + e.billedHours, 0);
 
   function renderHeader() {
@@ -97,39 +99,40 @@ export default function EarningsScreen() {
           ))}
         </View>
 
-        <Text style={styles.sectionTitle}>JOB HISTORY</Text>
+        <Text style={styles.sectionTitle}>EARNINGS BY JOB</Text>
       </View>
     );
   }
 
-  function renderEarning({ item }: { item: Earning }) {
+  function renderEarning({ item }: { item: any }) {
+    const statusColor = item.status === 'paid' ? Colors.success : item.status === 'in_progress' ? '#3b82f6' : Colors.warning;
+    const statusBg = item.status === 'paid' ? Colors.successBg : item.status === 'in_progress' ? 'rgba(59,130,246,0.15)' : Colors.warningBg;
+    const statusLabel = item.status === 'in_progress' ? 'IN PROGRESS' : item.status.toUpperCase();
+    const sessions = item.sessions || 1;
+    const dateStr = item.date ? new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
     return (
-      <View style={styles.earningCard}>
+      <Pressable style={styles.earningCard} onPress={() => router.push(`/job/${item.jobId}`)}>
         <View style={styles.earningLeft}>
-          <View style={styles.earningIcon}>
-            <Ionicons name="briefcase" size={18} color={Colors.primary} />
+          <View style={[styles.earningIcon, item.status === 'in_progress' && { backgroundColor: 'rgba(59,130,246,0.15)' }]}>
+            <Ionicons name={item.status === 'in_progress' ? 'time' : 'briefcase'} size={18} color={item.status === 'in_progress' ? '#3b82f6' : Colors.primary} />
           </View>
           <View style={styles.earningInfo}>
             <Text style={styles.earningMaterial}>{item.material}</Text>
             <Text style={styles.earningCompany}>{item.contractorCompany}</Text>
             <Text style={styles.earningDate}>
-              {new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {item.billedHours}h billed
+              {dateStr}{dateStr ? ' · ' : ''}{item.billedHours?.toFixed(1)}h · {sessions} session{sessions !== 1 ? 's' : ''}
             </Text>
           </View>
         </View>
         <View style={styles.earningRight}>
-          <Text style={styles.earningAmount}>${item.amount.toLocaleString()}</Text>
-          <View style={[styles.statusBadge, {
-            backgroundColor: item.status === 'paid' ? Colors.successBg : Colors.warningBg
-          }]}>
-            <Text style={[styles.statusBadgeText, {
-              color: item.status === 'paid' ? Colors.success : Colors.warning
-            }]}>
-              {item.status.toUpperCase()}
+          <Text style={styles.earningAmount}>${Number(item.amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</Text>
+          <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
+            <Text style={[styles.statusBadgeText, { color: statusColor }]}>
+              {statusLabel}
             </Text>
           </View>
         </View>
-      </View>
+      </Pressable>
     );
   }
 
@@ -150,7 +153,7 @@ export default function EarningsScreen() {
         contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
         ListHeaderComponent={renderHeader}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/earnings'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith('/api/earnings') }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           isLoading ? (
             <View style={styles.emptyState}>
