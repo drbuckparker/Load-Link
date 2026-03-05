@@ -1467,6 +1467,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!run) return res.status(404).json({ message: "Run not found" });
       if (run.driver_id !== userId) return res.status(403).json({ message: "Not authorized" });
 
+      await db.execute(sql`DELETE FROM still_working_checks WHERE job_run_id = ${runId}`);
       await db.delete(jobRuns).where(eq(jobRuns.id, runId));
       return res.json({ message: "Session deleted" });
     } catch (err) {
