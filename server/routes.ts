@@ -3283,8 +3283,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = (req.session as any).userId;
       const { filter } = req.query;
 
+      const today = new Date().toISOString().split('T')[0];
       const statusFilter = filter === 'completed'
-        ? [eq(jobs.status, 'completed')]
+        ? [
+            or(
+              eq(jobs.status, 'completed'),
+              and(
+                eq(jobs.status, 'in_progress' as any),
+                sql`(${jobs.scheduled_date} + (COALESCE(NULLIF(${jobs.listed_days},''), ${jobs.estimated_days}, '1')::numeric || ' days')::interval) < ${today}::timestamp`
+              )
+            )!
+          ]
         : [
             or(
               eq(jobs.status, 'open' as any),

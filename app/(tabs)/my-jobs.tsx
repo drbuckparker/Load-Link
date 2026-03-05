@@ -81,6 +81,7 @@ export default function MyJobsScreen() {
 
   const filteredJobs = useMemo(() => {
     if (!jobsQuery.data) return [];
+    const todayStr = new Date().toISOString().split('T')[0];
     if (filter === 'active') {
       return jobsQuery.data.filter(j => j.status === 'in_progress' || j.status === 'accepted');
     }
