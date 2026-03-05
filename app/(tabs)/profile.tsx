@@ -487,7 +487,7 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        <Text style={styles.earningsSectionTitle}>JOB HISTORY</Text>
+        <Text style={styles.earningsSectionTitle}>EARNINGS BY JOB</Text>
 
         {earningsLoading ? (
           <View style={{ paddingTop: 40, alignItems: 'center' }}>
@@ -501,17 +501,23 @@ export default function ProfileScreen() {
           </View>
         ) : (
           <View style={{ gap: 10 }}>
-            {items.map((item: any) => (
-              <View key={item.id} style={styles.earningCard}>
+            {items.map((item: any) => {
+              const rawStatus = item.status || item.payment_status || 'pending';
+              const statusColor = rawStatus === 'paid' ? Colors.success : rawStatus === 'in_progress' ? '#3b82f6' : Colors.warning;
+              const statusBg = rawStatus === 'paid' ? Colors.successBg : rawStatus === 'in_progress' ? 'rgba(59,130,246,0.15)' : Colors.warningBg;
+              const statusLabel = rawStatus === 'in_progress' ? 'IN PROGRESS' : rawStatus.toUpperCase();
+              const sessions = item.sessions || 1;
+              return (
+              <Pressable key={item.id} style={styles.earningCard} onPress={() => router.push(`/job/${item.jobId || item.id}`)}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                  <View style={styles.earningCardIcon}>
-                    <Ionicons name="briefcase" size={16} color={Colors.primary} />
+                  <View style={[styles.earningCardIcon, rawStatus === 'in_progress' && { backgroundColor: 'rgba(59,130,246,0.15)' }]}>
+                    <Ionicons name={rawStatus === 'in_progress' ? 'time' : 'briefcase'} size={16} color={rawStatus === 'in_progress' ? '#3b82f6' : Colors.primary} />
                   </View>
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.text }}>{item.material}</Text>
                     <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary }}>{item.contractor_company || item.contractorCompany}</Text>
                     <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted }}>
-                      {new Date(item.date || item.completed_date || item.completedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {Number(item.billed_hours ?? item.billedHours ?? 0).toFixed(1)}h
+                      {new Date(item.date || item.completed_date || item.completedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {Number(item.billed_hours ?? item.billedHours ?? 0).toFixed(1)}h · {sessions} session{sessions !== 1 ? 's' : ''}
                     </Text>
                   </View>
                 </View>
@@ -519,16 +525,17 @@ export default function ProfileScreen() {
                   <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>${Number(item.amount).toLocaleString()}</Text>
                   <View style={{
                     paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4,
-                    backgroundColor: (item.status === 'paid' || item.payment_status === 'paid') ? Colors.successBg : Colors.warningBg
+                    backgroundColor: statusBg
                   }}>
                     <Text style={{
                       fontFamily: 'Inter_600SemiBold', fontSize: 9, letterSpacing: 0.5,
-                      color: (item.status === 'paid' || item.payment_status === 'paid') ? Colors.success : Colors.warning
-                    }}>{(item.status || item.payment_status || 'pending').toUpperCase()}</Text>
+                      color: statusColor
+                    }}>{statusLabel}</Text>
                   </View>
                 </View>
-              </View>
-            ))}
+              </Pressable>
+              );
+            })}
           </View>
         )}
       </>
