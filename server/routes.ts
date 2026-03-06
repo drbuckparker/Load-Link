@@ -1339,7 +1339,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const actualMinutes = Math.round(
         (endedAt.getTime() - startedAt.getTime()) / 60000
       );
-      const billedMinutes = Math.max(60, Math.ceil(actualMinutes / 15) * 15);
+      let billedMinutes: number;
+      if (actualMinutes <= 60) {
+        billedMinutes = 60;
+      } else {
+        const overFirst = actualMinutes - 60;
+        const fullSegments = Math.floor(overFirst / 15);
+        const remainder = overFirst % 15;
+        const billedSegments = remainder >= 5 ? fullSegments + 1 : fullSegments;
+        billedMinutes = 60 + billedSegments * 15;
+      }
 
       const updateData: any = {
         status: "completed",
@@ -1496,7 +1505,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (startedAtVal && endedAtVal) {
         const actualMinutes = Math.round((endedAtVal.getTime() - startedAtVal.getTime()) / 60000);
         updateData.actual_duration_minutes = actualMinutes;
-        updateData.billed_duration_minutes = Math.max(60, Math.ceil(actualMinutes / 15) * 15);
+        if (actualMinutes <= 60) {
+          updateData.billed_duration_minutes = 60;
+        } else {
+          const overFirst = actualMinutes - 60;
+          const fullSegments = Math.floor(overFirst / 15);
+          const remainder = overFirst % 15;
+          const billedSegments = remainder >= 5 ? fullSegments + 1 : fullSegments;
+          updateData.billed_duration_minutes = 60 + billedSegments * 15;
+        }
       }
 
       const [updated] = await db.update(jobRuns).set(updateData).where(eq(jobRuns.id, runId)).returning();

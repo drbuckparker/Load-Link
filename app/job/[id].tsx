@@ -410,7 +410,11 @@ export default function JobDetailScreen() {
 
   function getBilledMinutes(actualMinutes: number) {
     if (actualMinutes <= 60) return 60;
-    return 60 + Math.ceil((actualMinutes - 60) / 15) * 15;
+    const overFirst = actualMinutes - 60;
+    const fullSegments = Math.floor(overFirst / 15);
+    const remainder = overFirst % 15;
+    const billedSegments = remainder >= 5 ? fullSegments + 1 : fullSegments;
+    return 60 + billedSegments * 15;
   }
 
   async function handleApproveAssignment(assignmentId: string) {
