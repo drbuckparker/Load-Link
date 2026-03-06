@@ -2,7 +2,8 @@ import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Platform, Alert,
 import { useState, useRef } from 'react';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
@@ -224,7 +225,7 @@ export default function ProfileScreen() {
                     style={styles.infoRow}
                     onPress={() => router.push(`/vehicle-jobs/${v.id}` as any)}
                   >
-                    <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
+                    <TruckIcon size={18} color={Colors.primary} />
                     <Text style={styles.infoLabel}>{v.truck_number || `#${idx + 1}`}</Text>
                     <Text style={styles.infoValue} numberOfLines={1}>
                       {[v.make, formatTruckType(v.truck_type)].filter(Boolean).join(' ')}
@@ -234,7 +235,7 @@ export default function ProfileScreen() {
                 ))
               ) : (
                 <Pressable style={styles.infoRow} onPress={() => router.push('/vehicles')}>
-                  <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.textMuted} />
+                  <TruckIcon size={18} color={Colors.textMuted} />
                   <Text style={[styles.infoLabel, { flex: 1 }]}>No vehicles added</Text>
                   <Ionicons name="add-circle-outline" size={18} color={Colors.primary} />
                 </Pressable>
@@ -243,7 +244,7 @@ export default function ProfileScreen() {
             <Pressable style={styles.navCard} onPress={() => router.push('/vehicles')}>
               <View style={styles.navCardLeft}>
                 <View style={[styles.navIconBox, { backgroundColor: Colors.primaryLight }]}>
-                  <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
+                  <TruckIcon size={18} />
                 </View>
                 <Text style={styles.navCardText}>Manage Vehicles</Text>
               </View>

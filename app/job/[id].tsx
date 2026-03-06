@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking, Image, RefreshControl } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { useQuery } from '@tanstack/react-query';
@@ -1321,7 +1322,7 @@ export default function JobDetailScreen() {
             <Text style={[styles.badgeText, { color: statusColor.text }]}>{displayStatus.replace('_', ' ').toUpperCase()}</Text>
           </View>
           <View style={styles.badge}>
-            <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textSecondary} />
+            <TruckIcon size={12} />
             <Text style={styles.badgeText}>{formatTruckType(job.truckType)}</Text>
           </View>
         </View>
@@ -1393,7 +1394,7 @@ export default function JobDetailScreen() {
               <Text style={styles.detailValue}>{job.pickupTime || '07:00'}</Text>
             </View>
             <View style={styles.detailItem}>
-              <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.textMuted} />
+              <TruckIcon size={16} />
               <Text style={styles.detailLabel}>Trucks Needed</Text>
               <Text style={styles.detailValue}>{job.trucksNeeded}</Text>
             </View>
@@ -1879,7 +1880,7 @@ export default function JobDetailScreen() {
                         <View style={styles.driverMeta}>
                           {a.driverTruckType ? (
                             <View style={styles.driverMetaItem}>
-                              <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textMuted} />
+                              <TruckIcon size={12} />
                               <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
                             </View>
                           ) : null}
@@ -1912,7 +1913,7 @@ export default function JobDetailScreen() {
                         <View style={styles.driverMeta}>
                           {a.driverTruckType ? (
                             <View style={styles.driverMetaItem}>
-                              <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textMuted} />
+                              <TruckIcon size={12} />
                               <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
                             </View>
                           ) : null}
@@ -2231,7 +2232,7 @@ export default function JobDetailScreen() {
                   <View style={styles.modalSection}>
                     <Text style={styles.modalSectionTitle}>VEHICLE</Text>
                     <View style={styles.modalVehicleCard}>
-                      <MaterialCommunityIcons name="dump-truck" size={28} color={Colors.primary} />
+                      <TruckIcon size={28} />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.modalVehicleTitle}>
                           {[selectedDriver.vehicle.year, selectedDriver.vehicle.make, selectedDriver.vehicle.model].filter(Boolean).join(' ')}
@@ -2419,7 +2420,7 @@ export default function JobDetailScreen() {
               </View>
             ) : vehiclesData.length === 0 ? (
               <View style={styles.noTrucksBox}>
-                <MaterialCommunityIcons name="dump-truck" size={32} color={Colors.textMuted} />
+                <TruckIcon size={32} />
                 <Text style={styles.noTrucksText}>No trucks found</Text>
                 <Pressable
                   style={styles.addTruckBtn}
@@ -2467,7 +2468,7 @@ export default function JobDetailScreen() {
                         {(isSelected || isAlreadyOnJob) && <Ionicons name="checkmark" size={16} color="#fff" />}
                         {isBlocked && !isSelected && !isAlreadyOnJob && <Ionicons name="close" size={14} color="#cc3300" />}
                       </View>
-                      <MaterialCommunityIcons name="dump-truck" size={24} color={isAlreadyOnJob ? Colors.success : isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
+                      <TruckIcon size={24} color={isAlreadyOnJob ? Colors.success : isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                           <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }, isAlreadyOnJob && { color: Colors.text }, (isBlocked && !isAlreadyOnJob) && { color: Colors.textMuted }]}>

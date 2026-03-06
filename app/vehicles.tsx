@@ -2,6 +2,7 @@ import { View, Text, FlatList, Pressable, StyleSheet, Switch, Platform, Alert, T
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState, useCallback, useRef } from 'react';
 import Colors from '@/constants/colors';
@@ -348,7 +349,7 @@ export default function VehiclesScreen() {
       <View style={[styles.vehicleCard, isPrimary && styles.vehicleCardPrimary]}>
         <View style={styles.vehicleCardHeader}>
           <View style={styles.vehicleIconWrap}>
-            <MaterialCommunityIcons name="dump-truck" size={24} color={isPrimary ? Colors.primary : Colors.textMuted} />
+            <TruckIcon size={24} color={isPrimary ? Colors.primary : Colors.textMuted} />
           </View>
           <View style={styles.vehicleInfo}>
             <View style={styles.vehicleTitleRow}>
@@ -420,7 +421,7 @@ export default function VehiclesScreen() {
             <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 60 }} />
           ) : (
             <View style={styles.emptyState}>
-              <MaterialCommunityIcons name="dump-truck" size={48} color={Colors.textMuted} />
+              <TruckIcon size={48} />
               <Text style={styles.emptyTitle}>No vehicles yet</Text>
               <Text style={styles.emptySubtitle}>Tap the + button to add your first vehicle</Text>
             </View>

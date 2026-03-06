@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, ScrollView, StyleSheet, Platform, ActivityIndicator, Modal, Alert, RefreshControl } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -336,7 +337,7 @@ export default function JobsBrowseScreen() {
             <Text style={[styles.badgeText, { color: jobTypeColor.text }]}>{formatJobType(item.jobType, item.estimatedDays)}</Text>
           </View>
           <View style={styles.badge}>
-            <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textSecondary} />
+            <TruckIcon size={12} />
             <Text style={styles.badgeText}>{formatTruckType(item.truckType)}</Text>
           </View>
         </View>
@@ -706,7 +707,7 @@ export default function JobsBrowseScreen() {
                       style={[styles.truckChip, isActive && styles.truckChipActive]}
                       onPress={() => setSelectedTruckType(isActive ? null : tt)}
                     >
-                      <MaterialCommunityIcons name="dump-truck" size={14} color={isActive ? Colors.primary : Colors.textSecondary} />
+                      <TruckIcon size={14} />
                       <Text style={[styles.truckChipText, isActive && styles.truckChipTextActive]}>{formatTruckType(tt)}</Text>
                     </Pressable>
                   );

@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import { useQuery } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
@@ -301,7 +302,7 @@ export default function DashboardScreen() {
           onPress={() => handleRoleToggle('trucking_company')}
           disabled={switchingRole}
         >
-          <MaterialCommunityIcons name="dump-truck" size={16} color={role === 'trucking_company' ? Colors.primaryForeground : Colors.textMuted} />
+          <TruckIcon size={16} color={role === 'trucking_company' ? Colors.primaryForeground : Colors.textMuted} />
           <Text style={[styles.roleToggleText, role === 'trucking_company' && styles.roleToggleTextActive]}>Fleet Manager</Text>
         </Pressable>
         <Pressable
@@ -549,7 +550,7 @@ export default function DashboardScreen() {
                           </View>
                           {contractor ? (
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                              <MaterialCommunityIcons name="dump-truck" size={13} color={Colors.primary} />
+                              <TruckIcon size={13} />
                               <Text style={styles.weekJobStat}>{job.assigned || 0}/{job.trucksNeeded} trucks</Text>
                               <Ionicons name="people" size={13} color={(job.applied || 0) > 0 ? Colors.info : Colors.textMuted} />
                               <Text style={[styles.weekJobStat, (job.applied || 0) > 0 && { color: Colors.info }]}>{job.applied || 0} applied</Text>

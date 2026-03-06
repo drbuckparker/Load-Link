@@ -1,5 +1,6 @@
 import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor, timeAgo } from '@/lib/mock-data';
@@ -42,7 +43,7 @@ export default function JobCard({ job, onPress, showStatus = false }: JobCardPro
           <Text style={[styles.badgeText, { color: jobTypeColor.text }]}>{formatJobType(job.jobType, job.estimatedDays)}</Text>
         </View>
         <View style={styles.badge}>
-          <MaterialCommunityIcons name="dump-truck" size={12} color={Colors.textSecondary} />
+          <TruckIcon size={12} />
           <Text style={styles.badgeText}>{formatTruckType(job.truckType)}</Text>
         </View>
         {job.trucksNeeded > 1 && (

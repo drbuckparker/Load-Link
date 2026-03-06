@@ -1,7 +1,8 @@
 import { View, Text, ScrollView, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import { useState } from 'react';
 import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
@@ -142,7 +143,7 @@ export default function InvoiceDetailScreen() {
           </View>
           <View style={styles.detailRow}>
             <View style={styles.detailItem}>
-              <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.textMuted} />
+              <TruckIcon size={16} />
               <View>
                 <Text style={styles.detailLabel}>Driver</Text>
                 <Text style={styles.detailValue}>{data.driver_name || driverSnapshot.fullName || 'N/A'}</Text>
@@ -246,7 +247,7 @@ export default function InvoiceDetailScreen() {
                     <View style={styles.jobMetaRow}>
                       {job.truck_type && (
                         <View style={styles.jobMeta}>
-                          <MaterialCommunityIcons name="dump-truck" size={13} color={Colors.textMuted} />
+                          <TruckIcon size={13} />
                           <Text style={styles.jobMetaText}>{formatTruckType(job.truck_type)}</Text>
                         </View>
                       )}

@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
@@ -69,7 +70,7 @@ function DetailJobsBlock({ assignedJobs, dayAllBooked, dayBookedCount, totalVehi
           if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }}
       >
-        <MaterialCommunityIcons name="dump-truck" size={22} color={headerColor} />
+        <TruckIcon size={22} />
         <View style={{ flex: 1 }}>
           <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: headerColor }}>
             {assignedJobs.length} JOB{assignedJobs.length !== 1 ? 'S' : ''} {allArePending ? 'PENDING' : 'BOOKED'}
@@ -137,7 +138,7 @@ function DetailJobsBlock({ assignedJobs, dayAllBooked, dayBookedCount, totalVehi
 
               {job.vehicle ? (
                 <View style={styles.truckAssignmentRow}>
-                  <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
+                  <TruckIcon size={16} color={Colors.primary} />
                   <Text style={styles.truckAssignmentText}>
                     {job.vehicle.year} {job.vehicle.make} {job.vehicle.model}
                   </Text>
@@ -149,7 +150,7 @@ function DetailJobsBlock({ assignedJobs, dayAllBooked, dayBookedCount, totalVehi
                 </View>
               ) : (
                 <View style={styles.calJobTruckStat}>
-                  <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.textMuted} />
+                  <TruckIcon size={16} color={Colors.textMuted} />
                   <Text style={[styles.calJobTruckLabel, { color: Colors.textMuted, fontStyle: 'italic' }]}>No truck assigned</Text>
                 </View>
               )}
@@ -809,7 +810,7 @@ export default function CalendarScreen() {
 
                       <View style={styles.calJobTruckRow}>
                         <View style={styles.calJobTruckStat}>
-                          <MaterialCommunityIcons name="dump-truck" size={16} color={Colors.primary} />
+                          <TruckIcon size={16} />
                           <Text style={styles.calJobTruckLabel}>{job.approved || 0}/{job.trucksNeeded} trucks</Text>
                         </View>
                         <View style={styles.calJobTruckStat}>

@@ -2,9 +2,10 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable, FlatList, Platform, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Colors from '@/constants/colors';
+import TruckIcon from '@/components/TruckIcon';
 import { formatTruckType } from '@/lib/mock-data';
 
 export default function VehicleJobsScreen() {
@@ -100,7 +101,7 @@ export default function VehicleJobsScreen() {
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
         <View style={styles.topBarCenter}>
-          <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
+          <TruckIcon size={18} />
           <Text style={styles.topBarTitle} numberOfLines={1}>
             {vehicle ? `${vehicle.truck_number ? `#${vehicle.truck_number} ` : ''}${vehicleLabel}` : 'Vehicle Jobs'}
           </Text>
@@ -114,7 +115,7 @@ export default function VehicleJobsScreen() {
         </View>
       ) : jobsList.length === 0 ? (
         <View style={styles.center}>
-          <MaterialCommunityIcons name="dump-truck" size={48} color={Colors.textMuted} />
+          <TruckIcon size={48} />
           <Text style={styles.emptyTitle}>No Scheduled Jobs</Text>
           <Text style={styles.emptyText}>This vehicle doesn't have any jobs assigned yet.</Text>
         </View>

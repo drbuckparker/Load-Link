@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, Modal, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
@@ -202,7 +203,7 @@ export default function MyJobsScreen() {
                 setVehicleModalJob(item);
               }}
             >
-              <MaterialCommunityIcons name="dump-truck" size={18} color={Colors.primary} />
+              <TruckIcon size={18} color={Colors.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.truckName}>
                   {item.vehicle.year} {item.vehicle.make} {item.vehicle.model}
@@ -222,7 +223,7 @@ export default function MyJobsScreen() {
                 setVehicleModalJob(item);
               }}
             >
-              <MaterialCommunityIcons name="dump-truck" size={18} color={needsTruck ? Colors.warning : Colors.textMuted} />
+              <TruckIcon size={18} color={needsTruck ? Colors.warning : Colors.textMuted} />
               <Text style={[styles.assignTruckText, needsTruck && { color: Colors.warning }]}>
                 {needsTruck ? 'Assign Truck' : 'Assign Truck'}
               </Text>
@@ -272,7 +273,7 @@ export default function MyJobsScreen() {
             </View>
           ) : (
             <View style={styles.emptyState}>
-              <MaterialCommunityIcons name="dump-truck" size={48} color={Colors.textMuted} />
+              <TruckIcon size={48} />
               <Text style={styles.emptyTitle}>
                 {filter === 'upcoming' ? 'No Upcoming Jobs' : filter === 'active' ? 'No Active Jobs' : 'No Completed Jobs'}
               </Text>
@@ -319,7 +320,7 @@ export default function MyJobsScreen() {
               <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 30 }} />
             ) : !vehiclesQuery.data?.length ? (
               <View style={{ paddingVertical: 24, alignItems: 'center', gap: 8 }}>
-                <MaterialCommunityIcons name="dump-truck" size={36} color={Colors.textMuted} />
+                <TruckIcon size={36} />
                 <Text style={{ color: Colors.textMuted, fontSize: 14, fontFamily: 'Inter_400Regular' }}>No vehicles added yet</Text>
                 <Pressable
                   style={styles.addVehicleBtn}
@@ -349,11 +350,7 @@ export default function MyJobsScreen() {
                         });
                       }}
                     >
-                      <MaterialCommunityIcons
-                        name="dump-truck"
-                        size={20}
-                        color={isSelected ? Colors.primary : Colors.textSecondary}
-                      />
+                      <TruckIcon size={20} />
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.vehicleName, isSelected && { color: Colors.primary }]}>
                           {v.year} {v.make} {v.model}
