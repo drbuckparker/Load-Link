@@ -1416,7 +1416,7 @@ export default function CreateJobScreen() {
             </View>
 
             <View style={styles.switchRow}>
-              <Text style={[styles.switchLabel, urgent && { color: Colors.primary }]}>Urgent</Text>
+              <Text style={[styles.switchLabel, urgent && { color: Colors.primary }]}>Requires Special Paperwork</Text>
               <Switch
                 value={urgent}
                 onValueChange={setUrgent}
