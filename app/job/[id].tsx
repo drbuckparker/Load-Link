@@ -363,7 +363,7 @@ export default function JobDetailScreen() {
     if (job.scheduledDate) {
       const jobDates = getJobDateRange(
         String(job.scheduledDate),
-        job.estimatedDays,
+        jobData?.listed_days || job.estimatedDays,
         jobData?.includes_weekends ?? false
       );
       const isTodayScheduled = jobDates.length === 0 || jobDates.includes(todayStr) || jobDates.includes(todayUTC);
