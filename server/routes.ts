@@ -2256,7 +2256,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           FROM job_runs jr
           INNER JOIN jobs j ON jr.job_id = j.id
           LEFT JOIN users drv ON jr.driver_id = drv.id
-          LEFT JOIN job_assignments ja ON ja.job_id = j.id AND ja.driver_id = jr.driver_id AND ja.status IN ('approved', 'accepted')
+          LEFT JOIN job_assignments ja ON ja.job_id = j.id AND ja.driver_id = jr.driver_id AND ja.status::text IN ('approved')
           LEFT JOIN driver_vehicles dv ON ja.vehicle_id = dv.id
           WHERE (j.contractor_id = ${userId} OR jr.driver_id = ${userId}
                  OR jr.driver_id IN (SELECT id FROM users WHERE company = ${user.company || ''}))
@@ -3290,7 +3290,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               eq(jobs.status, 'completed'),
               and(
                 eq(jobs.status, 'in_progress' as any),
-                sql`(${jobs.scheduled_date} + (COALESCE(NULLIF(${jobs.listed_days},''), ${jobs.estimated_days}, '1')::numeric || ' days')::interval) < ${today}::timestamp`
+                sql`(${jobs.scheduled_date} + (COALESCE(NULLIF(${jobs.listed_days},''), NULLIF(${jobs.estimated_days},''), '1')::numeric || ' days')::interval) < ${today}::timestamp`
               )
             )!
           ]
@@ -4198,10 +4198,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (name !== undefined) updateData.name = name;
       if (job_number !== undefined) updateData.job_number = job_number;
       if (site_address !== undefined) updateData.site_address = site_address;
-      if (site_lat !== undefined) updateData.site_lat = site_lat != null ? String(site_lat) : null;
-      if (site_lng !== undefined) updateData.site_lng = site_lng != null ? String(site_lng) : null;
+      if (site_lat !== undefined) updateData.site_lat = (site_lat != null && site_lat !== '') ? String(site_lat) : null;
+      if (site_lng !== undefined) updateData.site_lng = (site_lng != null && site_lng !== '') ? String(site_lng) : null;
       if (notes !== undefined) updateData.notes = notes;
-      if (awarded_amount !== undefined) updateData.awarded_amount = awarded_amount;
+      if (awarded_amount !== undefined) updateData.awarded_amount = (awarded_amount != null && awarded_amount !== '') ? awarded_amount : null;
       if (status !== undefined) updateData.status = status;
 
       const [updated] = await db
