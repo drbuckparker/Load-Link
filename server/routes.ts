@@ -439,7 +439,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #161a22; color: #ffffff; padding: 32px; border-radius: 12px;">
             <div style="text-align: center; margin-bottom: 24px;">
               <h1 style="color: #FF9900; font-size: 24px; margin: 0; letter-spacing: 2px;">LOADLINK</h1>
-              <p style="color: #9ca3af; font-size: 13px; margin-top: 4px;">Built for Heavy Hauls</p>
+              <p style="color: #9ca3af; font-size: 13px; margin-top: 4px;">Built for Construction Hauls</p>
             </div>
             <p style="color: #e5e7eb; font-size: 15px;">Hi ${userName},</p>
             <p style="color: #9ca3af; font-size: 14px; line-height: 1.6;">

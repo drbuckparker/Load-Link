@@ -98,7 +98,7 @@ export default function LoginScreen() {
             <Ionicons name="cube" size={32} color={Colors.primary} />
           </View>
           <Text style={styles.logoText}>LOADLINK</Text>
-          <Text style={styles.tagline}>Built for Heavy Hauls</Text>
+          <Text style={styles.tagline}>Built for Construction Hauls</Text>
         </View>
 
         <View style={styles.formCard}>
