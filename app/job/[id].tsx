@@ -815,6 +815,9 @@ export default function JobDetailScreen() {
       }
       await apiRequest('POST', `/api/jobs/${id}/clock-in`, body);
       if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      const clockInTime = adjusted ? getPickerDate() : new Date();
+      const initialElapsed = Math.max(0, Math.floor((Date.now() - clockInTime.getTime()) / 1000));
+      setElapsedSeconds(initialElapsed);
       setJobStatus('in_progress');
       setIsRunning(true);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
@@ -845,7 +848,9 @@ export default function JobDetailScreen() {
       await apiRequest('POST', `/api/jobs/${id}/clock-in`, body);
       if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       const completedTime = getCompletedRunsSeconds();
-      setElapsedSeconds(completedTime);
+      const clockInTime = adjusted ? getPickerDate() : new Date();
+      const activeElapsed = Math.max(0, Math.floor((Date.now() - clockInTime.getTime()) / 1000));
+      setElapsedSeconds(completedTime + activeElapsed);
       setJobStatus('in_progress');
       setIsRunning(true);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
