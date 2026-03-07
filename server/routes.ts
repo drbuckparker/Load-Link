@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { db } from "./db";
-import { eq, and, desc, or, ilike, inArray, sql, gte, lte, not, isNull } from "drizzle-orm";
+import { eq, and, asc, desc, or, ilike, inArray, sql, gte, lte, not, isNull } from "drizzle-orm";
 import {
   users,
   jobs,
@@ -568,7 +568,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .leftJoin(users, eq(jobs.contractor_id, users.id))
         .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(desc(jobs.created_at));
+        .orderBy(asc(jobs.scheduled_date), desc(jobs.created_at));
 
       let formattedJobs = result.map((r) => ({
         ...r.job,
@@ -3099,7 +3099,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .leftJoin(users, eq(jobs.driver_id, users.id))
         .leftJoin(contractorProjects, eq(jobs.project_id, contractorProjects.id))
         .where(and(...conditions))
-        .orderBy(desc(jobs.created_at));
+        .orderBy(asc(jobs.scheduled_date), desc(jobs.created_at));
 
       const jobIds = result.map(r => r.job.id);
       let assignmentsByJob: Record<string, any[]> = {};
