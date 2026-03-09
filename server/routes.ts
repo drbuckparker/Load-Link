@@ -538,7 +538,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!date && status === "open") {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        conditions.push(gte(jobs.scheduled_date, today));
+        conditions.push(
+          sql`(${jobs.scheduled_date} + (COALESCE(${jobs.estimated_days}, 1) || ' days')::interval) >= ${today}`
+        );
       }
 
       if (truck_type && truck_type !== "all") {
@@ -760,7 +762,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req.session as any).userId;
       const { id } = req.params;
-      const { vehicleIds } = req.body || {};
+      const { vehicleIds, availableDays } = req.body || {};
 
       const [job] = await db.select().from(jobs).where(eq(jobs.id, id)).limit(1);
       if (!job) return res.status(404).json({ message: "Job not found" });
@@ -895,6 +897,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             vehicle_id: vehicleId,
             status: assignmentStatus,
             ...(isFavorite ? { approved_at: new Date() } : {}),
+            ...(availableDays ? { available_days: Number(availableDays) } : {}),
           });
         }
       } else {
@@ -903,6 +906,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           driver_id: userId,
           status: assignmentStatus,
           ...(isFavorite ? { approved_at: new Date() } : {}),
+          ...(availableDays ? { available_days: Number(availableDays) } : {}),
         });
       }
 
@@ -910,9 +914,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const driverName = driverUser?.full_name || 'A driver';
 
       const notifTitle = isFavorite ? "Favorite Driver Assigned" : "New Driver Application";
+      const partialNote = availableDays && Number(job.estimated_days || 1) > 1
+        ? ` (available ${availableDays} of ${Math.ceil(Number(job.estimated_days))} days)`
+        : '';
       const notifMsg = isFavorite
-        ? `${driverName} (favorite) has been auto-assigned to your ${job.material} job`
-        : `${driverName} would like to work on your ${job.material} job`;
+        ? `${driverName} (favorite) has been auto-assigned to your ${job.material} job${partialNote}`
+        : `${driverName} would like to work on your ${job.material} job${partialNote}`;
       await db.insert(notifications).values({
         user_id: job.contractor_id!,
         type: "load_accepted",

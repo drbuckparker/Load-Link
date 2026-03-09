@@ -46,6 +46,7 @@ interface Assignment {
   vehicle: VehicleInfo | null;
   status: string;
   appliedAt: string;
+  availableDays: number | null;
 }
 
 function mapAssignment(a: any): Assignment {
@@ -76,6 +77,7 @@ function mapAssignment(a: any): Assignment {
     } : null,
     status: a.status ?? 'pending',
     appliedAt: a.applied_at ?? a.appliedAt ?? a.created_at ?? '',
+    availableDays: a.available_days ?? a.availableDays ?? null,
   };
 }
 
@@ -193,6 +195,7 @@ export default function JobDetailScreen() {
   const [submittingBid, setSubmittingBid] = useState(false);
   const [truckSelectVisible, setTruckSelectVisible] = useState(false);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
+  const [selectedAvailableDays, setSelectedAvailableDays] = useState<number | null>(null);
   const [acceptingJob, setAcceptingJob] = useState(false);
   const [truckWarning, setTruckWarning] = useState<string | null>(null);
   const truckWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -479,6 +482,7 @@ export default function JobDetailScreen() {
 
   function handleAccept() {
     setSelectedVehicleIds([]);
+    setSelectedAvailableDays(null);
     setTruckWarning(null);
     setTruckSelectVisible(true);
     queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/vehicle-conflicts`] });
@@ -494,6 +498,7 @@ export default function JobDetailScreen() {
     try {
       const res = await apiRequest('POST', `/api/jobs/${id}/accept`, {
         vehicleIds: selectedVehicleIds,
+        ...(selectedAvailableDays ? { availableDays: selectedAvailableDays } : {}),
       });
       const result = await res.json();
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -1896,9 +1901,19 @@ export default function JobDetailScreen() {
                       </View>
                       <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
                     </View>
-                    <View style={[styles.badge, { backgroundColor: Colors.successBg }]}>
-                      <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-                      <Text style={[styles.badgeText, { color: Colors.success }]}>APPROVED</Text>
+                    <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                      <View style={[styles.badge, { backgroundColor: Colors.successBg }]}>
+                        <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
+                        <Text style={[styles.badgeText, { color: Colors.success }]}>APPROVED</Text>
+                      </View>
+                      {a.availableDays && job && (
+                        <View style={[styles.badge, { backgroundColor: 'rgba(59,130,246,0.1)' }]}>
+                          <Ionicons name="calendar-outline" size={13} color="#3b82f6" />
+                          <Text style={[styles.badgeText, { color: '#3b82f6' }]}>
+                            {a.availableDays} OF {Math.ceil(Number(job.estimatedDays) || 1)} DAYS
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   </Pressable>
                 ))}
@@ -1935,19 +1950,29 @@ export default function JobDetailScreen() {
                       </View>
                       <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
                     </View>
-                    <View style={styles.assignmentActions}>
-                      <Pressable
-                        style={styles.approveBtn}
-                        onPress={(e) => { e.stopPropagation(); handleApproveAssignment(a.id); }}
-                      >
-                        <Ionicons name="checkmark" size={20} color="#fff" />
-                      </Pressable>
-                      <Pressable
-                        style={styles.rejectBtn}
-                        onPress={(e) => { e.stopPropagation(); handleRejectAssignment(a.id); }}
-                      >
-                        <Ionicons name="close" size={20} color="#fff" />
-                      </Pressable>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      {a.availableDays && job && (
+                        <View style={[styles.badge, { backgroundColor: 'rgba(59,130,246,0.1)' }]}>
+                          <Ionicons name="calendar-outline" size={13} color="#3b82f6" />
+                          <Text style={[styles.badgeText, { color: '#3b82f6' }]}>
+                            {a.availableDays} OF {Math.ceil(Number(job.estimatedDays) || 1)} DAYS
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.assignmentActions}>
+                        <Pressable
+                          style={styles.approveBtn}
+                          onPress={(e) => { e.stopPropagation(); handleApproveAssignment(a.id); }}
+                        >
+                          <Ionicons name="checkmark" size={20} color="#fff" />
+                        </Pressable>
+                        <Pressable
+                          style={styles.rejectBtn}
+                          onPress={(e) => { e.stopPropagation(); handleRejectAssignment(a.id); }}
+                        >
+                          <Ionicons name="close" size={20} color="#fff" />
+                        </Pressable>
+                      </View>
                     </View>
                   </Pressable>
                 ))}
@@ -2529,6 +2554,48 @@ export default function JobDetailScreen() {
               </ScrollView>
             )}
 
+            {vehiclesData && vehiclesData.length > 0 && job && (job.jobType === 'multi_day' || (Number(job.estimatedDays) || 1) > 1) && (
+              <View style={{ marginTop: 12, paddingHorizontal: 4 }}>
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.textSecondary, letterSpacing: 0.5, marginBottom: 8 }}>
+                  AVAILABILITY ({Math.ceil(Number(job.estimatedDays) || 1)}-DAY JOB)
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                  <Pressable
+                    onPress={() => { setSelectedAvailableDays(null); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                    style={[{
+                      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
+                      borderColor: !selectedAvailableDays ? Colors.primary : 'rgba(255,255,255,0.15)',
+                      backgroundColor: !selectedAvailableDays ? 'rgba(255,153,0,0.15)' : 'transparent',
+                    }]}
+                  >
+                    <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: !selectedAvailableDays ? Colors.primary : Colors.textSecondary }}>
+                      All Days
+                    </Text>
+                  </Pressable>
+                  {Array.from({ length: Math.ceil(Number(job.estimatedDays) || 1) - 1 }, (_, i) => i + 1).map(d => (
+                    <Pressable
+                      key={d}
+                      onPress={() => { setSelectedAvailableDays(d); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+                      style={[{
+                        paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
+                        borderColor: selectedAvailableDays === d ? Colors.primary : 'rgba(255,255,255,0.15)',
+                        backgroundColor: selectedAvailableDays === d ? 'rgba(255,153,0,0.15)' : 'transparent',
+                      }]}
+                    >
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: selectedAvailableDays === d ? Colors.primary : Colors.textSecondary }}>
+                        {d} Day{d !== 1 ? 's' : ''}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {selectedAvailableDays && (
+                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted, marginTop: 6 }}>
+                    The contractor will see you're available for {selectedAvailableDays} of {Math.ceil(Number(job.estimatedDays) || 1)} days.
+                  </Text>
+                )}
+              </View>
+            )}
+
             {vehiclesData && vehiclesData.length > 0 && (
               <Pressable
                 style={({ pressed }) => [
@@ -2547,6 +2614,7 @@ export default function JobDetailScreen() {
                     <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
                     <Text style={styles.confirmAcceptText}>
                       ACCEPT WITH {selectedVehicleIds.length} TRUCK{selectedVehicleIds.length !== 1 ? 'S' : ''}
+                      {selectedAvailableDays ? ` · ${selectedAvailableDays} DAY${selectedAvailableDays !== 1 ? 'S' : ''}` : ''}
                     </Text>
                   </>
                 )}

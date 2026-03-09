@@ -345,6 +345,7 @@ export const jobAssignments = pgTable("job_assignments", {
   approved_at: timestamp("approved_at"),
   created_at: timestamp("created_at").defaultNow(),
   fleet_truck_id: varchar("fleet_truck_id"),
+  available_days: integer("available_days"),
 });
 
 export const contractorProjects = pgTable("contractor_projects", {
