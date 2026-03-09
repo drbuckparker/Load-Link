@@ -535,6 +535,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      if (!date && status === "open") {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        conditions.push(gte(jobs.scheduled_date, today));
+      }
+
       if (truck_type && truck_type !== "all") {
         conditions.push(eq(jobs.truck_type, truck_type as any));
       }
