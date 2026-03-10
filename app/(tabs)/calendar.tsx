@@ -503,7 +503,18 @@ export default function CalendarScreen() {
   function handleAvailabilityPress(isAvailable: boolean) {
     const vehicles = vehiclesQuery.data || [];
     if (vehicles.length > 1) {
-      setSelectedVehicleIds(new Set(vehicles.map((v: any) => v.id)));
+      const availData = availQuery.data || [];
+      const dateStr = selectedDate;
+      const alreadySet = new Set<string>();
+      for (const item of availData) {
+        const d = new Date(item.date);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        if (key === dateStr && item.vehicle_id) {
+          if (isAvailable && item.is_available) alreadySet.add(item.vehicle_id);
+          if (!isAvailable && !item.is_available && !item.job_id) alreadySet.add(item.vehicle_id);
+        }
+      }
+      setSelectedVehicleIds(alreadySet);
       setShowTruckPicker(isAvailable ? 'available' : 'unavailable');
     } else {
       quickSetAvailability(selectedDate, isAvailable, vehicles.length === 1 ? [vehicles[0].id] : undefined);
