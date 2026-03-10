@@ -20,36 +20,29 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Interactive Elements**: Liquid glass tab bar on iOS 26+ with BlurView fallback.
     - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
 
-### Backend (Companion API Proxy + Local Google APIs)
-- **Technology**: Express.js acting as a **thin proxy** to the LoadLink companion web app's REST API, with some routes handled locally.
-- **Architecture**: Most `/api/*` requests are forwarded to the companion web app API. However, Google Maps/Places API routes are handled directly by the Express backend (not proxied) because the companion web app's SPA catch-all blocks direct API access for these routes.
-- **Local routes** (handled by Express, NOT proxied):
-    - `POST /api/auth/login` — authenticates via companion app, caches session cookie
-    - `GET /api/places/autocomplete` — Google Places Autocomplete API
-    - `GET /api/places/details` — Google Places Details API
-    - `GET /api/places/geocode` — Google Places Find Place from Text API (used instead of Geocoding API which is not enabled)
-    - `GET /api/directions` — Google Directions API
-    - `GET /api/directions/polyline` — Google Directions API (polyline extraction)
-    - `GET /api/map-embed` — HTML map embed using Google Maps JS API
-- **Proxied routes**: All other `/api/*` requests → companion web app
+### Backend (Direct Database Access)
+- **Technology**: Express.js with direct Neon PostgreSQL database access via Drizzle ORM.
+- **Architecture**: The Express backend connects directly to the same Neon database used by the companion web app. Both apps read/write to the same tables — no proxy or middleman. This gives the mobile app the fastest possible response times.
 - **Key files**:
-    - `server/companion-proxy.ts` — proxy utilities (`companionFetch`, `proxyRequest`, `companionLogin`)
-    - `server/routes.ts` — Express route registration (local routes + catch-all proxy)
+    - `server/routes.ts` — All API route handlers (~4,800 lines): auth, jobs, messaging, invoices, vehicles, projects, Google Maps/Places, etc.
+    - `server/db.ts` — Neon PostgreSQL connection pool and Drizzle ORM instance
     - `server/index.ts` — Express app setup (CORS, body parsing, landing page)
+    - `shared/schema.ts` — Drizzle ORM schema (shared database table definitions)
+    - `server/companion-proxy.ts` — (legacy, no longer used) proxy utilities from previous architecture
 - **Authentication flow**:
-    1. Frontend sends `POST /api/auth/login` with `{email, password}` to Express backend
-    2. Express calls companion API login, receives session token
-    3. Express caches the signed session cookie mapped to the raw token
-    4. Frontend stores raw token in AsyncStorage, sends it via `Authorization: Bearer` header
-    5. Express proxy converts Bearer token back to session cookie for companion API requests
+    1. Frontend sends `POST /api/auth/login` with `{email, password}`
+    2. Express validates credentials directly against the `users` table (bcrypt)
+    3. Express generates a random auth token, maps it to userId in memory (`authTokenMap`)
+    4. Frontend stores token in AsyncStorage, sends it via `Authorization: Bearer` header
+    5. `requireAuth` middleware checks Bearer token → looks up userId from `authTokenMap`
+    6. Also supports session-based auth (express-session + connect-pg-simple) as fallback
 - **Environment variables**:
-    - `COMPANION_API_KEY` — API key for authenticating with the companion web app (secret)
-    - `COMPANION_API_URL` — Base URL of the deployed companion web app
-    - `GOOGLE_MAPS_API_KEY` — Google Maps/Places API key (used by local routes)
-- **Legacy files** (no longer imported by routes, kept for reference):
-    - `server/db.ts` — direct Neon PostgreSQL connection (was used before proxy migration)
-    - `server/storage.ts` — storage interface (was used before proxy migration)
-    - `shared/schema.ts` — Drizzle ORM schema (still used by db.ts but not by routes)
+    - `DATABASE_URL` — Neon PostgreSQL connection string (shared with companion web app)
+    - `GOOGLE_MAPS_API_KEY` — Google Maps/Places API key
+    - `RESEND_API_KEY` — Resend email service key (for password resets)
+    - `SESSION_SECRET` — Express session secret
+- **Google Maps API note**: The Google Geocoding API is not enabled on the project. The `/api/places/geocode` route uses Google's "Find Place from Text" API instead.
+- **Database safety**: Never use `drizzle-kit push` (hangs on `contractor_favorite_drivers` table). Add columns via Node.js `pg` driver with ALTER TABLE only.
 
 ### Core Features
 - **Job Management**: Drivers can browse, accept, clock-in/out, and track earnings. Contractors can post, manage assignments (approve/reject drivers), and view invoices.
@@ -64,8 +57,8 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Partial Availability**: Drivers can specify which days they're available for multi-day jobs via `available_days` on job_assignments.
 
 ## External Dependencies
-- **Companion Web App**: The primary data source. All API calls proxy through to it.
-- **Email Service**: Resend (for password reset emails, uses `RESEND_API_KEY`) — handled by companion API.
+- **Companion Web App**: Shares the same Neon database. Both apps read/write independently — no API proxy dependency.
+- **Email Service**: Resend (for password reset emails, uses `RESEND_API_KEY`).
 - **Mapping/Location Services**:
     - Google Places API (for autocomplete and details).
     - Google Maps JavaScript API (for web map view and directions).
