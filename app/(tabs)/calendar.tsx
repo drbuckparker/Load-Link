@@ -1060,7 +1060,7 @@ export default function CalendarScreen() {
                 const dayJobs = calendarJobsQuery.data?.dailyJobs?.[selectedDate] || [];
 
                 const vehicleStatuses = vehicles.map((v: any) => {
-                  const bookedJob = dayJobs.find((j: any) => j.vehicleId === v.id || j.vehicle_id === v.id);
+                  const bookedJob = dayJobs.find((j: any) => j.vehicle?.id === v.id);
                   if (bookedJob) return { vehicle: v, status: 'booked' as const, jobName: bookedJob.material || bookedJob.projectName || 'Job' };
 
                   let isUnavail = false;
@@ -1091,8 +1091,9 @@ export default function CalendarScreen() {
                       </Text>
                     </View>
                     {vehicleStatuses.map(({ vehicle: v, status, jobName }) => {
-                      const truckName = v.truck_number || v.license_plate || `Truck ${v.id.slice(0, 6)}`;
-                      const truckDetail = [v.year, v.make, v.model].filter(Boolean).join(' ');
+                      const truckName = v.truck_number || `Truck ${v.id.slice(0, 6)}`;
+                      const truckDesc = [v.year, v.make, v.model].filter(Boolean).join(' ');
+                      const plate = v.license_plate;
                       const statusColor = status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : '#3b82f6';
                       const statusLabel = status === 'booked' ? `Booked – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
                       return (
@@ -1102,8 +1103,12 @@ export default function CalendarScreen() {
                         }}>
                           <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: statusColor }} />
                           <View style={{ flex: 1 }}>
-                            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.text }}>{truckName}</Text>
-                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted }}>{truckDetail}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.text }}>#{truckName}</Text>
+                            </View>
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted }}>
+                              {truckDesc}{plate ? `     ${plate}` : ''}
+                            </Text>
                           </View>
                           <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: statusColor }}>{statusLabel}</Text>
                         </View>
