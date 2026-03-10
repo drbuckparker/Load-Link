@@ -1478,19 +1478,41 @@ export default function JobDetailScreen() {
           </View>
         </View>
 
+        {(job.requiresTarp || job.requiresWeightTickets || job.urgent) && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>REQUIREMENTS</Text>
           <View style={styles.reqRow}>
-            <View style={[styles.reqBadge, { backgroundColor: job.requiresTarp ? Colors.warningBg : Colors.muted }]}>
-              <Ionicons name={job.requiresTarp ? "checkmark-circle" : "close-circle"} size={14} color={job.requiresTarp ? Colors.warning : Colors.textMuted} />
-              <Text style={[styles.reqText, { color: job.requiresTarp ? Colors.warning : Colors.textMuted }]}>Tarp Required</Text>
-            </View>
-            <View style={[styles.reqBadge, { backgroundColor: job.requiresWeightTickets ? Colors.warningBg : Colors.muted }]}>
-              <Ionicons name={job.requiresWeightTickets ? "checkmark-circle" : "close-circle"} size={14} color={job.requiresWeightTickets ? Colors.warning : Colors.textMuted} />
-              <Text style={[styles.reqText, { color: job.requiresWeightTickets ? Colors.warning : Colors.textMuted }]}>Weight Tickets</Text>
-            </View>
+            {job.requiresTarp && (
+              <View style={[styles.reqBadge, { backgroundColor: Colors.warningBg }]}>
+                <Ionicons name="checkmark-circle" size={14} color={Colors.warning} />
+                <Text style={[styles.reqText, { color: Colors.warning }]}>Tarp Required</Text>
+              </View>
+            )}
+            {job.requiresWeightTickets && (
+              <View style={[styles.reqBadge, { backgroundColor: Colors.warningBg }]}>
+                <Ionicons name="checkmark-circle" size={14} color={Colors.warning} />
+                <Text style={[styles.reqText, { color: Colors.warning }]}>Weight Tickets</Text>
+              </View>
+            )}
+            {job.urgent && (
+              <View style={[styles.reqBadge, { backgroundColor: Colors.warningBg }]}>
+                <Ionicons name="clipboard" size={14} color={Colors.warning} />
+                <Text style={[styles.reqText, { color: Colors.warning }]}>Special Paperwork</Text>
+              </View>
+            )}
           </View>
+          {job.urgent && job.paperworkDescription && (
+            <View style={{ backgroundColor: Colors.primaryLight, borderRadius: 8, padding: 12, marginTop: 10 }}>
+              <Text style={{ color: Colors.primary, fontFamily: 'Inter_600SemiBold', fontSize: 12, marginBottom: 4 }}>
+                Required Paperwork:
+              </Text>
+              <Text style={{ color: Colors.text, fontFamily: 'Inter_400Regular', fontSize: 14, lineHeight: 20 }}>
+                {job.paperworkDescription}
+              </Text>
+            </View>
+          )}
         </View>
+        )}
 
         {jobRequiresWeightTickets && (jobStatus === 'completed' || (weightTicketsData && weightTicketsData.length > 0)) && (
           <View style={styles.section}>
