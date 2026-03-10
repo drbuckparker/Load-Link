@@ -17,10 +17,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '@/constants/colors';
 import MapPickerView from '@/components/MapPickerView';
 import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
+
+const DISMISSED_KEY = 'loadlink_dismissed_locations';
 
 const JOB_TYPES = [
   { label: 'Single Load', value: 'single_load' },
@@ -114,6 +117,7 @@ export default function CreateJobScreen() {
   const [destSuggestions, setDestSuggestions] = useState<any[]>([]);
   const [showOriginSuggestions, setShowOriginSuggestions] = useState(false);
   const [showDestSuggestions, setShowDestSuggestions] = useState(false);
+  const [dismissedLocations, setDismissedLocations] = useState<Set<string>>(new Set());
   const [routeInfo, setRouteInfo] = useState<{ truck_duration_text: string; truck_duration_seconds: number; distance_miles: number } | null>(null);
   const [fetchingRoute, setFetchingRoute] = useState(false);
   const [userLat, setUserLat] = useState<number | null>(null);
@@ -154,6 +158,24 @@ export default function CreateJobScreen() {
   const { data: projects = [] } = useQuery<any[]>({
     queryKey: ['/api/projects'],
   });
+
+  useEffect(() => {
+    AsyncStorage.getItem(DISMISSED_KEY).then(val => {
+      if (val) setDismissedLocations(new Set(JSON.parse(val)));
+    }).catch(() => {});
+  }, []);
+
+  async function dismissSavedLocation(address: string, target: 'origin' | 'destination') {
+    const updated = new Set(dismissedLocations);
+    updated.add(address.toLowerCase());
+    setDismissedLocations(updated);
+    await AsyncStorage.setItem(DISMISSED_KEY, JSON.stringify([...updated])).catch(() => {});
+    if (target === 'origin') {
+      setOriginSuggestions(prev => prev.filter(s => !s.saved || s.description.toLowerCase() !== address.toLowerCase()));
+    } else {
+      setDestSuggestions(prev => prev.filter(s => !s.saved || s.description.toLowerCase() !== address.toLowerCase()));
+    }
+  }
 
   useEffect(() => {
     if (Platform.OS === 'web') {
@@ -357,16 +379,18 @@ export default function CreateJobScreen() {
       const res = await fetch(savedUrl.toString(), { credentials: 'include' });
       if (res.ok) {
         const savedLocations = await res.json();
-        const savedItems = savedLocations.map((loc: any, i: number) => ({
-          place_id: `saved_${loc.type}_${i}_${loc.address}`,
-          description: loc.address,
-          saved: true,
-          savedType: loc.type,
-          savedName: loc.name,
-          savedLat: loc.lat,
-          savedLng: loc.lng,
-          structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
-        }));
+        const savedItems = savedLocations
+          .filter((loc: any) => !dismissedLocations.has(loc.address.toLowerCase()))
+          .map((loc: any, i: number) => ({
+            place_id: `saved_${loc.type}_${i}_${loc.address}`,
+            description: loc.address,
+            saved: true,
+            savedType: loc.type,
+            savedName: loc.name,
+            savedLat: loc.lat,
+            savedLng: loc.lng,
+            structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
+          }));
         if (target === 'origin') { setOriginSuggestions(savedItems); setShowOriginSuggestions(savedItems.length > 0); }
         else { setDestSuggestions(savedItems); setShowDestSuggestions(savedItems.length > 0); }
       } else {
@@ -377,7 +401,7 @@ export default function CreateJobScreen() {
       if (target === 'origin') { setOriginSuggestions([]); setShowOriginSuggestions(false); }
       else { setDestSuggestions([]); setShowDestSuggestions(false); }
     }
-  }, []);
+  }, [dismissedLocations]);
 
   const fetchPlaceSuggestions = useCallback(async (input: string, target: 'origin' | 'destination') => {
     if (input.trim().length < 2) {
@@ -405,22 +429,24 @@ export default function CreateJobScreen() {
       const savedLocations = savedRes && savedRes.ok ? await savedRes.json() : [];
       const placesData = placesRes.ok ? await placesRes.json() : [];
 
-      const savedItems = savedLocations.map((loc: any, i: number) => ({
-        place_id: `saved_${loc.type}_${i}_${loc.address}`,
-        description: loc.address,
-        saved: true,
-        savedType: loc.type,
-        savedName: loc.name,
-        savedLat: loc.lat,
-        savedLng: loc.lng,
-        structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
-      }));
+      const savedItems = savedLocations
+        .filter((loc: any) => !dismissedLocations.has(loc.address.toLowerCase()))
+        .map((loc: any, i: number) => ({
+          place_id: `saved_${loc.type}_${i}_${loc.address}`,
+          description: loc.address,
+          saved: true,
+          savedType: loc.type,
+          savedName: loc.name,
+          savedLat: loc.lat,
+          savedLng: loc.lng,
+          structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
+        }));
 
       const combined = [...savedItems, ...placesData];
       if (target === 'origin') { setOriginSuggestions(combined); setShowOriginSuggestions(true); }
       else { setDestSuggestions(combined); setShowDestSuggestions(true); }
     } catch {}
-  }, [userLat, userLng]);
+  }, [userLat, userLng, dismissedLocations]);
 
   async function geocodeAddress(address: string, target: 'origin' | 'destination') {
     if (address.trim().length < 3) return;
@@ -950,6 +976,15 @@ export default function CreateJobScreen() {
                           </Text>
                         )}
                       </View>
+                      {s.saved && s.savedType !== 'project' && (
+                        <Pressable
+                          hitSlop={10}
+                          onPress={(e) => { e.stopPropagation?.(); dismissSavedLocation(s.description, 'origin'); }}
+                          style={{ padding: 4 }}
+                        >
+                          <Ionicons name="close" size={16} color={Colors.textMuted} />
+                        </Pressable>
+                      )}
                     </Pressable>
                   ))}
                 </View>
@@ -1014,6 +1049,15 @@ export default function CreateJobScreen() {
                           </Text>
                         )}
                       </View>
+                      {s.saved && s.savedType !== 'project' && (
+                        <Pressable
+                          hitSlop={10}
+                          onPress={(e) => { e.stopPropagation?.(); dismissSavedLocation(s.description, 'destination'); }}
+                          style={{ padding: 4 }}
+                        >
+                          <Ionicons name="close" size={16} color={Colors.textMuted} />
+                        </Pressable>
+                      )}
                     </Pressable>
                   ))}
                 </View>
