@@ -2943,7 +2943,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const {
         material, origin_address, destination_address, origin_lat, origin_lng,
         destination_lat, destination_lng, distance, rate, rate_type, truck_type,
-        scheduled_date, pickup_time, urgent, capacity_needed, total_tons_needed,
+        scheduled_date, pickup_time, urgent, paperwork_description, capacity_needed, total_tons_needed,
         trucks_needed, job_type, estimated_duration_minutes, load_time_minutes,
         unload_time_minutes, requires_tarp, requires_weight_tickets,
         total_amount_unit, estimated_cost, estimated_trips, estimated_days,
@@ -2968,6 +2968,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           scheduled_date: scheduled_date ? new Date(scheduled_date + 'T12:00:00Z') : null,
           pickup_time,
           urgent: urgent ?? false,
+          paperwork_description: urgent ? (paperwork_description || null) : null,
           capacity_needed,
           total_tons_needed,
           trucks_needed,

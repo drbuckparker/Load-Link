@@ -184,6 +184,7 @@ export const jobs = pgTable("jobs", {
   truck_type: truckTypeEnum("truck_type"),
   status: jobStatusEnum("status").default("open"),
   urgent: boolean("urgent").default(false),
+  paperwork_description: text("paperwork_description"),
   scheduled_date: timestamp("scheduled_date"),
   completed_date: timestamp("completed_date"),
   created_at: timestamp("created_at").defaultNow(),

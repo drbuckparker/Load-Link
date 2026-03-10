@@ -152,6 +152,7 @@ export default function CreateJobScreen() {
   const [requiresTarp, setRequiresTarp] = useState(false);
   const [requiresWeightTickets, setRequiresWeightTickets] = useState(false);
   const [urgent, setUrgent] = useState(false);
+  const [paperworkDescription, setPaperworkDescription] = useState('');
   const [showHaulDirectionModal, setShowHaulDirectionModal] = useState(false);
   const [pendingProject, setPendingProject] = useState<any>(null);
 
@@ -713,6 +714,7 @@ export default function CreateJobScreen() {
         requires_tarp: requiresTarp,
         requires_weight_tickets: requiresWeightTickets,
         urgent,
+        ...(urgent && paperworkDescription.trim() ? { paperwork_description: paperworkDescription.trim() } : {}),
       };
 
       if (distance) body.distance = parseFloat(distance);
@@ -1463,10 +1465,27 @@ export default function CreateJobScreen() {
               <Text style={[styles.switchLabel, urgent && { color: Colors.primary }]}>Requires Special Paperwork</Text>
               <Switch
                 value={urgent}
-                onValueChange={setUrgent}
+                onValueChange={(v) => { setUrgent(v); if (!v) setPaperworkDescription(''); }}
                 trackColor={{ false: Colors.border, true: Colors.primary }}
               />
             </View>
+
+            {urgent && (
+              <View style={{ marginTop: 8 }}>
+                <Text style={{ color: Colors.primary, fontSize: 13, marginBottom: 6, fontWeight: '500' }}>
+                  Please specify paperwork that's needed
+                </Text>
+                <TextInput
+                  style={[styles.input, { height: 80, textAlignVertical: 'top', paddingTop: 10 }]}
+                  placeholder="e.g. Bill of lading, environmental permits..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={paperworkDescription}
+                  onChangeText={setPaperworkDescription}
+                  multiline
+                  numberOfLines={3}
+                />
+              </View>
+            )}
 
           </View>
         </View>
