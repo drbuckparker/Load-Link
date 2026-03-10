@@ -138,7 +138,13 @@ function DetailJobsBlock({ assignedJobs, dayAllBooked, dayBookedCount, totalVehi
 
               {job.vehicle ? (
                 <View style={styles.truckAssignmentRow}>
-                  <TruckIcon size={16} color={Colors.primary} />
+                  {job.vehicle.truckNumber ? (
+                    <View style={{ backgroundColor: Colors.primary, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, minWidth: 24, alignItems: 'center' as const }}>
+                      <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 11, color: '#fff' }}>#{job.vehicle.truckNumber}</Text>
+                    </View>
+                  ) : (
+                    <TruckIcon size={16} color={Colors.primary} />
+                  )}
                   <Text style={styles.truckAssignmentText}>
                     {job.vehicle.year} {job.vehicle.make} {job.vehicle.model}
                   </Text>

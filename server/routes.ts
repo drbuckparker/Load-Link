@@ -3643,6 +3643,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             model: vehicle.model,
             year: vehicle.year,
             licensePlate: vehicle.license_plate,
+            truckNumber: vehicle.truck_number,
             truckType: vehicle.truck_type,
           } : null,
         };
