@@ -647,10 +647,14 @@ export default function CreateJobScreen() {
   })();
 
   useEffect(() => {
-    if (calculatedTrips > 1 && tripsPerDay > 0 && calculatedTrips > tripsPerDay && jobType === 'single_load') {
-      setJobType('multi_day');
+    if (calculatedTrips > 1) {
+      if (tripsPerDay > 0 && tripsPerTruck > tripsPerDay) {
+        setJobType('multi_day');
+      } else if (jobType === 'single_load') {
+        setJobType('full_day');
+      }
     }
-  }, [calculatedTrips, tripsPerDay]);
+  }, [calculatedTrips, tripsPerDay, tripsPerTruck]);
 
   useEffect(() => {
     if (estimatedDaysCalc > 0 && !estimatedDaysManual) {
