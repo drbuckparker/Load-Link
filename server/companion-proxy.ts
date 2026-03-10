@@ -93,7 +93,7 @@ export async function companionLogin(email: string, password: string) {
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({ message: "Login failed" }));
-    throw new Error(data.message || "Login failed");
+    throw new Error(data.message || data.error || "Login failed");
   }
 
   return response.json();
