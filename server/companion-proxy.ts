@@ -10,6 +10,14 @@ if (!COMPANION_API_KEY) {
   console.warn("COMPANION_API_KEY is not set - proxy will not work");
 }
 
+const sessionCookieCache = new Map<string, string>();
+
+function buildSessionCookie(sessionToken: string): string {
+  const cached = sessionCookieCache.get(sessionToken);
+  if (cached) return cached;
+  return `loadlink.sid=${sessionToken}`;
+}
+
 export async function companionFetch(
   path: string,
   options: {
@@ -44,7 +52,11 @@ export async function proxyRequest(req: Request, res: Response) {
 
     const authHeader = req.headers.authorization;
     if (authHeader) {
-      headers["Authorization"] = authHeader;
+      const token = authHeader.replace(/^Bearer\s+/i, "");
+      if (token) {
+        headers["Cookie"] = buildSessionCookie(token);
+        headers["Authorization"] = authHeader;
+      }
     }
 
     if (req.body && Object.keys(req.body).length > 0) {
@@ -56,6 +68,7 @@ export async function proxyRequest(req: Request, res: Response) {
     const fetchOptions: RequestInit = {
       method: req.method,
       headers,
+      redirect: "manual",
     };
 
     if (req.method !== "GET" && req.method !== "HEAD" && req.body && Object.keys(req.body).length > 0) {
@@ -98,11 +111,23 @@ export async function companionLogin(email: string, password: string) {
 
   const data = await response.json();
 
-  const cookieHeader = response.headers.get("set-cookie");
+  const cookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
+  let signedCookie = "";
+  for (const c of cookies) {
+    if (c.startsWith("loadlink.sid=")) {
+      signedCookie = c.split(";")[0];
+      break;
+    }
+  }
+
+  const sessionToken = data.sessionToken || data.token;
+
+  if (signedCookie && sessionToken) {
+    sessionCookieCache.set(sessionToken, signedCookie);
+  }
 
   return {
-    token: data.sessionToken || data.token,
+    token: sessionToken,
     user: data.user,
-    cookie: cookieHeader,
   };
 }

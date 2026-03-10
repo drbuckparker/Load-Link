@@ -20,22 +20,32 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Interactive Elements**: Liquid glass tab bar on iOS 26+ with BlurView fallback.
     - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
 
-### Backend (Companion API Proxy)
-- **Technology**: Express.js acting as a **thin proxy** to the LoadLink companion web app's REST API.
-- **Architecture**: The Express backend does NOT access the database directly. All requests to `/api/*` are forwarded to the companion web app API with the `X-API-Key` header and the user's `Authorization: Bearer` token.
+### Backend (Companion API Proxy + Local Google APIs)
+- **Technology**: Express.js acting as a **thin proxy** to the LoadLink companion web app's REST API, with some routes handled locally.
+- **Architecture**: Most `/api/*` requests are forwarded to the companion web app API. However, Google Maps/Places API routes are handled directly by the Express backend (not proxied) because the companion web app's SPA catch-all blocks direct API access for these routes.
+- **Local routes** (handled by Express, NOT proxied):
+    - `POST /api/auth/login` — authenticates via companion app, caches session cookie
+    - `GET /api/places/autocomplete` — Google Places Autocomplete API
+    - `GET /api/places/details` — Google Places Details API
+    - `GET /api/places/geocode` — Google Places Find Place from Text API (used instead of Geocoding API which is not enabled)
+    - `GET /api/directions` — Google Directions API
+    - `GET /api/directions/polyline` — Google Directions API (polyline extraction)
+    - `GET /api/map-embed` — HTML map embed using Google Maps JS API
+- **Proxied routes**: All other `/api/*` requests → companion web app
 - **Key files**:
     - `server/companion-proxy.ts` — proxy utilities (`companionFetch`, `proxyRequest`, `companionLogin`)
-    - `server/routes.ts` — Express route registration (login handler + catch-all proxy)
+    - `server/routes.ts` — Express route registration (local routes + catch-all proxy)
     - `server/index.ts` — Express app setup (CORS, body parsing, landing page)
 - **Authentication flow**:
     1. Frontend sends `POST /api/auth/login` with `{email, password}` to Express backend
-    2. Express calls companion API `POST /api/companion/auth/login` with `X-API-Key` header
-    3. Companion API returns `{token, user}`
-    4. Frontend stores JWT in AsyncStorage, sends it with all subsequent requests
-    5. Express forwards all `/api/*` requests to companion API with both `X-API-Key` and `Authorization` headers
+    2. Express calls companion API login, receives session token
+    3. Express caches the signed session cookie mapped to the raw token
+    4. Frontend stores raw token in AsyncStorage, sends it via `Authorization: Bearer` header
+    5. Express proxy converts Bearer token back to session cookie for companion API requests
 - **Environment variables**:
     - `COMPANION_API_KEY` — API key for authenticating with the companion web app (secret)
     - `COMPANION_API_URL` — Base URL of the deployed companion web app
+    - `GOOGLE_MAPS_API_KEY` — Google Maps/Places API key (used by local routes)
 - **Legacy files** (no longer imported by routes, kept for reference):
     - `server/db.ts` — direct Neon PostgreSQL connection (was used before proxy migration)
     - `server/storage.ts` — storage interface (was used before proxy migration)
