@@ -1054,8 +1054,67 @@ export default function CalendarScreen() {
                 </Pressable>
               </View>
 
+              {(vehiclesQuery.data?.length || 0) > 0 && (() => {
+                const vehicles = vehiclesQuery.data || [];
+                const availData = availQuery.data || [];
+                const dayJobs = calendarJobsQuery.data?.dailyJobs?.[selectedDate] || [];
+
+                const vehicleStatuses = vehicles.map((v: any) => {
+                  const bookedJob = dayJobs.find((j: any) => j.vehicleId === v.id || j.vehicle_id === v.id);
+                  if (bookedJob) return { vehicle: v, status: 'booked' as const, jobName: bookedJob.material || bookedJob.projectName || 'Job' };
+
+                  let isUnavail = false;
+                  for (const item of availData) {
+                    if (!item.vehicle_id || item.vehicle_id !== v.id) continue;
+                    const d = new Date(item.date);
+                    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+                    if (key === selectedDate && !item.is_available && !item.job_id) { isUnavail = true; break; }
+                  }
+                  if (isUnavail) return { vehicle: v, status: 'unavailable' as const, jobName: '' };
+                  return { vehicle: v, status: 'available' as const, jobName: '' };
+                });
+
+                const availCount = vehicleStatuses.filter(s => s.status === 'available').length;
+                const unavailCount = vehicleStatuses.filter(s => s.status === 'unavailable').length;
+                const bookedCount = vehicleStatuses.filter(s => s.status === 'booked').length;
+
+                return (
+                  <View style={{ marginTop: 12 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <TruckIcon size={14} />
+                      <Text style={{ fontFamily: 'ChakraPetch_600SemiBold', fontSize: 11, color: Colors.textMuted, letterSpacing: 1 }}>
+                        FLEET STATUS
+                      </Text>
+                      <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
+                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: Colors.textSecondary }}>
+                        {availCount} avail · {unavailCount} off · {bookedCount} booked
+                      </Text>
+                    </View>
+                    {vehicleStatuses.map(({ vehicle: v, status, jobName }) => {
+                      const truckName = v.truck_number || v.license_plate || `Truck ${v.id.slice(0, 6)}`;
+                      const truckDetail = [v.year, v.make, v.model].filter(Boolean).join(' ');
+                      const statusColor = status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : '#3b82f6';
+                      const statusLabel = status === 'booked' ? `Booked – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
+                      return (
+                        <View key={v.id} style={{
+                          flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8,
+                          borderBottomWidth: 1, borderBottomColor: Colors.border,
+                        }}>
+                          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: statusColor }} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.text }}>{truckName}</Text>
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted }}>{truckDetail}</Text>
+                          </View>
+                          <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: statusColor }}>{statusLabel}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
+
               <Pressable
-                style={[styles.detailJobsBtn, { marginTop: 8 }]}
+                style={[styles.detailJobsBtn, { marginTop: 12 }]}
                 onPress={() => {
                   if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   router.push({ pathname: '/jobs-browse', params: { date: selectedDate || '' } } as any);
