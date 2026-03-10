@@ -1000,30 +1000,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (tonMatch) requiredTonnage = parseFloat(tonMatch[1]);
       }
 
-      const vehicleConflicts: Record<string, { blocked: boolean; wrongType: boolean; lowCapacity: boolean; vehicleTons?: number; requiredTons?: number; conflictDates: string[]; conflictJobs: string[] }> = {};
+      const unavailableMap: Record<string, string[]> = {};
+      if (jobDates.length > 0) {
+        for (const v of userVehicles) {
+          const unavailDates: string[] = [];
+          for (const dateStr of jobDates) {
+            const dateObj = new Date(dateStr + 'T12:00:00Z');
+            const records = await db
+              .select()
+              .from(driverAvailability)
+              .where(
+                and(
+                  eq(driverAvailability.driver_id, userId),
+                  eq(driverAvailability.vehicle_id, v.id),
+                  eq(driverAvailability.date, dateObj),
+                  eq(driverAvailability.is_available, false)
+                )
+              )
+              .limit(1);
+            if (records.length > 0) unavailDates.push(dateStr);
+          }
+          if (unavailDates.length > 0) unavailableMap[v.id] = unavailDates;
+        }
+      }
+
+      const vehicleConflicts: Record<string, { blocked: boolean; wrongType: boolean; lowCapacity: boolean; unavailable: boolean; vehicleTons?: number; requiredTons?: number; conflictDates: string[]; conflictJobs: string[]; unavailableDates?: string[] }> = {};
       for (const v of userVehicles) {
         const wrongType = !!job.truck_type && v.truck_type !== job.truck_type;
         if (wrongType) {
-          vehicleConflicts[v.id] = { blocked: true, wrongType: true, lowCapacity: false, conflictDates: [], conflictJobs: [] };
+          vehicleConflicts[v.id] = { blocked: true, wrongType: true, lowCapacity: false, unavailable: false, conflictDates: [], conflictJobs: [] };
           continue;
         }
         const vehicleTons = v.max_capacity_tons ? parseFloat(v.max_capacity_tons as string) : null;
         const lowCapacity = requiredTonnage !== null && vehicleTons !== null && vehicleTons < requiredTonnage;
         if (lowCapacity) {
-          vehicleConflicts[v.id] = { blocked: true, wrongType: false, lowCapacity: true, vehicleTons: vehicleTons!, requiredTons: requiredTonnage!, conflictDates: [], conflictJobs: [] };
+          vehicleConflicts[v.id] = { blocked: true, wrongType: false, lowCapacity: true, unavailable: false, vehicleTons: vehicleTons!, requiredTons: requiredTonnage!, conflictDates: [], conflictJobs: [] };
+          continue;
+        }
+        const unavailDates = unavailableMap[v.id];
+        if (unavailDates && unavailDates.length > 0) {
+          vehicleConflicts[v.id] = { blocked: true, wrongType: false, lowCapacity: false, unavailable: true, conflictDates: [], conflictJobs: [], unavailableDates: unavailDates };
           continue;
         }
         if (jobDates.length === 0) {
-          vehicleConflicts[v.id] = { blocked: false, wrongType: false, lowCapacity: false, conflictDates: [], conflictJobs: [] };
+          vehicleConflicts[v.id] = { blocked: false, wrongType: false, lowCapacity: false, unavailable: false, conflictDates: [], conflictJobs: [] };
           continue;
         }
         const conflicts = await getVehicleConflicts(v.id, jobDates, newJobIsFullDay, id);
         if (conflicts.length > 0) {
           const uniqueDates = [...new Set(conflicts.map(c => c.date))];
           const uniqueJobs = [...new Set(conflicts.map(c => c.jobMaterial))];
-          vehicleConflicts[v.id] = { blocked: true, wrongType: false, lowCapacity: false, conflictDates: uniqueDates, conflictJobs: uniqueJobs };
+          vehicleConflicts[v.id] = { blocked: true, wrongType: false, lowCapacity: false, unavailable: false, conflictDates: uniqueDates, conflictJobs: uniqueJobs };
         } else {
-          vehicleConflicts[v.id] = { blocked: false, wrongType: false, lowCapacity: false, conflictDates: [], conflictJobs: [] };
+          vehicleConflicts[v.id] = { blocked: false, wrongType: false, lowCapacity: false, unavailable: false, conflictDates: [], conflictJobs: [] };
         }
       }
 

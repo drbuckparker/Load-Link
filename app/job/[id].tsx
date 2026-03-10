@@ -2526,6 +2526,7 @@ export default function JobDetailScreen() {
                   const isBlocked = (conflict?.blocked === true) || isAlreadyOnJob;
                   const isWrongType = conflict?.wrongType === true;
                   const isLowCapacity = conflict?.lowCapacity === true;
+                  const isUnavailable = conflict?.unavailable === true;
                   return (
                     <Pressable
                       key={vId}
@@ -2549,7 +2550,7 @@ export default function JobDetailScreen() {
                         {(isSelected || isAlreadyOnJob) && <Ionicons name="checkmark" size={16} color="#fff" />}
                         {isBlocked && !isSelected && !isAlreadyOnJob && <Ionicons name="close" size={14} color="#cc3300" />}
                       </View>
-                      <TruckIcon size={24} color={isAlreadyOnJob ? Colors.success : isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
+                      <TruckIcon size={24} color={isAlreadyOnJob ? Colors.success : isUnavailable ? '#ef4444' : isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                           <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }, isAlreadyOnJob && { color: Colors.text }, (isBlocked && !isAlreadyOnJob) && { color: Colors.textMuted }]}>
@@ -2570,7 +2571,12 @@ export default function JobDetailScreen() {
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>LOW CAPACITY</Text>
                             </View>
                           )}
-                          {conflict?.blocked && !isWrongType && !isLowCapacity && !isAlreadyOnJob && (
+                          {isUnavailable && !isAlreadyOnJob && (
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(239,68,68,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: '#ef4444' }]}>UNAVAILABLE</Text>
+                            </View>
+                          )}
+                          {conflict?.blocked && !isWrongType && !isLowCapacity && !isUnavailable && !isAlreadyOnJob && (
                             <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>ALREADY BOOKED</Text>
                             </View>
