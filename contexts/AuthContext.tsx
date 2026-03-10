@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiRequest, getApiUrl } from '@/lib/query-client';
+import { apiRequest, getApiUrl, setAuthToken, getAuthToken } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
 import { registerForPushNotifications } from '@/lib/notifications';
 
@@ -96,24 +96,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function checkAuth() {
     try {
+      const storedToken = await AsyncStorage.getItem('loadlink_token');
       const stored = await AsyncStorage.getItem('loadlink_user');
+
+      if (storedToken) {
+        setAuthToken(storedToken);
+      }
+
       if (stored) {
         setUser(JSON.parse(stored));
       }
 
-      const baseUrl = getApiUrl();
-      const res = await fetch(new URL('/api/auth/me', baseUrl).toString(), {
-        credentials: 'include',
-      });
+      if (storedToken) {
+        const baseUrl = getApiUrl();
+        const res = await fetch(new URL('/api/auth/me', baseUrl).toString(), {
+          headers: {
+            'Authorization': `Bearer ${storedToken}`,
+          },
+          credentials: 'include',
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        const mapped = mapDbUser(data.user);
-        await safeStore(mapped);
-        setUser(mapped);
+        if (res.ok) {
+          const data = await res.json();
+          const mapped = mapDbUser(data.user);
+          await safeStore(mapped);
+          setUser(mapped);
+        } else {
+          await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token']).catch(() => {});
+          setAuthToken(null);
+          setUser(null);
+        }
       } else {
-        await AsyncStorage.removeItem('loadlink_user').catch(() => {});
-        setUser(null);
+        if (!stored) {
+          setUser(null);
+        }
       }
     } catch (e) {
       console.log('Auth check failed (offline?):', e);
@@ -125,6 +141,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     const res = await apiRequest('POST', '/api/auth/login', { email, password });
     const data = await res.json();
+
+    if (data.token) {
+      setAuthToken(data.token);
+      await AsyncStorage.setItem('loadlink_token', data.token);
+    }
+
     const mapped = mapDbUser(data.user);
     await safeStore(mapped);
     setUser(mapped);
@@ -134,6 +156,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function register(data: { email: string; password: string; fullName: string; phone: string; role: string }) {
     const res = await apiRequest('POST', '/api/auth/register', data);
     const responseData = await res.json();
+
+    if (responseData.token) {
+      setAuthToken(responseData.token);
+      await AsyncStorage.setItem('loadlink_token', responseData.token);
+    }
+
     const mapped = mapDbUser(responseData.user);
     await safeStore(mapped);
     setUser(mapped);
@@ -144,7 +172,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await apiRequest('POST', '/api/auth/logout');
     } catch {}
-    await AsyncStorage.removeItem('loadlink_user');
+    await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token']).catch(() => {});
+    setAuthToken(null);
     setUser(null);
   }
 
