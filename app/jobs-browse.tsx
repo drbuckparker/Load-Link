@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor, timeAgo } from '@/lib/mock-data';
 import { apiRequest, getApiUrl } from '@/lib/query-client';
 import JobCard from '@/components/JobCard';
+import LocationPickerModal from '@/components/LocationPickerModal';
 
 function isContractorRole(role?: string) {
   return role?.includes('contractor') ?? false;
@@ -114,6 +115,8 @@ export default function JobsBrowseScreen() {
   const [editProjectSiteLng, setEditProjectSiteLng] = useState<number | null>(null);
   const [editSiteSuggestions, setEditSiteSuggestions] = useState<any[]>([]);
   const [showEditSiteSuggestions, setShowEditSiteSuggestions] = useState(false);
+  const [showNewProjectMapPicker, setShowNewProjectMapPicker] = useState(false);
+  const [showEditProjectMapPicker, setShowEditProjectMapPicker] = useState(false);
   const siteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const siteGeoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -912,6 +915,13 @@ export default function JobsBrowseScreen() {
                   <Text style={styles.coordText}>{newProjectSiteLat.toFixed(4)}, {newProjectSiteLng?.toFixed(4)}</Text>
                 </View>
               )}
+              <Pressable
+                style={styles.dropPinBtn}
+                onPress={() => setShowNewProjectMapPicker(true)}
+              >
+                <Ionicons name="location" size={16} color={Colors.primary} />
+                <Text style={styles.dropPinBtnText}>Drop Pin on Map</Text>
+              </Pressable>
             </View>
 
             <View style={styles.modalField}>
@@ -1009,6 +1019,13 @@ export default function JobsBrowseScreen() {
                     <Text style={styles.coordText}>{editProjectSiteLat.toFixed(4)}, {editProjectSiteLng?.toFixed(4)}</Text>
                   </View>
                 )}
+                <Pressable
+                  style={styles.dropPinBtn}
+                  onPress={() => setShowEditProjectMapPicker(true)}
+                >
+                  <Ionicons name="location" size={16} color={Colors.primary} />
+                  <Text style={styles.dropPinBtnText}>Drop Pin on Map</Text>
+                </Pressable>
               </View>
 
               <View style={styles.modalField}>
@@ -1068,6 +1085,34 @@ export default function JobsBrowseScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <LocationPickerModal
+        visible={showNewProjectMapPicker}
+        onClose={() => setShowNewProjectMapPicker(false)}
+        onSelect={(result) => {
+          setNewProjectSiteAddress(result.address);
+          setNewProjectSiteLat(result.lat);
+          setNewProjectSiteLng(result.lng);
+        }}
+        title="Pick Site Location"
+        initialLat={newProjectSiteLat ?? undefined}
+        initialLng={newProjectSiteLng ?? undefined}
+        initialAddress={newProjectSiteAddress}
+      />
+
+      <LocationPickerModal
+        visible={showEditProjectMapPicker}
+        onClose={() => setShowEditProjectMapPicker(false)}
+        onSelect={(result) => {
+          setEditProjectSiteAddress(result.address);
+          setEditProjectSiteLat(result.lat);
+          setEditProjectSiteLng(result.lng);
+        }}
+        title="Pick Site Location"
+        initialLat={editProjectSiteLat ?? undefined}
+        initialLng={editProjectSiteLng ?? undefined}
+        initialAddress={editProjectSiteAddress}
+      />
     </View>
   );
 }
@@ -1668,6 +1713,24 @@ const styles = StyleSheet.create({
   coordText: {
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
+    color: Colors.primary,
+  },
+  dropPinBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderStyle: 'dashed',
+    alignSelf: 'flex-start',
+  },
+  dropPinBtnText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
     color: Colors.primary,
   },
 });
