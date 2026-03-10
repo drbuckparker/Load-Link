@@ -1075,8 +1075,8 @@ export default function CalendarScreen() {
         animationType="slide"
         onRequestClose={() => setShowTruckPicker(null)}
       >
-        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <View style={{ backgroundColor: Colors.cardBg, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 34 }}>
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.85)' }}>
+          <View style={{ backgroundColor: '#0a0a0f', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 34 }}>
             <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 18, color: Colors.text, marginBottom: 4 }}>
               {showTruckPicker === 'available' ? 'Mark Trucks Available' : 'Mark Trucks Unavailable'}
             </Text>
