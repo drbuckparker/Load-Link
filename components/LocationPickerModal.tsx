@@ -45,6 +45,7 @@ export default function LocationPickerModal({
     longitudeDelta: 0.15,
   });
   const [searchResults, setSearchResults] = useState<LocationResult[]>([]);
+  const [lightMap, setLightMap] = useState(false);
   const [showResults, setShowResults] = useState(false);
 
   useEffect(() => {
@@ -255,6 +256,7 @@ export default function LocationPickerModal({
             initialRegion={region}
             onPress={handleMapPress}
             mapType="standard"
+            userInterfaceStyle={lightMap ? 'light' : 'dark'}
           >
             {selectedLocation && (
               <Marker
@@ -269,17 +271,25 @@ export default function LocationPickerModal({
             )}
           </MapView>
 
-          <Pressable
-            style={({ pressed }) => [styles.myLocationBtn, pressed && styles.myLocationBtnPressed]}
-            onPress={handleFindMyLocation}
-            disabled={locating}
-          >
-            {locating ? (
-              <ActivityIndicator size="small" color={Colors.primary} />
-            ) : (
-              <Ionicons name="navigate" size={22} color={Colors.primary} />
-            )}
-          </Pressable>
+          <View style={styles.mapButtonsColumn}>
+            <Pressable
+              style={({ pressed }) => [styles.myLocationBtn, pressed && styles.myLocationBtnPressed]}
+              onPress={handleFindMyLocation}
+              disabled={locating}
+            >
+              {locating ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <Ionicons name="navigate" size={22} color={Colors.primary} />
+              )}
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.myLocationBtn, pressed && styles.myLocationBtnPressed]}
+              onPress={() => setLightMap(prev => !prev)}
+            >
+              <Ionicons name={lightMap ? 'moon' : 'sunny'} size={22} color={Colors.primary} />
+            </Pressable>
+          </View>
 
           {!selectedLocation && (
             <View style={styles.mapHint}>
@@ -406,10 +416,13 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
-  myLocationBtn: {
+  mapButtonsColumn: {
     position: 'absolute',
     top: 12,
     right: 12,
+    gap: 8,
+  },
+  myLocationBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
