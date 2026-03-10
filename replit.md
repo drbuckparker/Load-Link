@@ -22,7 +22,8 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 
 ### Backend (Direct Database Access)
 - **Technology**: Express.js with direct Neon PostgreSQL database access via Drizzle ORM.
-- **Architecture**: The Express backend connects directly to the same Neon database used by the companion web app. Both apps read/write to the same tables — no proxy or middleman. This gives the mobile app the fastest possible response times.
+- **Architecture**: The Express backend connects to a Neon database and syncs data from the companion web app (`loadlink.replit.app`) via API. Both apps have separate databases but stay in sync through a companion sync mechanism.
+- **Companion Sync**: On startup, login, and every 5 minutes, the server fetches jobs from the companion web app's API and upserts them into the local database. Missing users and projects are auto-created as placeholders. Jobs created on the mobile app are also pushed to the companion API. Manual sync available via `POST /api/sync/companion`.
 - **Key files**:
     - `server/routes.ts` — All API route handlers (~4,800 lines): auth, jobs, messaging, invoices, vehicles, projects, Google Maps/Places, etc.
     - `server/db.ts` — Neon PostgreSQL connection pool and Drizzle ORM instance

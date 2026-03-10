@@ -31,6 +31,225 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const resetTokens = new Map<string, { email: string; expiresAt: number }>();
 const authTokenMap = new Map<string, string>();
 
+const COMPANION_API_URL = process.env.COMPANION_API_URL || "";
+const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
+
+async function syncFromCompanion(userId?: string): Promise<{ jobsSynced: number; projectsSynced: number }> {
+  if (!COMPANION_API_URL || !COMPANION_API_KEY) {
+    console.log("Companion sync skipped: no API URL or key configured");
+    return { jobsSynced: 0, projectsSynced: 0 };
+  }
+
+  let jobsSynced = 0;
+  let projectsSynced = 0;
+
+  try {
+    const headers: Record<string, string> = { "X-API-Key": COMPANION_API_KEY };
+
+    const jobsRes = await fetch(`${COMPANION_API_URL}/api/jobs`, { headers });
+    if (jobsRes.ok) {
+      const jobsData = await jobsRes.json();
+      const companionJobs: any[] = Array.isArray(jobsData) ? jobsData : [];
+      const localUserIds = new Set((await db.select({ id: users.id }).from(users)).map(u => u.id));
+
+      for (const cj of companionJobs) {
+        if (!cj.id) continue;
+
+        for (const refId of [cj.contractorId, cj.driverId]) {
+          if (refId && !localUserIds.has(refId)) {
+            try {
+              const placeholderName = refId === cj.contractorId ? (cj.contractorName || "Companion Contractor") : "Companion Driver";
+              const placeholderRole = refId === cj.contractorId ? "contractor" : "driver";
+              await pool.query(
+                `INSERT INTO users (id, full_name, email, role, login_provider) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
+                [refId, placeholderName, `sync_${refId.slice(0, 8)}@loadlink.app`, placeholderRole, "email_password"]
+              );
+              localUserIds.add(refId);
+            } catch (userErr: any) {
+              localUserIds.add(refId);
+            }
+          }
+        }
+
+        let validProjectId = cj.projectId || null;
+        if (validProjectId) {
+          const projExists = await db.select({ id: contractorProjects.id }).from(contractorProjects).where(eq(contractorProjects.id, validProjectId)).limit(1);
+          if (projExists.length === 0) {
+            try {
+              await db.insert(contractorProjects).values({
+                id: validProjectId,
+                contractor_id: cj.contractorId || null,
+                name: cj.projectName || "Synced Project",
+                status: "active",
+              });
+            } catch {
+              validProjectId = null;
+            }
+          }
+        }
+
+        const existing = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, cj.id)).limit(1);
+        const jobData: any = {
+          contractor_id: cj.contractorId || null,
+          driver_id: cj.driverId || null,
+          material: cj.material || null,
+          origin_address: cj.originAddress || null,
+          destination_address: cj.destinationAddress || null,
+          origin_lat: cj.originLat || null,
+          origin_lng: cj.originLng || null,
+          destination_lat: cj.destinationLat || null,
+          destination_lng: cj.destinationLng || null,
+          distance: cj.distance || null,
+          rate: cj.rate || null,
+          rate_type: cj.rateType || "flat_rate",
+          truck_type: cj.truckType || null,
+          status: cj.status || "open",
+          urgent: cj.urgent || false,
+          scheduled_date: cj.scheduledDate ? new Date(cj.scheduledDate) : null,
+          completed_date: cj.completedDate ? new Date(cj.completedDate) : null,
+          pickup_time: cj.pickupTime || null,
+          capacity_needed: cj.capacityNeeded || null,
+          project_id: validProjectId,
+          estimated_duration_minutes: cj.estimatedDurationMinutes || null,
+          vehicle_id: cj.vehicleId || null,
+          job_type: cj.jobType || "single_load",
+          total_tons_needed: cj.totalTonsNeeded || null,
+          trucks_needed: cj.trucksNeeded || 1,
+          load_time_minutes: cj.loadTimeMinutes || 15,
+          unload_time_minutes: cj.unloadTimeMinutes || 10,
+          adjusted_trip_minutes: cj.adjustedTripMinutes || null,
+          estimated_total_minutes: cj.estimatedTotalMinutes || null,
+          estimated_days: cj.estimatedDays || null,
+          estimated_trips: cj.estimatedTrips || null,
+          listed_days: cj.listedDays || null,
+          includes_weekends: cj.includesWeekends || false,
+          estimated_cost: cj.estimatedCost || null,
+          requires_weight_tickets: cj.requiresWeightTickets || false,
+          total_amount_unit: cj.totalAmountUnit || "tons",
+          original_rate: cj.originalRate || null,
+          original_rate_type: cj.originalRateType || null,
+          requires_tarp: cj.requiresTarp || false,
+          invoice_id: cj.invoiceId || null,
+          cancelled_at: cj.cancelledAt ? new Date(cj.cancelledAt) : null,
+          updated_at: cj.updatedAt ? new Date(cj.updatedAt) : new Date(),
+        };
+
+        try {
+          if (existing.length > 0) {
+            await db.update(jobs).set(jobData).where(eq(jobs.id, cj.id));
+          } else {
+            await db.insert(jobs).values({ id: cj.id, ...jobData, created_at: cj.createdAt ? new Date(cj.createdAt) : new Date() });
+          }
+          jobsSynced++;
+        } catch (jobErr: any) {
+          console.error(`Sync job ${cj.id} failed:`, jobErr.message?.slice(0, 100));
+        }
+      }
+    }
+
+    if (userId) {
+      const projRes = await fetch(`${COMPANION_API_URL}/api/projects?contractor_id=${userId}`, { headers });
+      if (projRes.ok) {
+        const text = await projRes.text();
+        try {
+          const companionProjects: any[] = JSON.parse(text);
+          if (Array.isArray(companionProjects)) {
+            for (const cp of companionProjects) {
+              if (!cp.id) continue;
+              const existing = await db.select({ id: contractorProjects.id }).from(contractorProjects).where(eq(contractorProjects.id, cp.id)).limit(1);
+              const projData: any = {
+                contractor_id: cp.contractorId || cp.contractor_id || userId,
+                name: cp.name || null,
+                job_number: cp.jobNumber || cp.job_number || null,
+                awarded_amount: cp.awardedAmount || cp.awarded_amount || null,
+                status: cp.status || "active",
+                notes: cp.notes || null,
+                site_address: cp.siteAddress || cp.site_address || null,
+                site_lat: cp.siteLat || cp.site_lat || null,
+                site_lng: cp.siteLng || cp.site_lng || null,
+                updated_at: new Date(),
+              };
+
+              if (existing.length > 0) {
+                await db.update(contractorProjects).set(projData).where(eq(contractorProjects.id, cp.id));
+              } else {
+                await db.insert(contractorProjects).values({ id: cp.id, ...projData, created_at: cp.createdAt ? new Date(cp.createdAt) : new Date() });
+              }
+              projectsSynced++;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    console.log(`Companion sync complete: ${jobsSynced} jobs, ${projectsSynced} projects`);
+  } catch (err: any) {
+    console.error("Companion sync error:", err.message);
+  }
+
+  return { jobsSynced, projectsSynced };
+}
+
+async function pushJobToCompanion(jobId: string): Promise<boolean> {
+  if (!COMPANION_API_URL || !COMPANION_API_KEY) return false;
+  try {
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
+    if (!job) return false;
+
+    const headers: Record<string, string> = {
+      "X-API-Key": COMPANION_API_KEY,
+      "Content-Type": "application/json",
+    };
+
+    const body = {
+      id: job.id,
+      contractor_id: job.contractor_id,
+      driver_id: job.driver_id,
+      material: job.material,
+      origin_address: job.origin_address,
+      destination_address: job.destination_address,
+      origin_lat: job.origin_lat,
+      origin_lng: job.origin_lng,
+      destination_lat: job.destination_lat,
+      destination_lng: job.destination_lng,
+      distance: job.distance,
+      rate: job.rate,
+      rate_type: job.rate_type,
+      truck_type: job.truck_type,
+      status: job.status,
+      urgent: job.urgent,
+      scheduled_date: job.scheduled_date,
+      pickup_time: job.pickup_time,
+      capacity_needed: job.capacity_needed,
+      project_id: job.project_id,
+      job_type: job.job_type,
+      total_tons_needed: job.total_tons_needed,
+      trucks_needed: job.trucks_needed,
+      load_time_minutes: job.load_time_minutes,
+      unload_time_minutes: job.unload_time_minutes,
+      estimated_days: job.estimated_days,
+      estimated_trips: job.estimated_trips,
+      listed_days: job.listed_days,
+      includes_weekends: job.includes_weekends,
+      estimated_cost: job.estimated_cost,
+      requires_weight_tickets: job.requires_weight_tickets,
+      requires_tarp: job.requires_tarp,
+      total_amount_unit: job.total_amount_unit,
+    };
+
+    const res = await fetch(`${COMPANION_API_URL}/api/jobs/sync`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    return res.ok;
+  } catch (err: any) {
+    console.error("Push job to companion error:", err.message);
+    return false;
+  }
+}
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const pendingWeightTicketTimers = new Map<string, NodeJS.Timeout>();
@@ -164,6 +383,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await client.query("SELECT 1");
         client.release();
         console.log("Database connection established successfully");
+        syncFromCompanion().catch(e => console.error("Startup sync error:", e.message));
+        setInterval(() => {
+          syncFromCompanion().catch(e => console.error("Periodic sync error:", e.message));
+        }, 5 * 60 * 1000);
         return true;
       } catch (err: any) {
         console.log(`Database warmup attempt ${i + 1}/${retries} failed: ${err.message}`);
@@ -283,12 +506,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const token = crypto.randomBytes(32).toString('hex');
       authTokenMap.set(token, user.id);
 
+      syncFromCompanion(user.id).catch(e => console.error("Background sync error:", e.message));
+
       const { password: _, ...safeUser } = user;
       return res.json({ token, user: safeUser });
     } catch (err: any) {
       console.error("Login error:", err);
       const msg = err?.message?.includes("endpoint") ? "Database is waking up, please try again in a few seconds." : "Server error";
       return res.status(500).json({ message: msg });
+    }
+  });
+
+  app.post("/api/sync/companion", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.session as any).userId;
+      const result = await syncFromCompanion(userId);
+      return res.json({ message: "Sync complete", ...result });
+    } catch (err: any) {
+      console.error("Manual sync error:", err);
+      return res.status(500).json({ message: "Sync failed" });
     }
   });
 
@@ -3071,6 +3307,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           status: "open",
         })
         .returning();
+
+      pushJobToCompanion(job.id).catch(e => console.error("Push job to companion error:", e.message));
 
       return res.json(job);
     } catch (err) {
