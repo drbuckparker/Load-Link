@@ -86,7 +86,7 @@ export async function proxyRequest(req: Request, res: Response) {
 }
 
 export async function companionLogin(email: string, password: string) {
-  const response = await companionFetch("/api/companion/auth/login", {
+  const response = await companionFetch("/api/auth/login", {
     method: "POST",
     body: { email, password },
   });
@@ -96,5 +96,13 @@ export async function companionLogin(email: string, password: string) {
     throw new Error(data.message || data.error || "Login failed");
   }
 
-  return response.json();
+  const data = await response.json();
+
+  const cookieHeader = response.headers.get("set-cookie");
+
+  return {
+    token: data.sessionToken || data.token,
+    user: data.user,
+    cookie: cookieHeader,
+  };
 }
