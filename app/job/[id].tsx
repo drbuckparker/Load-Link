@@ -143,6 +143,7 @@ function mapJob(j: any): Job {
     estimatedCost: j.estimated_cost != null ? Number(j.estimated_cost) : j.estimatedCost != null ? Number(j.estimatedCost) : undefined,
     requiresTarp: j.requires_tarp ?? j.requiresTarp ?? false,
     requiresWeightTickets: j.requires_weight_tickets ?? j.requiresWeightTickets ?? false,
+    paperworkDescription: j.paperwork_description ?? j.paperworkDescription ?? null,
     capacityNeeded: j.capacity_needed ?? j.capacityNeeded,
     totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
     createdAt: j.created_at ?? j.createdAt ?? '',
@@ -185,6 +186,7 @@ export default function JobDetailScreen() {
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showResumeModal, setShowResumeModal] = useState(false);
+  const [showPaperworkInfo, setShowPaperworkInfo] = useState(false);
   const [showLoadsModal, setShowLoadsModal] = useState(false);
   const [loadsHauled, setLoadsHauled] = useState(1);
   const loadsScrollRef = useRef<ScrollView>(null);
@@ -1306,13 +1308,45 @@ export default function JobDetailScreen() {
           )}
           <View style={styles.titleRow}>
             <Text style={styles.material}>{job.material}</Text>
-            {job.urgent && (
-              <View style={styles.urgentBadge}>
-                <Ionicons name="flash" size={12} color={Colors.primary} />
-                <Text style={styles.urgentText}>URGENT</Text>
-              </View>
-            )}
           </View>
+          {(job.requiresTarp || job.requiresWeightTickets || job.urgent) && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+              {job.requiresTarp && (
+                <View style={styles.urgentBadge}>
+                  <Ionicons name="shield-checkmark" size={12} color={Colors.primary} />
+                  <Text style={styles.urgentText}>REQUIRES TARP</Text>
+                </View>
+              )}
+              {job.requiresWeightTickets && (
+                <View style={styles.urgentBadge}>
+                  <Ionicons name="document-text" size={12} color={Colors.primary} />
+                  <Text style={styles.urgentText}>WEIGHT TICKETS</Text>
+                </View>
+              )}
+              {job.urgent && (
+                <Pressable
+                  style={styles.urgentBadge}
+                  onPress={() => setShowPaperworkInfo(!showPaperworkInfo)}
+                >
+                  <Ionicons name="clipboard" size={12} color={Colors.primary} />
+                  <Text style={styles.urgentText}>SPECIAL PAPERWORK</Text>
+                  {job.paperworkDescription && (
+                    <Ionicons name={showPaperworkInfo ? "chevron-up" : "chevron-down"} size={12} color={Colors.primary} />
+                  )}
+                </Pressable>
+              )}
+            </View>
+          )}
+          {showPaperworkInfo && job.urgent && job.paperworkDescription && (
+            <View style={{ backgroundColor: Colors.primaryLight, borderRadius: 8, padding: 12, marginTop: 8 }}>
+              <Text style={{ color: Colors.primary, fontFamily: 'Inter_600SemiBold', fontSize: 12, marginBottom: 4 }}>
+                Required Paperwork:
+              </Text>
+              <Text style={{ color: Colors.text, fontFamily: 'Inter_400Regular', fontSize: 14, lineHeight: 20 }}>
+                {job.paperworkDescription}
+              </Text>
+            </View>
+          )}
           <Text style={styles.rateDisplay}>{formatRate(job.rate, job.rateType)}</Text>
           {job.estimatedCost && (
             <Text style={styles.estimatedCost}>Est. total: ${job.estimatedCost.toLocaleString()}</Text>

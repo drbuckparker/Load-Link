@@ -334,10 +334,22 @@ export default function JobsBrowseScreen() {
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <Text style={styles.cardMaterial} numberOfLines={1}>{item.material}</Text>
+            {item.requiresTarp && (
+              <View style={styles.urgentBadge}>
+                <Ionicons name="shield-checkmark" size={10} color={Colors.primary} />
+                <Text style={styles.urgentText}>TARP</Text>
+              </View>
+            )}
+            {item.requiresWeightTickets && (
+              <View style={styles.urgentBadge}>
+                <Ionicons name="document-text" size={10} color={Colors.primary} />
+                <Text style={styles.urgentText}>WEIGHT TICKETS</Text>
+              </View>
+            )}
             {item.urgent && (
               <View style={styles.urgentBadge}>
-                <Ionicons name="flash" size={10} color={Colors.primary} />
-                <Text style={styles.urgentText}>URGENT</Text>
+                <Ionicons name="clipboard" size={10} color={Colors.primary} />
+                <Text style={styles.urgentText}>PAPERWORK</Text>
               </View>
             )}
           </View>
