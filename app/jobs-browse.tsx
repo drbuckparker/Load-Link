@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor, timeAgo } from '@/lib/mock-data';
@@ -119,6 +120,19 @@ export default function JobsBrowseScreen() {
   const [showEditProjectMapPicker, setShowEditProjectMapPicker] = useState(false);
   const siteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const siteGeoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          userLocationRef.current = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+        }
+      } catch {}
+    })();
+  }, []);
 
   const statusParam = useMemo(() => {
     if (activeFilter === 'All') return undefined;
@@ -513,7 +527,11 @@ export default function JobsBrowseScreen() {
       const baseUrl = getApiUrl();
       const url = new URL('/api/places/autocomplete', baseUrl);
       url.searchParams.set('input', text);
-      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (userLocationRef.current) {
+        url.searchParams.set('lat', String(userLocationRef.current.lat));
+        url.searchParams.set('lng', String(userLocationRef.current.lng));
+      }
+      const res = await apiRequest('GET', url.pathname + url.search);
       if (!res.ok) return;
       const data = await res.json();
       if (target === 'new') { setNewSiteSuggestions(data); setShowNewSiteSuggestions(data.length > 0); }
@@ -525,10 +543,7 @@ export default function JobsBrowseScreen() {
     if (target === 'new') { setNewProjectSiteAddress(description); setShowNewSiteSuggestions(false); setNewSiteSuggestions([]); }
     else { setEditProjectSiteAddress(description); setShowEditSiteSuggestions(false); setEditSiteSuggestions([]); }
     try {
-      const baseUrl = getApiUrl();
-      const url = new URL('/api/places/details', baseUrl);
-      url.searchParams.set('place_id', placeId);
-      const res = await fetch(url.toString(), { credentials: 'include' });
+      const res = await apiRequest('GET', `/api/places/details?place_id=${encodeURIComponent(placeId)}`);
       if (res.ok) {
         const data = await res.json();
         if (target === 'new') {
@@ -545,10 +560,7 @@ export default function JobsBrowseScreen() {
   async function geocodeSiteAddress(address: string, target: 'new' | 'edit') {
     if (address.trim().length < 3) return;
     try {
-      const baseUrl = getApiUrl();
-      const geoUrl = new URL('/api/places/geocode', baseUrl);
-      geoUrl.searchParams.set('address', address);
-      const res = await fetch(geoUrl.toString(), { credentials: 'include' });
+      const res = await apiRequest('GET', `/api/places/geocode?address=${encodeURIComponent(address)}`);
       if (res.ok) {
         const data = await res.json();
         if (target === 'new') {
