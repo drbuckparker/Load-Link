@@ -28,10 +28,22 @@ export default function JobCard({ job, onPress, showStatus = false }: JobCardPro
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.material} numberOfLines={1}>{job.material}</Text>
+          {job.requiresTarp && (
+            <View style={styles.urgentBadge}>
+              <Ionicons name="shield-checkmark" size={10} color={Colors.primary} />
+              <Text style={styles.urgentText}>TARP</Text>
+            </View>
+          )}
+          {job.requiresWeightTickets && (
+            <View style={styles.urgentBadge}>
+              <Ionicons name="document-text" size={10} color={Colors.primary} />
+              <Text style={styles.urgentText}>WEIGHT TICKETS</Text>
+            </View>
+          )}
           {job.urgent && (
             <View style={styles.urgentBadge}>
-              <Ionicons name="flash" size={10} color={Colors.primary} />
-              <Text style={styles.urgentText}>URGENT</Text>
+              <Ionicons name="clipboard" size={10} color={Colors.primary} />
+              <Text style={styles.urgentText}>PAPERWORK</Text>
             </View>
           )}
         </View>
