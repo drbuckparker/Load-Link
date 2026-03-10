@@ -200,6 +200,8 @@ export default function CalendarScreen() {
   const [saving, setSaving] = useState(false);
   const [trucksExpanded, setTrucksExpanded] = useState(true);
   const [savingQuick, setSavingQuick] = useState<string | null>(null);
+  const [showTruckPicker, setShowTruckPicker] = useState<'available' | 'unavailable' | null>(null);
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
 
   const isContractor = user?.role ? isContractorRole(user.role) : false;
 
@@ -223,13 +225,35 @@ export default function CalendarScreen() {
 
   useEffect(() => {
     if (availQuery.data) {
-      const mapped: Record<string, { status: AvailabilityStatus; name?: string; shift?: string; notes?: string; startTime?: string; endTime?: string }> = {};
+      const grouped: Record<string, { available: number; unavailable: number; committed: number; lastItem: any }> = {};
       for (const item of availQuery.data) {
         const d = new Date(item.date);
         const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        if (!grouped[key]) grouped[key] = { available: 0, unavailable: 0, committed: 0, lastItem: item };
         if (item.job_id || item.commitment_type) {
-          mapped[key] = { status: 'committed', name: item.commitment_company_name || 'Job' };
+          grouped[key].committed++;
         } else if (item.is_available) {
+          grouped[key].available++;
+        } else {
+          grouped[key].unavailable++;
+        }
+        grouped[key].lastItem = item;
+      }
+
+      const mapped: Record<string, { status: AvailabilityStatus; name?: string; shift?: string; notes?: string; startTime?: string; endTime?: string }> = {};
+      for (const [key, g] of Object.entries(grouped)) {
+        const item = g.lastItem;
+        if (g.committed > 0) {
+          mapped[key] = { status: 'committed', name: item.commitment_company_name || 'Job' };
+        } else if (g.available > 0 && g.unavailable > 0) {
+          mapped[key] = {
+            status: 'available',
+            shift: getShiftFromTimes(item.start_time, item.end_time),
+            notes: item.notes || '',
+            startTime: item.start_time,
+            endTime: item.end_time,
+          };
+        } else if (g.available > 0) {
           mapped[key] = {
             status: 'available',
             shift: getShiftFromTimes(item.start_time, item.end_time),
@@ -476,18 +500,48 @@ export default function CalendarScreen() {
     setModalVisible(false);
   }
 
-  async function quickSetAvailability(dateKey: string, isAvailable: boolean) {
+  function handleAvailabilityPress(isAvailable: boolean) {
+    const vehicles = vehiclesQuery.data || [];
+    if (vehicles.length > 1) {
+      setSelectedVehicleIds(new Set(vehicles.map((v: any) => v.id)));
+      setShowTruckPicker(isAvailable ? 'available' : 'unavailable');
+    } else {
+      quickSetAvailability(selectedDate, isAvailable, vehicles.length === 1 ? [vehicles[0].id] : undefined);
+    }
+  }
+
+  function toggleVehicleSelection(vehicleId: string) {
+    setSelectedVehicleIds(prev => {
+      const next = new Set(prev);
+      if (next.has(vehicleId)) next.delete(vehicleId);
+      else next.add(vehicleId);
+      return next;
+    });
+  }
+
+  function confirmTruckPicker() {
+    if (!showTruckPicker || !selectedDate || selectedVehicleIds.size === 0) return;
+    const isAvailable = showTruckPicker === 'available';
+    const vIds = Array.from(selectedVehicleIds);
+    setShowTruckPicker(null);
+    quickSetAvailability(selectedDate, isAvailable, vIds);
+  }
+
+  async function quickSetAvailability(dateKey: string, isAvailable: boolean, vehicleIds?: string[]) {
     setSavingQuick(isAvailable ? 'available' : 'unavailable');
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      await apiRequest('POST', '/api/availability', {
+      const body: any = {
         date: dateKey,
         isAvailable,
         startTime: '06:00',
         endTime: '18:00',
         shift: 'day',
         recurrence: 'none',
-      });
+      };
+      if (vehicleIds && vehicleIds.length > 0) body.vehicle_ids = vehicleIds;
+      await apiRequest('POST', '/api/availability', body);
+
       setAvailability(prev => ({
         ...prev,
         [dateKey]: {
@@ -908,7 +962,7 @@ export default function CalendarScreen() {
                     gap: 6, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, minHeight: 44,
                     borderColor: Colors.success,
                   }, isCurrentlyAvailable && { backgroundColor: Colors.success, borderColor: Colors.success }]}
-                  onPress={() => quickSetAvailability(selectedDate, true)}
+                  onPress={() => handleAvailabilityPress(true)}
                   disabled={!!savingQuick}
                 >
                   {savingQuick === 'available' ? (
@@ -928,7 +982,7 @@ export default function CalendarScreen() {
                     gap: 6, paddingVertical: 12, borderRadius: 10, borderWidth: 1.5, minHeight: 44,
                     borderColor: Colors.destructive,
                   }, isCurrentlyUnavailable && { backgroundColor: Colors.destructive, borderColor: Colors.destructive }]}
-                  onPress={() => quickSetAvailability(selectedDate, false)}
+                  onPress={() => handleAvailabilityPress(false)}
                   disabled={!!savingQuick}
                 >
                   {savingQuick === 'unavailable' ? (
@@ -1014,6 +1068,91 @@ export default function CalendarScreen() {
             : 'Tap a date to manage availability and view booked jobs.'}
         </Text>
       </ScrollView>
+
+      <Modal
+        visible={!!showTruckPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowTruckPicker(null)}
+      >
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <View style={{ backgroundColor: Colors.cardBg, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 34 }}>
+            <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 18, color: Colors.text, marginBottom: 4 }}>
+              {showTruckPicker === 'available' ? 'Mark Trucks Available' : 'Mark Trucks Unavailable'}
+            </Text>
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted, marginBottom: 16 }}>
+              Select which trucks to {showTruckPicker === 'available' ? 'mark available' : 'mark unavailable'} for {selectedDate ? new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+            </Text>
+
+            <Pressable
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border }}
+              onPress={() => {
+                const vehicles = vehiclesQuery.data || [];
+                if (selectedVehicleIds.size === vehicles.length) {
+                  setSelectedVehicleIds(new Set());
+                } else {
+                  setSelectedVehicleIds(new Set(vehicles.map((v: any) => v.id)));
+                }
+              }}
+            >
+              <Ionicons
+                name={selectedVehicleIds.size === (vehiclesQuery.data?.length || 0) ? "checkbox" : "square-outline"}
+                size={22}
+                color={selectedVehicleIds.size === (vehiclesQuery.data?.length || 0) ? Colors.primary : Colors.textMuted}
+              />
+              <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 15, color: Colors.text }}>Select All</Text>
+            </Pressable>
+
+            {(vehiclesQuery.data || []).map((v: any) => {
+              const isSelected = selectedVehicleIds.has(v.id);
+              const truckName = v.truck_number || v.license_plate || `Truck ${v.id.slice(0, 6)}`;
+              const truckDetail = [v.year, v.make, v.model].filter(Boolean).join(' ');
+              const truckType = (v.truck_type || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+              return (
+                <Pressable
+                  key={v.id}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.border }}
+                  onPress={() => toggleVehicleSelection(v.id)}
+                >
+                  <Ionicons
+                    name={isSelected ? "checkbox" : "square-outline"}
+                    size={22}
+                    color={isSelected ? Colors.primary : Colors.textMuted}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.text }}>{truckName}</Text>
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted }}>
+                      {[truckType, truckDetail, v.max_capacity_tons ? `${v.max_capacity_tons}t` : ''].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 20 }}>
+              <Pressable
+                style={{ flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: 'center', backgroundColor: Colors.muted }}
+                onPress={() => setShowTruckPicker(null)}
+              >
+                <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.textSecondary }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={{
+                  flex: 1, paddingVertical: 14, borderRadius: 10, alignItems: 'center',
+                  backgroundColor: showTruckPicker === 'available' ? Colors.success : Colors.destructive,
+                  opacity: selectedVehicleIds.size === 0 ? 0.5 : 1,
+                }}
+                onPress={confirmTruckPicker}
+                disabled={selectedVehicleIds.size === 0}
+              >
+                <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: '#fff' }}>
+                  {showTruckPicker === 'available' ? 'Mark Available' : 'Mark Unavailable'} ({selectedVehicleIds.size})
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {!isContractor && <Modal
         visible={modalVisible}

@@ -2686,16 +2686,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/availability", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = (req.session as any).userId;
-      const { date, isAvailable, startTime, endTime, notes, shift, recurrence, remove } = req.body;
+      const { date, isAvailable, startTime, endTime, notes, shift, recurrence, remove, vehicle_ids } = req.body;
 
       const dateObj = new Date(date);
+      const dayOfWeek = dateObj.getDay();
+
+      if (vehicle_ids && Array.isArray(vehicle_ids) && vehicle_ids.length > 0) {
+        const results: any[] = [];
+        for (const vid of vehicle_ids) {
+          const existing = await db
+            .select()
+            .from(driverAvailability)
+            .where(
+              and(
+                eq(driverAvailability.driver_id, userId),
+                eq(driverAvailability.date, dateObj),
+                eq(driverAvailability.vehicle_id, vid)
+              )
+            )
+            .limit(1);
+
+          if (remove && existing.length > 0) {
+            await db.delete(driverAvailability).where(eq(driverAvailability.id, existing[0].id));
+            results.push({ removed: true, vehicle_id: vid });
+          } else if (existing.length > 0) {
+            const [updated] = await db
+              .update(driverAvailability)
+              .set({
+                is_available: isAvailable ?? true,
+                start_time: startTime || "06:00",
+                end_time: endTime || "18:00",
+                notes: notes || null,
+                recurrence: recurrence || "none",
+                day_of_week: recurrence === "weekly" ? dayOfWeek : null,
+                updated_at: new Date(),
+              })
+              .where(eq(driverAvailability.id, existing[0].id))
+              .returning();
+            results.push(updated);
+          } else {
+            const [created] = await db
+              .insert(driverAvailability)
+              .values({
+                driver_id: userId,
+                date: dateObj,
+                is_available: isAvailable ?? true,
+                start_time: startTime || "06:00",
+                end_time: endTime || "18:00",
+                notes: notes || null,
+                recurrence: recurrence || "none",
+                day_of_week: recurrence === "weekly" ? dayOfWeek : null,
+                vehicle_id: vid,
+              })
+              .returning();
+            results.push(created);
+          }
+        }
+        return res.json(results);
+      }
+
       const existing = await db
         .select()
         .from(driverAvailability)
         .where(
           and(
             eq(driverAvailability.driver_id, userId),
-            eq(driverAvailability.date, dateObj)
+            eq(driverAvailability.date, dateObj),
+            sql`${driverAvailability.vehicle_id} IS NULL`
           )
         )
         .limit(1);
@@ -2706,8 +2763,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .where(eq(driverAvailability.id, existing[0].id));
         return res.json({ removed: true });
       }
-
-      const dayOfWeek = dateObj.getDay();
 
       if (existing.length > 0) {
         const [updated] = await db

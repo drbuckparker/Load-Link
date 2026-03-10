@@ -283,6 +283,7 @@ export const driverAvailability = pgTable("driver_availability", {
   job_id: varchar("job_id").references(() => jobs.id),
   commitment_type: text("commitment_type"),
   commitment_company_name: text("commitment_company_name"),
+  vehicle_id: varchar("vehicle_id"),
 });
 
 export const monthlyInvoices = pgTable("monthly_invoices", {
