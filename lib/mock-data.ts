@@ -92,7 +92,7 @@ export function formatRate(rate: number, rateType: string): string {
 export function formatJobType(jobType: string, estimatedDays?: number): string {
   switch (jobType) {
     case 'single_load': return 'Single Load';
-    case 'full_day': return 'Full Day';
+    case 'full_day': return 'Single Day';
     case 'multi_day': return estimatedDays && estimatedDays > 1 ? `Multi-Day (${estimatedDays}d)` : 'Full Day';
     default: return jobType;
   }
