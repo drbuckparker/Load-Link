@@ -4189,7 +4189,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             count: sql<number>`count(*)::int`,
           })
           .from(jobs)
-          .where(inArray(jobs.project_id, projectIds))
+          .where(and(inArray(jobs.project_id, projectIds), not(eq(jobs.status, "cancelled" as any))))
           .groupBy(jobs.project_id);
 
         for (const c of counts) {
