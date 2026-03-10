@@ -93,7 +93,7 @@ export function formatJobType(jobType: string, estimatedDays?: number): string {
   switch (jobType) {
     case 'single_load': return 'Single Load';
     case 'full_day': return 'Single Day';
-    case 'multi_day': return estimatedDays && estimatedDays > 1 ? `Multi-Day (${estimatedDays}d)` : 'Full Day';
+    case 'multi_day': return estimatedDays && estimatedDays > 1 ? `Multi-Day (${estimatedDays}d)` : 'Multi-Day';
     default: return jobType;
   }
 }

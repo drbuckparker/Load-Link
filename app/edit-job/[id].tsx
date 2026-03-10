@@ -22,7 +22,7 @@ import { fetch } from 'expo/fetch';
 
 const JOB_TYPES = [
   { label: 'Single Load', value: 'single_load' },
-  { label: 'Full Day', value: 'full_day' },
+  { label: 'Single Day', value: 'full_day' },
   { label: 'Multi-Day', value: 'multi_day' },
 ] as const;
 
