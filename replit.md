@@ -1,7 +1,7 @@
-# LoadLink Mobile Companion App
+# LoadLink Mobile App (Companion to LoadLink Website)
 
 ## Overview
-The LoadLink Mobile Companion App is designed to extend the functionality of the existing LoadLink logistics web platform to mobile devices. It serves all user roles within the short-haul trucking and construction industries, including truck drivers, contractors, trucking companies, and foremen. The app aims to streamline job management, communication, and financial tracking for all stakeholders, providing a comprehensive mobile solution for logistics operations.
+The LoadLink Mobile App is the companion to the main LoadLink website (`loadlink.replit.app`). It extends the functionality of the existing LoadLink logistics web platform to mobile devices. It serves all user roles within the short-haul trucking and construction industries, including truck drivers, contractors, trucking companies, and foremen. The app aims to streamline job management, communication, and financial tracking for all stakeholders, providing a comprehensive mobile solution for logistics operations.
 
 ## User Preferences
 I want to prioritize a clean, maintainable, and well-structured codebase. I prefer clear and concise explanations for any proposed changes, focusing on the "why" as much as the "what." For development, I prefer an iterative approach, with small, testable changes. Please ask for confirmation before implementing major architectural changes or refactoring large portions of the codebase. When making changes, ensure that all existing features continue to function as expected, especially role-based access and UI elements.
@@ -20,31 +20,31 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Interactive Elements**: Liquid glass tab bar on iOS 26+ with BlurView fallback.
     - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
 
-### Backend (Companion API Proxy)
-- **Technology**: Express.js acting as a thin proxy layer to the companion web app API at `loadlink.replit.app`.
-- **Architecture**: The Express backend has **NO direct database access**. All reads and writes go through the companion web app's REST API. The backend handles auth token mapping, Google Maps/Places proxying, and constructs some derived endpoints (dashboard, calendar, earnings) from companion API data.
+### Backend (Website API Proxy)
+- **Technology**: Express.js acting as a thin proxy layer to the main LoadLink website API at `loadlink.replit.app`.
+- **Architecture**: The Express backend has **NO direct database access**. All reads and writes go through the website's REST API. The backend handles auth token mapping, Google Maps/Places proxying, and constructs some derived endpoints (dashboard, calendar, earnings) from website API data.
 - **Key files**:
-    - `server/routes.ts` — Proxy route handlers: auth, companion API forwarding, Google Maps/Places, derived endpoints
+    - `server/routes.ts` — Proxy route handlers: auth, website API forwarding, Google Maps/Places, derived endpoints
     - `server/index.ts` — Express app setup (CORS, body parsing, landing page)
-    - `server/db.ts` — (legacy, no longer imported by routes) Neon PostgreSQL pool
+    - `server/db.ts` — (legacy, no longer imported by routes)
     - `shared/schema.ts` — (legacy) Drizzle ORM schema definitions
     - `server/routes.ts.bak` — Backup of the old direct-DB routes file
 - **Authentication flow**:
     1. Frontend sends `POST /api/auth/login` with `{email, password}`
     2. Express forwards email to `POST https://loadlink.replit.app/api/companion/auth/login` with `X-API-Key` header (password not sent — API key establishes trust)
-    3. Companion returns a JWT + user object
-    4. Express generates a local token, maps it to the companion JWT
+    3. Website returns a JWT + user object
+    4. Express generates a local token, maps it to the website JWT
     5. Frontend stores local token in AsyncStorage, sends via `Authorization: Bearer` header
-    6. `requireAuth` middleware checks local token → looks up companion JWT
-    7. All subsequent API calls forward to companion with `Authorization: Bearer <JWT>` + `X-API-Key`
+    6. `requireAuth` middleware checks local token → looks up website JWT
+    7. All subsequent API calls forward to website with `Authorization: Bearer <JWT>` + `X-API-Key`
 - **Endpoint categories**:
-    - **Proxied to companion**: jobs, job actions (accept/withdraw/clock-in/clock-out), conversations, messages, notifications, invoices, vehicles, reviews, favorites
-    - **Built locally from companion data**: dashboard, profile, calendar/jobs, contractor/jobs, driver/jobs, earnings, projects, materials, saved-locations, availability, messages/unread-count
-    - **Handled locally (no companion)**: Google Maps/Places autocomplete/details/geocode/directions/polyline/embed
+    - **Proxied to website**: jobs, job actions (accept/withdraw/clock-in/clock-out), conversations, messages, notifications, invoices, vehicles, reviews, favorites
+    - **Built locally from website data**: dashboard, profile, calendar/jobs, contractor/jobs, driver/jobs, earnings, projects, materials, saved-locations, availability, messages/unread-count
+    - **Handled locally**: Google Maps/Places autocomplete/details/geocode/directions/polyline/embed
 - **Response format**: All JSON responses include both camelCase and snake_case keys via `addDualKeys()` utility, ensuring backward compatibility with frontend code that uses either format.
 - **Environment variables**:
-    - `COMPANION_API_KEY` — API key for authenticating with the companion web app
-    - `COMPANION_API_URL` — Base URL of companion web app (default: `https://loadlink.replit.app`)
+    - `COMPANION_API_KEY` — API key for authenticating with the LoadLink website
+    - `COMPANION_API_URL` — Base URL of the LoadLink website (default: `https://loadlink.replit.app`)
     - `GOOGLE_MAPS_API_KEY` — Google Maps/Places API key
 - **Google Maps API note**: The Google Geocoding API is not enabled on the project. The `/api/places/geocode` route uses Google's "Find Place from Text" API instead.
 
@@ -61,7 +61,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Partial Availability**: Drivers can specify which days they're available for multi-day jobs via `available_days` on job_assignments.
 
 ## External Dependencies
-- **Companion Web App** (`loadlink.replit.app`): Single source of truth for all data. Mobile app reads/writes via companion API. Auth uses `X-API-Key` + JWT from companion login.
+- **LoadLink Website** (`loadlink.replit.app`): The original project and single source of truth for all data. This mobile app reads/writes via the website's API. Auth uses `X-API-Key` + JWT from the website's companion auth endpoint.
 - **Mapping/Location Services**:
     - Google Places API (for autocomplete and details).
     - Google Maps JavaScript API (for web map view and directions).
@@ -69,8 +69,8 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - Native device map applications (iOS Maps / Android Geo) for external navigation.
 - **Push Notification Service**: Expo Push API (exp.host).
 
-## Companion API Endpoints
-The companion web app at `loadlink.replit.app` provides these working endpoints:
+## Website API Endpoints
+The LoadLink website at `loadlink.replit.app` provides these working endpoints for the mobile companion app:
 - **Auth**: `POST /api/companion/auth/login` (email-only, API key establishes trust)
 - **Jobs**: `GET /api/jobs`, `GET /api/jobs/:id`, `POST /api/jobs`, `PUT /api/jobs/:id`, `DELETE /api/jobs/:id`
 - **Job actions**: `/api/jobs/:id/accept`, `/api/jobs/:id/withdraw`, etc.
@@ -79,7 +79,7 @@ The companion web app at `loadlink.replit.app` provides these working endpoints:
 - **Invoices**: `GET /api/invoices`
 - **Vehicles**: `GET /api/vehicles` (driver role only)
 
-Endpoints NOT available on companion (built locally from jobs data):
+Endpoints NOT available on the website (built locally from jobs data):
 - `/api/profile`, `/api/dashboard`, `/api/earnings`, `/api/calendar/jobs`
 - `/api/contractor/jobs`, `/api/driver/jobs`, `/api/availability`
 - `/api/projects`, `/api/materials`, `/api/saved-locations`
