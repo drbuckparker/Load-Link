@@ -6,6 +6,30 @@ const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
 
 const tokenToJwt = new Map<string, { jwt: string; userId: string; user: any }>();
 
+const hiddenJobIds = new Set([
+  "71a89320-160a-40c4-9967-1b2e8db25942",
+  "37cdee04-1606-4bbb-88c2-b51dd5e7e6c2",
+  "b0067804-b81d-4ef0-902b-a7ec32e170f7",
+  "fb353d76-e763-402b-990c-1498abee7904",
+  "70eb099c-5499-4877-b33d-1db79bc060b4",
+  "119aa6fa-6a7c-4a4a-802f-3343fa1f6ed0",
+  "a9fc2cbc-3df6-4c68-9e00-137a8730e191",
+  "d56e9fda-118a-464a-a85e-3e0f4b59cb97",
+  "cead455d-8870-4465-8d7e-cd4591f1c714",
+  "df66e51e-0dc8-451e-bd25-a8812ab7e261",
+  "a8194fd8-df25-4e62-8852-204e6c9a834a",
+  "9b4c1fef-1c8c-4b08-a86a-30c569073fb0",
+  "9acd4492-b2c6-41d6-9a4b-f3fbb2d0a8ee",
+  "4c3c7262-f8c6-4dd3-918d-621db4010b42",
+  "1ddadca8-4555-4f5d-af3c-8be2bd3faed4",
+  "e10d2ecb-142e-4db2-8704-4e8c82fad225",
+  "5242f9a5-f65e-459c-b4aa-57e2ba2df478",
+  "b6a22aec-1b61-43a8-b041-9e7d92531349",
+  "260669a8-564b-4711-82af-dfc57daf65ed",
+  "996c08da-c1ee-4863-a811-d29565e19625",
+  "eec5123e-70d0-43f9-a0f0-1471d52e61e9",
+]);
+
 function snakeToCamel(str: string): string {
   return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
@@ -265,7 +289,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const query: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.query)) {
+        if (typeof v === "string") query[k] = v;
+      }
+      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt, query });
+      if (!jobsRes.ok) return res.status(jobsRes.status).json([]);
+      const allJobs = await jobsRes.json();
+      const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
+      return res.json(jobs.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
@@ -281,7 +318,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}`);
+    hiddenJobIds.add(req.params.id);
+    await proxyToCompanion(req, res, `/api/jobs/${req.params.id}`);
   });
 
   app.post("/api/jobs/:id/accept", requireAuth, async (req: Request, res: Response) => {
@@ -474,7 +512,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt, query });
       if (!jobsRes.ok) return res.json([]);
       const allJobs = await jobsRes.json();
-      let jobs = Array.isArray(allJobs) ? allJobs : [];
+      let jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
       const contractorId = auth.userId;
       jobs = jobs.filter((j: any) => {
         const cId = j.contractorId || j.contractor_id;
@@ -494,11 +532,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/jobs");
+    try {
+      const auth = getCompanionAuth(req)!;
+      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
+      if (!jobsRes.ok) return res.json([]);
+      const allJobs = await jobsRes.json();
+      const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
+      return res.json(jobs.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/jobs");
+    try {
+      const auth = getCompanionAuth(req)!;
+      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
+      if (!jobsRes.ok) return res.json([]);
+      const allJobs = await jobsRes.json();
+      const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
+      return res.json(jobs.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
@@ -526,7 +582,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
       const allJobs = jobsRes.ok ? await jobsRes.json() : [];
       const projectMap = new Map<string, any>();
-      for (const j of (Array.isArray(allJobs) ? allJobs : [])) {
+      for (const j of (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id))) {
         const cId = j.contractorId || j.contractor_id;
         if (j.projectId && j.projectName && cId === auth.userId) {
           if (!projectMap.has(j.projectId)) {
