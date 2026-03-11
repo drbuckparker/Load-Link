@@ -913,7 +913,7 @@ export default function JobsBrowseScreen() {
               />
             </View>
 
-            <View style={styles.modalField}>
+            <View style={[styles.modalField, { zIndex: 100 }]}>
               <Text style={styles.modalLabel}>Site Address</Text>
               <TextInput
                 style={styles.modalInput}
@@ -1017,7 +1017,7 @@ export default function JobsBrowseScreen() {
                 />
               </View>
 
-              <View style={styles.modalField}>
+              <View style={[styles.modalField, { zIndex: 100 }]}>
                 <Text style={styles.modalLabel}>Site Address</Text>
                 <TextInput
                   style={styles.modalInput}
@@ -1712,6 +1712,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
     maxHeight: 160,
     overflow: 'hidden' as const,
+    zIndex: 999,
+    elevation: 10,
   },
   suggestionItem: {
     flexDirection: 'row' as const,
