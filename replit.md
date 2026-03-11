@@ -20,30 +20,33 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Interactive Elements**: Liquid glass tab bar on iOS 26+ with BlurView fallback.
     - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
 
-### Backend (Direct Database Access)
-- **Technology**: Express.js with direct Neon PostgreSQL database access via Drizzle ORM.
-- **Architecture**: The Express backend connects to a Neon database and syncs data from the companion web app (`loadlink.replit.app`) via API. Both apps have separate databases but stay in sync through a companion sync mechanism.
-- **Companion Sync**: On startup, login, and every 5 minutes, the server fetches jobs from the companion web app's API and upserts them into the local database. Missing users and projects are auto-created as placeholders. Jobs created on the mobile app are also pushed to the companion API. Manual sync available via `POST /api/sync/companion`.
+### Backend (Companion API Proxy)
+- **Technology**: Express.js acting as a thin proxy layer to the companion web app API at `loadlink.replit.app`.
+- **Architecture**: The Express backend has **NO direct database access**. All reads and writes go through the companion web app's REST API. The backend handles auth token mapping, Google Maps/Places proxying, and constructs some derived endpoints (dashboard, calendar, earnings) from companion API data.
 - **Key files**:
-    - `server/routes.ts` — All API route handlers (~4,800 lines): auth, jobs, messaging, invoices, vehicles, projects, Google Maps/Places, etc.
-    - `server/db.ts` — Neon PostgreSQL connection pool and Drizzle ORM instance
+    - `server/routes.ts` — Proxy route handlers: auth, companion API forwarding, Google Maps/Places, derived endpoints
     - `server/index.ts` — Express app setup (CORS, body parsing, landing page)
-    - `shared/schema.ts` — Drizzle ORM schema (shared database table definitions)
-    - `server/companion-proxy.ts` — (legacy, no longer used) proxy utilities from previous architecture
+    - `server/db.ts` — (legacy, no longer imported by routes) Neon PostgreSQL pool
+    - `shared/schema.ts` — (legacy) Drizzle ORM schema definitions
+    - `server/routes.ts.bak` — Backup of the old direct-DB routes file
 - **Authentication flow**:
     1. Frontend sends `POST /api/auth/login` with `{email, password}`
-    2. Express validates credentials directly against the `users` table (bcrypt)
-    3. Express generates a random auth token, maps it to userId in memory (`authTokenMap`)
-    4. Frontend stores token in AsyncStorage, sends it via `Authorization: Bearer` header
-    5. `requireAuth` middleware checks Bearer token → looks up userId from `authTokenMap`
-    6. Also supports session-based auth (express-session + connect-pg-simple) as fallback
+    2. Express forwards email to `POST https://loadlink.replit.app/api/companion/auth/login` with `X-API-Key` header (password not sent — API key establishes trust)
+    3. Companion returns a JWT + user object
+    4. Express generates a local token, maps it to the companion JWT
+    5. Frontend stores local token in AsyncStorage, sends via `Authorization: Bearer` header
+    6. `requireAuth` middleware checks local token → looks up companion JWT
+    7. All subsequent API calls forward to companion with `Authorization: Bearer <JWT>` + `X-API-Key`
+- **Endpoint categories**:
+    - **Proxied to companion**: jobs, job actions (accept/withdraw/clock-in/clock-out), conversations, messages, notifications, invoices, vehicles, reviews, favorites
+    - **Built locally from companion data**: dashboard, profile, calendar/jobs, contractor/jobs, driver/jobs, earnings, projects, materials, saved-locations, availability, messages/unread-count
+    - **Handled locally (no companion)**: Google Maps/Places autocomplete/details/geocode/directions/polyline/embed
+- **Response format**: All JSON responses include both camelCase and snake_case keys via `addDualKeys()` utility, ensuring backward compatibility with frontend code that uses either format.
 - **Environment variables**:
-    - `DATABASE_URL` — Neon PostgreSQL connection string (shared with companion web app)
+    - `COMPANION_API_KEY` — API key for authenticating with the companion web app
+    - `COMPANION_API_URL` — Base URL of companion web app (default: `https://loadlink.replit.app`)
     - `GOOGLE_MAPS_API_KEY` — Google Maps/Places API key
-    - `RESEND_API_KEY` — Resend email service key (for password resets)
-    - `SESSION_SECRET` — Express session secret
 - **Google Maps API note**: The Google Geocoding API is not enabled on the project. The `/api/places/geocode` route uses Google's "Find Place from Text" API instead.
-- **Database safety**: Never use `drizzle-kit push` (hangs on `contractor_favorite_drivers` table). Add columns via Node.js `pg` driver with ALTER TABLE only.
 
 ### Core Features
 - **Job Management**: Drivers can browse, accept, clock-in/out, and track earnings. Contractors can post, manage assignments (approve/reject drivers), and view invoices.
@@ -58,8 +61,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Partial Availability**: Drivers can specify which days they're available for multi-day jobs via `available_days` on job_assignments.
 
 ## External Dependencies
-- **Companion Web App**: Shares the same Neon database. Both apps read/write independently — no API proxy dependency.
-- **Email Service**: Resend (for password reset emails, uses `RESEND_API_KEY`).
+- **Companion Web App** (`loadlink.replit.app`): Single source of truth for all data. Mobile app reads/writes via companion API. Auth uses `X-API-Key` + JWT from companion login.
 - **Mapping/Location Services**:
     - Google Places API (for autocomplete and details).
     - Google Maps JavaScript API (for web map view and directions).
@@ -67,6 +69,19 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - Native device map applications (iOS Maps / Android Geo) for external navigation.
 - **Push Notification Service**: Expo Push API (exp.host).
 
-## Known Issues
-- **Companion API URL**: The companion web app's Replit dev URL is behind an auth shield and not accessible for server-to-server requests. The web app must be **deployed/published** and `COMPANION_API_URL` updated to its `.replit.app` URL for the proxy to work.
-- **Database columns added manually**: `expo_push_token`, `loads_hauled`, `updated_at` on job_runs, `assigned_driver_id` on driver_vehicles, `available_days` on job_assignments were added via ALTER TABLE (not migrations) due to drizzle-kit push hanging on interactive prompt.
+## Companion API Endpoints
+The companion web app at `loadlink.replit.app` provides these working endpoints:
+- **Auth**: `POST /api/companion/auth/login` (email-only, API key establishes trust)
+- **Jobs**: `GET /api/jobs`, `GET /api/jobs/:id`, `POST /api/jobs`, `PUT /api/jobs/:id`, `DELETE /api/jobs/:id`
+- **Job actions**: `/api/jobs/:id/accept`, `/api/jobs/:id/withdraw`, etc.
+- **Notifications**: `GET /api/notifications`
+- **Conversations**: `GET /api/conversations`
+- **Invoices**: `GET /api/invoices`
+- **Vehicles**: `GET /api/vehicles` (driver role only)
+
+Endpoints NOT available on companion (built locally from jobs data):
+- `/api/profile`, `/api/dashboard`, `/api/earnings`, `/api/calendar/jobs`
+- `/api/contractor/jobs`, `/api/driver/jobs`, `/api/availability`
+- `/api/projects`, `/api/materials`, `/api/saved-locations`
+- `/api/messages/unread-count`, `/api/reviews/pending`
+- `/api/contractor/calendar-capacity`

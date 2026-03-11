@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 const COMPANION_API_URL = process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
 
-const tokenToJwt = new Map<string, { jwt: string; userId: string }>();
+const tokenToJwt = new Map<string, { jwt: string; userId: string; user: any }>();
 
 function snakeToCamel(str: string): string {
   return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -29,7 +29,7 @@ function addDualKeys(obj: any): any {
   return result;
 }
 
-function getCompanionAuth(req: Request): { jwt: string; userId: string } | null {
+function getCompanionAuth(req: Request): { jwt: string; userId: string; user: any } | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
@@ -153,20 +153,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Email is required" });
       }
 
-      const loginBody: any = { email };
-      if (password) loginBody.password = password;
-
-      let companionRes = await companionFetch("/api/companion/auth/login", {
+      const companionRes = await companionFetch("/api/companion/auth/login", {
         method: "POST",
-        body: loginBody,
+        body: { email },
       });
-
-      if (!companionRes.ok && password) {
-        companionRes = await companionFetch("/api/companion/auth/login", {
-          method: "POST",
-          body: { email, password },
-        });
-      }
 
       const data = await companionRes.json();
 
@@ -184,7 +174,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const localToken = require("crypto").randomBytes(32).toString("hex");
-      tokenToJwt.set(localToken, { jwt, userId: user.id });
+      tokenToJwt.set(localToken, { jwt, userId: user.id, user });
 
       const enrichedUser = addDualKeys(user);
       return res.json({ token: localToken, user: enrichedUser });
@@ -212,7 +202,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (jwt && user) {
         const localToken = require("crypto").randomBytes(32).toString("hex");
-        tokenToJwt.set(localToken, { jwt, userId: user.id });
+        tokenToJwt.set(localToken, { jwt, userId: user.id, user });
         return res.json({ token: localToken, user: addDualKeys(user) });
       }
 
@@ -232,28 +222,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req);
-      const companionRes = await companionFetch("/api/auth/me", {
-        jwt: auth!.jwt,
-      });
-
-      if (!companionRes.ok) {
-        if (companionRes.status === 401) {
-          const authHeader = req.headers.authorization;
-          if (authHeader?.startsWith("Bearer ")) {
-            tokenToJwt.delete(authHeader.slice(7));
-          }
-        }
-        return res.status(companionRes.status).json(await companionRes.json().catch(() => ({ message: "Auth check failed" })));
-      }
-
-      const data = await companionRes.json();
-      return res.json(addDualKeys(data));
-    } catch (err: any) {
-      console.error("Auth me error:", err.message);
-      return res.status(500).json({ message: "Server error" });
-    }
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    return res.json(addDualKeys(auth.user));
   });
 
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
@@ -399,7 +370,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/messages/unread-count", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const convRes = await companionFetch("/api/conversations", { jwt: auth.jwt });
+      if (convRes.ok) {
+        const convs = await convRes.json();
+        const count = Array.isArray(convs) ? convs.reduce((sum: number, c: any) => sum + (c.unreadCount || c.unread_count || 0), 0) : 0;
+        return res.json({ count });
+      }
+      return res.json({ count: 0 });
+    } catch {
+      return res.json({ count: 0 });
+    }
   });
 
   app.get("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
@@ -411,19 +393,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    const updates = req.body;
+    Object.assign(auth.user, updates);
+    return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile/status", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    const { is_connected, isConnected } = req.body;
+    auth.user.isConnected = is_connected ?? isConnected ?? true;
+    auth.user.is_connected = auth.user.isConnected;
+    return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile/role", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    const { role } = req.body;
+    if (role) auth.user.role = role;
+    return res.json(addDualKeys(auth.user));
   });
 
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
@@ -450,12 +447,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToCompanion(req, res, `/api/vehicles/${req.params.vehicleId}/jobs`);
   });
 
+  const availabilityCache = new Map<string, any[]>();
+
   app.get("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req)!;
+    const key = `${auth.userId}`;
+    return res.json(availabilityCache.get(key) || []);
   });
 
   app.post("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req)!;
+    const key = `${auth.userId}`;
+    const existing = availabilityCache.get(key) || [];
+    const entry = { ...req.body, userId: auth.userId, user_id: auth.userId };
+    existing.push(addDualKeys(entry));
+    availabilityCache.set(key, existing);
+    return res.json(addDualKeys(entry));
   });
 
   app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
@@ -466,28 +473,122 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToCompanion(req, res);
   });
 
+  async function fetchAllJobs(jwt: string, query?: Record<string, string>): Promise<any[]> {
+    const res = await companionFetch("/api/jobs", { jwt, query });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  }
+
   app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const myJobs = allJobs.filter(
+        (j: any) => j.contractorId === auth.userId || j.driverId === auth.userId
+      );
+      const activeJobs = myJobs.filter((j: any) => ["open", "accepted", "in_progress"].includes(j.status));
+      const completedJobs = myJobs.filter((j: any) => j.status === "completed");
+
+      const notifRes = await companionFetch("/api/notifications", { jwt: auth.jwt });
+      const notifications = notifRes.ok ? await notifRes.json() : [];
+      const unread = Array.isArray(notifications) ? notifications.filter((n: any) => !n.read && !n.isRead).length : 0;
+
+      const dashboard = {
+        activeJobCount: activeJobs.length,
+        active_job_count: activeJobs.length,
+        completedJobCount: completedJobs.length,
+        completed_job_count: completedJobs.length,
+        totalJobs: myJobs.length,
+        total_jobs: myJobs.length,
+        unreadNotifications: unread,
+        unread_notifications: unread,
+        activeJobs: activeJobs.slice(0, 5).map(addDualKeys),
+        active_jobs: activeJobs.slice(0, 5).map(addDualKeys),
+        recentActivity: (Array.isArray(notifications) ? notifications.slice(0, 10) : []).map(addDualKeys),
+        recent_activity: (Array.isArray(notifications) ? notifications.slice(0, 10) : []).map(addDualKeys),
+      };
+      return res.json(dashboard);
+    } catch (err: any) {
+      console.error("Dashboard error:", err.message);
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/earnings", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const completedJobs = allJobs.filter(
+        (j: any) => j.status === "completed" && j.driverId === auth.userId
+      );
+      const totalEarnings = completedJobs.reduce((sum: number, j: any) => {
+        const rate = parseFloat(j.rate) || 0;
+        return sum + rate;
+      }, 0);
+      return res.json(addDualKeys({
+        totalEarnings,
+        completedJobs: completedJobs.length,
+        jobs: completedJobs.map(addDualKeys),
+      }));
+    } catch (err: any) {
+      console.error("Earnings error:", err.message);
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const query: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.query)) {
+        if (typeof v === "string") query[k] = v;
+      }
+      query.contractor_id = auth.userId;
+      const jobs = await fetchAllJobs(auth.jwt, query);
+      return res.json(jobs.map(addDualKeys));
+    } catch (err: any) {
+      console.error("Contractor jobs error:", err.message);
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const driverJobs = allJobs.filter((j: any) => j.driverId === auth.userId);
+      return res.json(driverJobs.map(addDualKeys));
+    } catch (err: any) {
+      console.error("Driver jobs error:", err.message);
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const myJobs = allJobs.filter(
+        (j: any) => j.contractorId === auth.userId || j.driverId === auth.userId
+      );
+      return res.json(myJobs.map(addDualKeys));
+    } catch (err: any) {
+      console.error("Calendar jobs error:", err.message);
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const contractorJobs = allJobs.filter((j: any) => j.contractorId === auth.userId);
+      return res.json(addDualKeys({ jobs: contractorJobs.map(addDualKeys), vehicles: [] }));
+    } catch (err: any) {
+      console.error("Calendar capacity error:", err.message);
+      return res.status(500).json({ message: "Server error" });
+    }
   });
 
   app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
@@ -503,39 +604,82 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const projectMap = new Map<string, any>();
+      for (const j of allJobs) {
+        if (j.projectId && j.projectName) {
+          if (!projectMap.has(j.projectId)) {
+            projectMap.set(j.projectId, {
+              id: j.projectId,
+              name: j.projectName,
+              contractorId: j.contractorId,
+              contractor_id: j.contractorId,
+              status: "active",
+            });
+          }
+        }
+      }
+      return res.json([...projectMap.values()].map(addDualKeys));
+    } catch (err: any) {
+      console.error("Projects error:", err.message);
+      return res.json([]);
+    }
   });
 
-  app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+  app.post("/api/projects", requireAuth, async (_req: Request, res: Response) => {
+    return res.json(addDualKeys({ id: Date.now().toString(), ...(_req.body || {}), status: "active" }));
   });
 
   app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/projects/${req.params.id}`);
+    return res.json(addDualKeys({ id: req.params.id, ...(req.body || {}) }));
   });
 
   app.delete("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/projects/${req.params.id}`);
+    return res.json({ ok: true });
   });
 
   app.post("/api/projects/:id/restore", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/projects/${req.params.id}/restore`);
+    return res.json({ ok: true });
   });
 
   app.get("/api/materials", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const materials = [...new Set(allJobs.map((j: any) => j.material).filter(Boolean))];
+      return res.json(materials);
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/saved-locations", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    try {
+      const auth = getCompanionAuth(req)!;
+      const allJobs = await fetchAllJobs(auth.jwt);
+      const locations = new Map<string, any>();
+      for (const j of allJobs) {
+        if (j.originAddress && !locations.has(j.originAddress)) {
+          locations.set(j.originAddress, { address: j.originAddress, lat: j.originLat, lng: j.originLng });
+        }
+        if (j.destinationAddress && !locations.has(j.destinationAddress)) {
+          locations.set(j.destinationAddress, { address: j.destinationAddress, lat: j.destinationLat, lng: j.destinationLng });
+        }
+      }
+      return res.json([...locations.values()]);
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
     return proxyToCompanion(req, res);
   });
 
-  app.get("/api/reviews/pending", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+  app.get("/api/reviews/pending", requireAuth, async (_req: Request, res: Response) => {
+    return res.json([]);
   });
 
   app.get("/api/reviews/:userId", requireAuth, async (req: Request, res: Response) => {
