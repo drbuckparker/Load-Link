@@ -517,27 +517,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToCompanion(req, res, `/api/invoices/${req.params.id}/status`);
   });
 
+  const localProjects = new Map<string, any>();
+
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getCompanionAuth(req)!;
+      const includeDeleted = req.query.include_deleted === "true";
       const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
-      if (!jobsRes.ok) return res.json([]);
-      const allJobs = await jobsRes.json();
+      const allJobs = jobsRes.ok ? await jobsRes.json() : [];
       const projectMap = new Map<string, any>();
       for (const j of (Array.isArray(allJobs) ? allJobs : [])) {
         const cId = j.contractorId || j.contractor_id;
         if (j.projectId && j.projectName && cId === auth.userId) {
           if (!projectMap.has(j.projectId)) {
-            projectMap.set(j.projectId, addDualKeys({
+            projectMap.set(j.projectId, {
               id: j.projectId,
               name: j.projectName,
               contractorId: cId,
               status: "active",
-            }));
+            });
           }
         }
       }
-      return res.json([...projectMap.values()]);
+      for (const [id, proj] of localProjects) {
+        if (proj.contractorId === auth.userId) {
+          projectMap.set(id, proj);
+        }
+      }
+      let results = [...projectMap.values()];
+      if (!includeDeleted) {
+        results = results.filter((p: any) => p.status !== "deleted");
+      }
+      return res.json(results.map(addDualKeys));
     } catch {
       return res.json([]);
     }
@@ -546,27 +557,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
     const auth = getCompanionAuth(req)!;
-    const project = addDualKeys({
+    const project = {
       id,
       name: req.body.name || req.body.projectName || "Untitled Project",
       jobNumber: req.body.jobNumber || req.body.job_number || null,
       siteAddress: req.body.siteAddress || req.body.site_address || null,
+      siteLat: req.body.siteLat || req.body.site_lat || null,
+      siteLng: req.body.siteLng || req.body.site_lng || null,
       notes: req.body.notes || null,
       contractorId: auth.userId,
       status: "active",
-    });
-    return res.status(201).json(project);
+      createdAt: new Date().toISOString(),
+    };
+    localProjects.set(id, project);
+    return res.status(201).json(addDualKeys(project));
   });
 
   app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    return res.json(addDualKeys({ id: req.params.id, ...(req.body || {}) }));
+    const auth = getCompanionAuth(req)!;
+    const existing = localProjects.get(req.params.id) || {
+      id: req.params.id,
+      contractorId: auth.userId,
+      status: "active",
+    };
+    const updated = { ...existing, ...req.body, id: req.params.id };
+    localProjects.set(req.params.id, updated);
+    return res.json(addDualKeys(updated));
   });
 
   app.delete("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
+    const existing = localProjects.get(req.params.id);
+    if (existing) {
+      existing.status = "deleted";
+      localProjects.set(req.params.id, existing);
+    }
     return res.json({ ok: true });
   });
 
   app.post("/api/projects/:id/restore", requireAuth, async (req: Request, res: Response) => {
+    const existing = localProjects.get(req.params.id);
+    if (existing) {
+      existing.status = "active";
+      localProjects.set(req.params.id, existing);
+    }
     return res.json({ ok: true });
   });
 
