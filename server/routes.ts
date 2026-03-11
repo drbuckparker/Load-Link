@@ -465,7 +465,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/jobs");
+    try {
+      const auth = getCompanionAuth(req)!;
+      const query: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.query)) {
+        if (typeof v === "string" && k !== "project_id") query[k] = v;
+      }
+      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt, query });
+      if (!jobsRes.ok) return res.json([]);
+      const allJobs = await jobsRes.json();
+      let jobs = Array.isArray(allJobs) ? allJobs : [];
+      const contractorId = auth.userId;
+      jobs = jobs.filter((j: any) => {
+        const cId = j.contractorId || j.contractor_id;
+        return cId === contractorId;
+      });
+      const projectFilter = req.query.project_id as string | undefined;
+      if (projectFilter) {
+        jobs = jobs.filter((j: any) => {
+          const pId = j.projectId || j.project_id;
+          return pId === projectFilter;
+        });
+      }
+      return res.json(jobs.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
@@ -500,12 +525,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allJobs = await jobsRes.json();
       const projectMap = new Map<string, any>();
       for (const j of (Array.isArray(allJobs) ? allJobs : [])) {
-        if (j.projectId && j.projectName) {
+        const cId = j.contractorId || j.contractor_id;
+        if (j.projectId && j.projectName && cId === auth.userId) {
           if (!projectMap.has(j.projectId)) {
             projectMap.set(j.projectId, addDualKeys({
               id: j.projectId,
               name: j.projectName,
-              contractorId: j.contractorId,
+              contractorId: cId,
               status: "active",
             }));
           }
