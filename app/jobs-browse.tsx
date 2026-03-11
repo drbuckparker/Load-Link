@@ -118,6 +118,7 @@ export default function JobsBrowseScreen() {
   const [showEditSiteSuggestions, setShowEditSiteSuggestions] = useState(false);
   const [showNewProjectMapPicker, setShowNewProjectMapPicker] = useState(false);
   const [showEditProjectMapPicker, setShowEditProjectMapPicker] = useState(false);
+  const editingProjectRef = useRef<ProjectItem | null>(null);
   const siteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const siteGeoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userLocationRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -941,7 +942,7 @@ export default function JobsBrowseScreen() {
               )}
               <Pressable
                 style={styles.dropPinBtn}
-                onPress={() => setShowNewProjectMapPicker(true)}
+                onPress={() => { setShowCreateProject(false); setTimeout(() => setShowNewProjectMapPicker(true), 300); }}
               >
                 <Ionicons name="location" size={16} color={Colors.primary} />
                 <Text style={styles.dropPinBtnText}>Drop Pin on Map</Text>
@@ -1045,7 +1046,7 @@ export default function JobsBrowseScreen() {
                 )}
                 <Pressable
                   style={styles.dropPinBtn}
-                  onPress={() => setShowEditProjectMapPicker(true)}
+                  onPress={() => { editingProjectRef.current = editingProject; setEditingProject(null); setTimeout(() => setShowEditProjectMapPicker(true), 300); }}
                 >
                   <Ionicons name="location" size={16} color={Colors.primary} />
                   <Text style={styles.dropPinBtnText}>Drop Pin on Map</Text>
@@ -1112,7 +1113,7 @@ export default function JobsBrowseScreen() {
 
       <LocationPickerModal
         visible={showNewProjectMapPicker}
-        onClose={() => setShowNewProjectMapPicker(false)}
+        onClose={() => { setShowNewProjectMapPicker(false); setTimeout(() => setShowCreateProject(true), 300); }}
         onSelect={(result) => {
           setNewProjectSiteAddress(result.address);
           setNewProjectSiteLat(result.lat);
@@ -1126,7 +1127,7 @@ export default function JobsBrowseScreen() {
 
       <LocationPickerModal
         visible={showEditProjectMapPicker}
-        onClose={() => setShowEditProjectMapPicker(false)}
+        onClose={() => { setShowEditProjectMapPicker(false); if (editingProjectRef.current) { setTimeout(() => setEditingProject(editingProjectRef.current), 300); editingProjectRef.current = null; } }}
         onSelect={(result) => {
           setEditProjectSiteAddress(result.address);
           setEditProjectSiteLat(result.lat);
