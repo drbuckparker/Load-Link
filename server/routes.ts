@@ -435,46 +435,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToCompanion(req, res);
   });
 
-  async function fetchAllJobs(jwt: string, query?: Record<string, string>): Promise<any[]> {
-    const res = await companionFetch("/api/jobs", { jwt, query });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
-  }
-
   app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const myJobs = allJobs.filter(
-        (j: any) => j.contractorId === auth.userId || j.driverId === auth.userId
-      );
-      const activeJobs = myJobs.filter((j: any) => ["open", "accepted", "in_progress"].includes(j.status));
-      const completedJobs = myJobs.filter((j: any) => j.status === "completed");
-
-      const notifRes = await companionFetch("/api/notifications", { jwt: auth.jwt });
-      const notifications = notifRes.ok ? await notifRes.json() : [];
-      const unread = Array.isArray(notifications) ? notifications.filter((n: any) => !n.read && !n.isRead).length : 0;
-
-      const dashboard = {
-        activeJobCount: activeJobs.length,
-        active_job_count: activeJobs.length,
-        completedJobCount: completedJobs.length,
-        completed_job_count: completedJobs.length,
-        totalJobs: myJobs.length,
-        total_jobs: myJobs.length,
-        unreadNotifications: unread,
-        unread_notifications: unread,
-        activeJobs: activeJobs.slice(0, 5).map(addDualKeys),
-        active_jobs: activeJobs.slice(0, 5).map(addDualKeys),
-        recentActivity: (Array.isArray(notifications) ? notifications.slice(0, 10) : []).map(addDualKeys),
-        recent_activity: (Array.isArray(notifications) ? notifications.slice(0, 10) : []).map(addDualKeys),
-      };
-      return res.json(dashboard);
-    } catch (err: any) {
-      console.error("Dashboard error:", err.message);
-      return res.status(500).json({ message: "Server error" });
-    }
+    return proxyToCompanion(req, res);
   });
 
   app.get("/api/earnings", requireAuth, async (req: Request, res: Response) => {
@@ -541,8 +503,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToCompanion(req, res);
   });
 
-  app.get("/api/reviews/pending", requireAuth, async (_req: Request, res: Response) => {
-    return res.json([]);
+  app.get("/api/reviews/pending", requireAuth, async (req: Request, res: Response) => {
+    return proxyToCompanion(req, res);
   });
 
   app.get("/api/reviews/:userId", requireAuth, async (req: Request, res: Response) => {

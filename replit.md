@@ -90,7 +90,4 @@ Endpoint mappings (mobile app path → website path):
 - `/api/calendar/jobs` → `/api/jobs` (filtered client-side by date)
 - `/api/contractor/calendar-capacity` → `/api/truck-calendar`
 
-Endpoints NOT yet available on the website (built locally):
-- `/api/dashboard` — constructed from jobs + notifications data
-- `/api/saved-locations` — needs website endpoint
-- `/api/reviews/pending` — returns empty array
+All endpoints now proxy to the website — no locally constructed responses remain.
