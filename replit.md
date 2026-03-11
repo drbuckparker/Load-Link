@@ -79,9 +79,18 @@ The LoadLink website at `loadlink.replit.app` provides these working endpoints f
 - **Invoices**: `GET /api/invoices`
 - **Vehicles**: `GET /api/vehicles` (driver role only)
 
-Endpoints NOT available on the website (built locally from jobs data):
-- `/api/profile`, `/api/dashboard`, `/api/earnings`, `/api/calendar/jobs`
-- `/api/contractor/jobs`, `/api/driver/jobs`, `/api/availability`
-- `/api/projects`, `/api/materials`, `/api/saved-locations`
-- `/api/messages/unread-count`, `/api/reviews/pending`
-- `/api/contractor/calendar-capacity`
+Endpoint mappings (mobile app path → website path):
+- `/api/profile` → `/api/auth/me`
+- `/api/earnings` → `/api/driver/earnings`
+- `/api/availability` → `/api/me/availability`
+- `/api/projects` → `/api/contractor-projects`
+- `/api/materials` → `/api/contractor-materials`
+- `/api/push/register` → `/api/push/subscribe`
+- `/api/messages/unread-count` → `/api/notifications/unread-count`
+- `/api/calendar/jobs` → `/api/jobs` (filtered client-side by date)
+- `/api/contractor/calendar-capacity` → `/api/truck-calendar`
+
+Endpoints NOT yet available on the website (built locally):
+- `/api/dashboard` — constructed from jobs + notifications data
+- `/api/saved-locations` — needs website endpoint
+- `/api/reviews/pending` — returns empty array

@@ -222,9 +222,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
-    if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    return res.json(addDualKeys(auth.user));
+    return proxyToCompanion(req, res, "/api/auth/me");
   });
 
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
@@ -258,7 +256,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/push/register", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/push/register");
+    return proxyToCompanion(req, res, "/api/push/subscribe");
   });
 
   app.get("/api/jobs", requireAuth, async (req: Request, res: Response) => {
@@ -370,18 +368,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/messages/unread-count", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const convRes = await companionFetch("/api/conversations", { jwt: auth.jwt });
-      if (convRes.ok) {
-        const convs = await convRes.json();
-        const count = Array.isArray(convs) ? convs.reduce((sum: number, c: any) => sum + (c.unreadCount || c.unread_count || 0), 0) : 0;
-        return res.json({ count });
-      }
-      return res.json({ count: 0 });
-    } catch {
-      return res.json({ count: 0 });
-    }
+    return proxyToCompanion(req, res, "/api/notifications/unread-count");
   });
 
   app.get("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
@@ -393,34 +380,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
-    if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    return res.json(addDualKeys(auth.user));
+    return proxyToCompanion(req, res, "/api/auth/me");
   });
 
   app.put("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
-    if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    const updates = req.body;
-    Object.assign(auth.user, updates);
-    return res.json(addDualKeys(auth.user));
+    return proxyToCompanion(req, res);
   });
 
   app.put("/api/profile/status", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
-    if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    const { is_connected, isConnected } = req.body;
-    auth.user.isConnected = is_connected ?? isConnected ?? true;
-    auth.user.is_connected = auth.user.isConnected;
-    return res.json(addDualKeys(auth.user));
+    return proxyToCompanion(req, res);
   });
 
   app.put("/api/profile/role", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
-    if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    const { role } = req.body;
-    if (role) auth.user.role = role;
-    return res.json(addDualKeys(auth.user));
+    return proxyToCompanion(req, res);
   });
 
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
@@ -447,22 +419,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToCompanion(req, res, `/api/vehicles/${req.params.vehicleId}/jobs`);
   });
 
-  const availabilityCache = new Map<string, any[]>();
-
   app.get("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req)!;
-    const key = `${auth.userId}`;
-    return res.json(availabilityCache.get(key) || []);
+    return proxyToCompanion(req, res, "/api/me/availability");
   });
 
   app.post("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req)!;
-    const key = `${auth.userId}`;
-    const existing = availabilityCache.get(key) || [];
-    const entry = { ...req.body, userId: auth.userId, user_id: auth.userId };
-    existing.push(addDualKeys(entry));
-    availabilityCache.set(key, existing);
-    return res.json(addDualKeys(entry));
+    return proxyToCompanion(req, res, "/api/me/availability");
   });
 
   app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
@@ -516,79 +478,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/earnings", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const completedJobs = allJobs.filter(
-        (j: any) => j.status === "completed" && j.driverId === auth.userId
-      );
-      const totalEarnings = completedJobs.reduce((sum: number, j: any) => {
-        const rate = parseFloat(j.rate) || 0;
-        return sum + rate;
-      }, 0);
-      return res.json(addDualKeys({
-        totalEarnings,
-        completedJobs: completedJobs.length,
-        jobs: completedJobs.map(addDualKeys),
-      }));
-    } catch (err: any) {
-      console.error("Earnings error:", err.message);
-      return res.status(500).json({ message: "Server error" });
-    }
+    return proxyToCompanion(req, res, "/api/driver/earnings");
   });
 
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const query: Record<string, string> = {};
-      for (const [k, v] of Object.entries(req.query)) {
-        if (typeof v === "string") query[k] = v;
-      }
-      query.contractor_id = auth.userId;
-      const jobs = await fetchAllJobs(auth.jwt, query);
-      return res.json(jobs.map(addDualKeys));
-    } catch (err: any) {
-      console.error("Contractor jobs error:", err.message);
-      return res.status(500).json({ message: "Server error" });
-    }
+    return proxyToCompanion(req, res);
   });
 
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const driverJobs = allJobs.filter((j: any) => j.driverId === auth.userId);
-      return res.json(driverJobs.map(addDualKeys));
-    } catch (err: any) {
-      console.error("Driver jobs error:", err.message);
-      return res.status(500).json({ message: "Server error" });
-    }
+    return proxyToCompanion(req, res);
   });
 
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const myJobs = allJobs.filter(
-        (j: any) => j.contractorId === auth.userId || j.driverId === auth.userId
-      );
-      return res.json(myJobs.map(addDualKeys));
-    } catch (err: any) {
-      console.error("Calendar jobs error:", err.message);
-      return res.status(500).json({ message: "Server error" });
-    }
+    return proxyToCompanion(req, res);
   });
 
   app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const contractorJobs = allJobs.filter((j: any) => j.contractorId === auth.userId);
-      return res.json(addDualKeys({ jobs: contractorJobs.map(addDualKeys), vehicles: [] }));
-    } catch (err: any) {
-      console.error("Calendar capacity error:", err.message);
-      return res.status(500).json({ message: "Server error" });
-    }
+    return proxyToCompanion(req, res, "/api/truck-calendar");
   });
 
   app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
@@ -604,74 +510,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const projectMap = new Map<string, any>();
-      for (const j of allJobs) {
-        if (j.projectId && j.projectName) {
-          if (!projectMap.has(j.projectId)) {
-            projectMap.set(j.projectId, {
-              id: j.projectId,
-              name: j.projectName,
-              contractorId: j.contractorId,
-              contractor_id: j.contractorId,
-              status: "active",
-            });
-          }
-        }
-      }
-      return res.json([...projectMap.values()].map(addDualKeys));
-    } catch (err: any) {
-      console.error("Projects error:", err.message);
-      return res.json([]);
-    }
+    return proxyToCompanion(req, res, "/api/contractor-projects");
   });
 
-  app.post("/api/projects", requireAuth, async (_req: Request, res: Response) => {
-    return res.json(addDualKeys({ id: Date.now().toString(), ...(_req.body || {}), status: "active" }));
+  app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
+    return proxyToCompanion(req, res, "/api/contractor-projects");
   });
 
   app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    return res.json(addDualKeys({ id: req.params.id, ...(req.body || {}) }));
+    return proxyToCompanion(req, res, `/api/contractor-projects/${req.params.id}`);
   });
 
   app.delete("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    return res.json({ ok: true });
+    return proxyToCompanion(req, res, `/api/contractor-projects/${req.params.id}`);
   });
 
   app.post("/api/projects/:id/restore", requireAuth, async (req: Request, res: Response) => {
-    return res.json({ ok: true });
+    return proxyToCompanion(req, res, `/api/contractor-projects/${req.params.id}/restore`);
   });
 
   app.get("/api/materials", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const materials = [...new Set(allJobs.map((j: any) => j.material).filter(Boolean))];
-      return res.json(materials);
-    } catch {
-      return res.json([]);
-    }
+    return proxyToCompanion(req, res, "/api/contractor-materials");
   });
 
   app.get("/api/saved-locations", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const auth = getCompanionAuth(req)!;
-      const allJobs = await fetchAllJobs(auth.jwt);
-      const locations = new Map<string, any>();
-      for (const j of allJobs) {
-        if (j.originAddress && !locations.has(j.originAddress)) {
-          locations.set(j.originAddress, { address: j.originAddress, lat: j.originLat, lng: j.originLng });
-        }
-        if (j.destinationAddress && !locations.has(j.destinationAddress)) {
-          locations.set(j.destinationAddress, { address: j.destinationAddress, lat: j.destinationLat, lng: j.destinationLng });
-        }
-      }
-      return res.json([...locations.values()]);
-    } catch {
-      return res.json([]);
-    }
+    return proxyToCompanion(req, res);
   });
 
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
