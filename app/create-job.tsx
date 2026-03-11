@@ -20,7 +20,7 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '@/constants/colors';
 import MapPickerView from '@/components/MapPickerView';
-import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
+import { apiRequest, queryClient, getApiUrl, getAuthToken } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
 
 const DISMISSED_KEY = 'loadlink_dismissed_locations';
@@ -378,7 +378,10 @@ export default function CreateJobScreen() {
       const baseUrl = getApiUrl();
       const savedUrl = new URL('/api/saved-locations', baseUrl);
       if (search) savedUrl.searchParams.set('search', search);
-      const res = await fetch(savedUrl.toString(), { credentials: 'include' });
+      const headers: Record<string, string> = {};
+      const token = getAuthToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(savedUrl.toString(), { credentials: 'include', headers });
       if (res.ok) {
         const savedLocations = await res.json();
         const savedItems = savedLocations
@@ -412,11 +415,14 @@ export default function CreateJobScreen() {
     }
     try {
       const baseUrl = getApiUrl();
+      const authHeaders: Record<string, string> = {};
+      const authToken = getAuthToken();
+      if (authToken) authHeaders['Authorization'] = `Bearer ${authToken}`;
 
       const savedUrl = new URL('/api/saved-locations', baseUrl);
       savedUrl.searchParams.set('search', input);
       const [savedRes, placesRes] = await Promise.all([
-        fetch(savedUrl.toString(), { credentials: 'include' }).catch(() => null),
+        fetch(savedUrl.toString(), { credentials: 'include', headers: authHeaders }).catch(() => null),
         (() => {
           const url = new URL('/api/places/autocomplete', baseUrl);
           url.searchParams.set('input', input);
@@ -424,7 +430,7 @@ export default function CreateJobScreen() {
             url.searchParams.set('lat', String(userLat));
             url.searchParams.set('lng', String(userLng));
           }
-          return fetch(url.toString(), { credentials: 'include' });
+          return fetch(url.toString(), { credentials: 'include', headers: authHeaders });
         })(),
       ]);
 
@@ -454,19 +460,22 @@ export default function CreateJobScreen() {
     if (address.trim().length < 3) return;
     try {
       const baseUrl = getApiUrl();
+      const geoHeaders: Record<string, string> = {};
+      const geoToken = getAuthToken();
+      if (geoToken) geoHeaders['Authorization'] = `Bearer ${geoToken}`;
       const url = new URL('/api/places/autocomplete', baseUrl);
       url.searchParams.set('input', address);
       if (userLat && userLng) {
         url.searchParams.set('lat', String(userLat));
         url.searchParams.set('lng', String(userLng));
       }
-      const res = await fetch(url.toString(), { credentials: 'include' });
+      const res = await fetch(url.toString(), { credentials: 'include', headers: geoHeaders });
       if (res.ok) {
         const suggestions = await res.json();
         if (suggestions.length > 0) {
           const detailUrl = new URL('/api/places/details', baseUrl);
           detailUrl.searchParams.set('place_id', suggestions[0].place_id);
-          const detailRes = await fetch(detailUrl.toString(), { credentials: 'include' });
+          const detailRes = await fetch(detailUrl.toString(), { credentials: 'include', headers: geoHeaders });
           if (detailRes.ok) {
             const detail = await detailRes.json();
             if (target === 'origin') {
