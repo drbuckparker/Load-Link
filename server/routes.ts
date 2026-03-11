@@ -33,6 +33,7 @@ const authTokenMap = new Map<string, string>();
 
 const COMPANION_API_URL = process.env.COMPANION_API_URL || "";
 const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
+const companionSessionMap = new Map<string, string>();
 
 async function syncFromCompanion(userId?: string): Promise<{ jobsSynced: number; projectsSynced: number }> {
   if (!COMPANION_API_URL || !COMPANION_API_KEY) {
@@ -190,21 +191,25 @@ async function syncFromCompanion(userId?: string): Promise<{ jobsSynced: number;
   return { jobsSynced, projectsSynced };
 }
 
-async function pushJobToCompanion(jobId: string): Promise<boolean> {
+async function pushJobToCompanion(jobId: string, userId: string): Promise<boolean> {
   if (!COMPANION_API_URL || !COMPANION_API_KEY) return false;
   try {
     const [job] = await db.select().from(jobs).where(eq(jobs.id, jobId)).limit(1);
     if (!job) return false;
 
+    const sessionCookie = companionSessionMap.get(userId);
+    if (!sessionCookie) {
+      console.log("Push job skipped: no companion session for user", userId);
+      return false;
+    }
+
     const headers: Record<string, string> = {
       "X-API-Key": COMPANION_API_KEY,
       "Content-Type": "application/json",
+      "Cookie": sessionCookie,
     };
 
-    const body = {
-      id: job.id,
-      contractor_id: job.contractor_id,
-      driver_id: job.driver_id,
+    const body: any = {
       material: job.material,
       origin_address: job.origin_address,
       destination_address: job.destination_address,
@@ -216,9 +221,8 @@ async function pushJobToCompanion(jobId: string): Promise<boolean> {
       rate: job.rate,
       rate_type: job.rate_type,
       truck_type: job.truck_type,
-      status: job.status,
       urgent: job.urgent,
-      scheduled_date: job.scheduled_date,
+      scheduled_date: job.scheduled_date ? new Date(job.scheduled_date).toISOString().split('T')[0] : null,
       pickup_time: job.pickup_time,
       capacity_needed: job.capacity_needed,
       project_id: job.project_id,
@@ -237,15 +241,48 @@ async function pushJobToCompanion(jobId: string): Promise<boolean> {
       total_amount_unit: job.total_amount_unit,
     };
 
-    const res = await fetch(`${COMPANION_API_URL}/api/jobs/sync`, {
+    const res = await fetch(`${COMPANION_API_URL}/api/jobs`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
     });
 
+    if (res.ok) {
+      console.log("Job pushed to companion successfully:", jobId);
+    } else {
+      const errText = await res.text().catch(() => "");
+      console.error("Push job failed:", res.status, errText.slice(0, 100));
+    }
+
     return res.ok;
   } catch (err: any) {
     console.error("Push job to companion error:", err.message);
+    return false;
+  }
+}
+
+async function pushJobUpdateToCompanion(jobId: string, userId: string, updates: Record<string, any>): Promise<boolean> {
+  if (!COMPANION_API_URL || !COMPANION_API_KEY) return false;
+  try {
+    const sessionCookie = companionSessionMap.get(userId);
+    if (!sessionCookie) return false;
+
+    const res = await fetch(`${COMPANION_API_URL}/api/jobs/${jobId}`, {
+      method: "PUT",
+      headers: {
+        "X-API-Key": COMPANION_API_KEY,
+        "Content-Type": "application/json",
+        "Cookie": sessionCookie,
+      },
+      body: JSON.stringify(updates),
+    });
+
+    if (res.ok) {
+      console.log("Job update pushed to companion:", jobId);
+    }
+    return res.ok;
+  } catch (err: any) {
+    console.error("Push job update error:", err.message);
     return false;
   }
 }
@@ -505,6 +542,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const token = crypto.randomBytes(32).toString('hex');
       authTokenMap.set(token, user.id);
+
+      if (COMPANION_API_URL) {
+        (async () => {
+          try {
+            const loginRes = await fetch(`${COMPANION_API_URL}/api/auth/login`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-API-Key": COMPANION_API_KEY },
+              body: JSON.stringify({ email, password }),
+            });
+            if (loginRes.ok) {
+              const cookies = loginRes.headers.getSetCookie ? loginRes.headers.getSetCookie() : [];
+              let sessionCookie = "";
+              for (const c of cookies) {
+                if (c.includes("loadlink.sid") || c.includes("connect.sid")) {
+                  sessionCookie = c.split(";")[0];
+                  break;
+                }
+              }
+              if (sessionCookie) {
+                companionSessionMap.set(user.id, sessionCookie);
+                console.log("Companion session established for user:", user.id);
+              }
+            }
+          } catch (e: any) {
+            console.log("Companion login skipped:", e.message?.slice(0, 60));
+          }
+        })();
+      }
 
       syncFromCompanion(user.id).catch(e => console.error("Background sync error:", e.message));
 
@@ -1200,6 +1265,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           : `Hi, we would like to work on this ${job.material || ''} job. We're assigning ${truckCount} truck${truckCount > 1 ? 's' : ''}.`,
       });
 
+      pushJobUpdateToCompanion(id, userId, { status: isFavorite ? "accepted" : "open", driver_id: userId }).catch(() => {});
+
       return res.json({
         ok: true,
         isFavorite,
@@ -1388,6 +1455,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           body: `I'm backing out of this ${job.material || ''} job. Sorry for the inconvenience.`,
         });
       }
+
+      pushJobUpdateToCompanion(id, userId, { status: "open", driver_id: null }).catch(() => {});
 
       return res.json({ ok: true });
     } catch (err) {
@@ -3308,7 +3377,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
         .returning();
 
-      pushJobToCompanion(job.id).catch(e => console.error("Push job to companion error:", e.message));
+      pushJobToCompanion(job.id, userId).catch(e => console.error("Push job to companion error:", e.message));
 
       return res.json(job);
     } catch (err) {
@@ -3340,6 +3409,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .set(updates)
         .where(eq(jobs.id, id))
         .returning();
+
+      pushJobUpdateToCompanion(id, userId, updates).catch(() => {});
 
       return res.json(updated);
     } catch (err) {
@@ -3377,6 +3448,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .update(jobs)
         .set({ status: "cancelled", driver_id: null, cancelled_at: new Date(), updated_at: new Date() })
         .where(eq(jobs.id, id));
+
+      pushJobUpdateToCompanion(id, userId, { status: "cancelled", driver_id: null }).catch(() => {});
 
       const scheduledDate = job.scheduled_date
         ? new Date(job.scheduled_date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
