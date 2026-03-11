@@ -149,14 +149,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
-      if (!email || !password) {
-        return res.status(400).json({ message: "Email and password required" });
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
       }
 
-      const companionRes = await companionFetch("/api/companion/auth/login", {
+      const loginBody: any = { email };
+      if (password) loginBody.password = password;
+
+      let companionRes = await companionFetch("/api/companion/auth/login", {
         method: "POST",
-        body: { email, password },
+        body: loginBody,
       });
+
+      if (!companionRes.ok && password) {
+        companionRes = await companionFetch("/api/companion/auth/login", {
+          method: "POST",
+          body: { email, password },
+        });
+      }
 
       const data = await companionRes.json();
 
