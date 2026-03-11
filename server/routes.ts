@@ -451,15 +451,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToCompanion(req, res, "/api/jobs");
   });
 
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToCompanion(req, res, "/api/jobs");
   });
 
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToCompanion(req, res, "/api/jobs");
   });
 
   app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
