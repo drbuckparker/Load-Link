@@ -90,9 +90,10 @@ export default function EditJobScreen() {
     enabled: !!id,
   });
 
-  const { data: pastMaterials = [] } = useQuery<string[]>({
+  const { data: rawMaterials = [] } = useQuery<any[]>({
     queryKey: ['/api/materials'],
   });
+  const pastMaterials = rawMaterials.map((m: any) => typeof m === 'string' ? m : (m.name || m.normalizedName || String(m)));
 
   useEffect(() => {
     if (Platform.OS === 'web') {

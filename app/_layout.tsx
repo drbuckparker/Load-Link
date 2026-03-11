@@ -103,8 +103,10 @@ export default function RootLayout() {
     });
 
     return () => {
-      Notifications.removeNotificationSubscription(notifListener);
-      Notifications.removeNotificationSubscription(responseListener);
+      if (notifListener?.remove) notifListener.remove();
+      else if (Notifications.removeNotificationSubscription) Notifications.removeNotificationSubscription(notifListener);
+      if (responseListener?.remove) responseListener.remove();
+      else if (Notifications.removeNotificationSubscription) Notifications.removeNotificationSubscription(responseListener);
     };
   }, []);
 
