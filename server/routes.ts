@@ -391,15 +391,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.put("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    Object.assign(auth.user, req.body);
+    return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile/status", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    const { is_connected, isConnected } = req.body;
+    auth.user.isConnected = is_connected ?? isConnected ?? true;
+    auth.user.is_connected = auth.user.isConnected;
+    return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile/role", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    const { role } = req.body;
+    if (role) {
+      auth.user.role = role;
+    }
+    return res.json(addDualKeys(auth.user));
   });
 
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
