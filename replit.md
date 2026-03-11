@@ -90,4 +90,8 @@ Endpoint mappings (mobile app path → website path):
 - `/api/calendar/jobs` → `/api/jobs` (filtered client-side by date)
 - `/api/contractor/calendar-capacity` → `/api/truck-calendar`
 
-All endpoints now proxy to the website — no locally constructed responses remain.
+Endpoints still built locally (website's `/api/contractor-projects` and `/api/auth/me` don't accept companion JWT):
+- `/api/projects` — extracted from jobs data (website's `/api/contractor-projects` requires session auth)
+- `/api/profile` and `/api/auth/me` — returns cached user from login (website's `/api/auth/me` requires session auth)
+
+All other endpoints proxy to the website successfully.

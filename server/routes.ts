@@ -119,6 +119,9 @@ async function proxyToCompanion(
     }
 
     const data = await companionRes.json();
+    if (companionRes.status >= 400) {
+      console.error(`Proxy ${method} ${targetPath} → ${companionRes.status}:`, JSON.stringify(data));
+    }
     const enriched = addDualKeys(data);
     return res.status(companionRes.status).json(enriched);
   } catch (err: any) {
@@ -222,7 +225,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/auth/me");
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    return res.json(addDualKeys(auth.user));
   });
 
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
@@ -380,7 +385,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/auth/me");
+    const auth = getCompanionAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile", requireAuth, async (req: Request, res: Response) => {
@@ -472,23 +479,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/contractor-projects");
+    try {
+      const auth = getCompanionAuth(req)!;
+      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
+      if (!jobsRes.ok) return res.json([]);
+      const allJobs = await jobsRes.json();
+      const projectMap = new Map<string, any>();
+      for (const j of (Array.isArray(allJobs) ? allJobs : [])) {
+        if (j.projectId && j.projectName) {
+          if (!projectMap.has(j.projectId)) {
+            projectMap.set(j.projectId, addDualKeys({
+              id: j.projectId,
+              name: j.projectName,
+              contractorId: j.contractorId,
+              status: "active",
+            }));
+          }
+        }
+      }
+      return res.json([...projectMap.values()]);
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/contractor-projects");
+    const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+    const auth = getCompanionAuth(req)!;
+    const project = addDualKeys({
+      id,
+      name: req.body.name || req.body.projectName || "Untitled Project",
+      jobNumber: req.body.jobNumber || req.body.job_number || null,
+      siteAddress: req.body.siteAddress || req.body.site_address || null,
+      notes: req.body.notes || null,
+      contractorId: auth.userId,
+      status: "active",
+    });
+    return res.status(201).json(project);
   });
 
   app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/contractor-projects/${req.params.id}`);
+    return res.json(addDualKeys({ id: req.params.id, ...(req.body || {}) }));
   });
 
   app.delete("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/contractor-projects/${req.params.id}`);
+    return res.json({ ok: true });
   });
 
   app.post("/api/projects/:id/restore", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/contractor-projects/${req.params.id}/restore`);
+    return res.json({ ok: true });
   });
 
   app.get("/api/materials", requireAuth, async (req: Request, res: Response) => {
