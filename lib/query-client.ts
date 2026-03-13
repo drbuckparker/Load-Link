@@ -41,6 +41,13 @@ async function throwIfResNotOk(res: Response) {
     try {
       const json = JSON.parse(text);
       if (json.message) message = json.message;
+      else if (json.error) {
+        message = json.error;
+        if (json.details && Array.isArray(json.details)) {
+          const fields = json.details.map((d: any) => d.path?.join('.') || d.message).filter(Boolean);
+          if (fields.length) message += ': ' + fields.join(', ');
+        }
+      }
     } catch {}
     throw new Error(message);
   }

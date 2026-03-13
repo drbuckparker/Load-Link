@@ -704,6 +704,10 @@ export default function CreateJobScreen() {
       Alert.alert('Required', 'Please enter a rate.');
       return;
     }
+    if (!scheduledDate) {
+      Alert.alert('Required', 'Please select a scheduled date.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -720,45 +724,45 @@ export default function CreateJobScreen() {
 
       const body: Record<string, any> = {
         material: material.trim(),
-        job_type: jobType,
-        truck_type: truckType,
-        ...(resolvedProjectId ? { project_id: resolvedProjectId } : {}),
-        origin_address: originAddress.trim(),
-        ...(originLat ? { origin_lat: originLat } : {}),
-        ...(originLng ? { origin_lng: originLng } : {}),
-        destination_address: destinationAddress.trim(),
-        ...(destLat ? { destination_lat: destLat } : {}),
-        ...(destLng ? { destination_lng: destLng } : {}),
-        rate: parseFloat(rate),
-        rate_type: rateType,
-        trucks_needed: trucksNeeded,
-        requires_tarp: requiresTarp,
-        requires_weight_tickets: requiresWeightTickets,
+        jobType: jobType,
+        truckType: truckType,
+        ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+        originAddress: originAddress.trim(),
+        ...(originLat ? { originLat: originLat } : {}),
+        ...(originLng ? { originLng: originLng } : {}),
+        destinationAddress: destinationAddress.trim(),
+        ...(destLat ? { destinationLat: destLat } : {}),
+        ...(destLng ? { destinationLng: destLng } : {}),
+        rate: String(parseFloat(rate)),
+        rateType: rateType,
+        trucksNeeded: trucksNeeded,
+        requiresTarp: requiresTarp,
+        requiresWeightTickets: requiresWeightTickets,
         urgent,
-        ...(urgent && paperworkDescription.trim() ? { paperwork_description: paperworkDescription.trim() } : {}),
+        ...(urgent && paperworkDescription.trim() ? { paperworkDescription: paperworkDescription.trim() } : {}),
       };
 
-      if (distance) body.distance = parseFloat(distance);
-      if (scheduledDate) body.scheduled_date = scheduledDate.trim();
-      if (pickupTime) body.pickup_time = pickupTime.trim();
+      if (distance) body.distance = String(parseFloat(distance));
+      if (scheduledDate) body.scheduledDate = scheduledDate.trim();
+      if (pickupTime) body.pickupTime = pickupTime.trim();
       if (jobType === 'multi_day') {
-        if (estimatedDays) body.estimated_days = parseInt(estimatedDays, 10);
-        body.includes_weekends = includesWeekends;
+        if (estimatedDays) body.estimatedDays = parseInt(estimatedDays, 10);
+        body.includesWeekends = includesWeekends;
       }
-      if (calculatedTrips > 0) body.estimated_trips = calculatedTrips;
-      else if (estimatedTrips) body.estimated_trips = parseInt(estimatedTrips, 10);
+      if (calculatedTrips > 0) body.estimatedTrips = calculatedTrips;
+      else if (estimatedTrips) body.estimatedTrips = parseInt(estimatedTrips, 10);
       if (totalUnit === 'hours' && parseFloat(totalTonsNeeded) > 0) {
-        body.total_hours = parseFloat(totalTonsNeeded);
+        body.totalHours = parseFloat(totalTonsNeeded);
       } else if (totalInTons > 0) {
-        body.total_tons_needed = totalInTons;
+        body.totalTonsNeeded = totalInTons;
       }
-      if (calculatedCost > 0) body.estimated_cost = calculatedCost;
-      else if (estimatedCost) body.estimated_cost = parseFloat(estimatedCost);
+      if (calculatedCost > 0) body.estimatedCost = calculatedCost;
+      else if (estimatedCost) body.estimatedCost = parseFloat(estimatedCost);
       if (truckCapacity) {
         const capLabel = capacityUnit === 'yards' 
           ? `${truckCapacity} yards (≈${capacityInTons.toFixed(1)} tons)` 
           : `${truckCapacity} tons`;
-        body.capacity_needed = capLabel;
+        body.capacityNeeded = capLabel;
       }
 
       await apiRequest('POST', '/api/jobs', body);
