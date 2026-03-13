@@ -198,7 +198,7 @@ async function proxyToCompanion(
       console.error(`Proxy ${method} ${targetPath} → ${companionRes.status}:`, JSON.stringify(data));
     }
     if (transform && companionRes.status < 400) {
-      data = transform(data);
+      data = await transform(data);
     }
     const enriched = addDualKeys(data);
     return res.status(companionRes.status).json(enriched);
@@ -748,7 +748,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/saved-locations", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToCompanion(req, res, undefined, async (data: any) => {
+      if (!Array.isArray(data)) return data;
+      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+      if (!apiKey) return data;
+
+      const enriched = await Promise.all(data.map(async (loc: any) => {
+        const addr = loc.address || '';
+        if (!/^Dropped Pin/i.test(addr) || loc.label) return loc;
+        const coordMatch = addr.match(/\(([^,]+),?\s*([^)]+)\)/);
+        if (!coordMatch) return loc;
+        const lat = coordMatch[1].trim();
+        const lng = coordMatch[2].trim();
+        try {
+          const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}&result_type=street_address|route|locality`;
+          const geoRes = await fetch(geoUrl);
+          const geoData = await geoRes.json() as any;
+          if (geoData.status === 'OK' && geoData.results?.[0]) {
+            return { ...loc, nearbyAddress: geoData.results[0].formatted_address };
+          }
+        } catch {}
+        return loc;
+      }));
+      return enriched;
+    });
   });
 
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {

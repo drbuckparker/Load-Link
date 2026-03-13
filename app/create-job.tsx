@@ -373,6 +373,43 @@ export default function CreateJobScreen() {
     setMapPin(null);
   }
 
+  function formatSavedItem(loc: any, i: number) {
+    const name = loc.label || loc.name || '';
+    const address = loc.address || '';
+    const nearbyAddress = loc.nearbyAddress || loc.nearby_address || '';
+    const isDroppedPin = /^Dropped Pin/i.test(address);
+    const locType = loc.type || (loc.id?.startsWith('project') ? 'project' : 'job');
+
+    let mainText = name;
+    let secondaryText = '';
+
+    if (name) {
+      mainText = name;
+      secondaryText = isDroppedPin ? 'Dropped Pin' : address;
+    } else if (isDroppedPin && nearbyAddress) {
+      mainText = nearbyAddress.split(',')[0];
+      secondaryText = 'Dropped Pin';
+    } else if (isDroppedPin) {
+      const coordMatch = address.match(/\(([^)]+)\)/);
+      mainText = coordMatch ? `Near ${parseFloat(coordMatch[1]).toFixed(4)}` : 'Dropped Pin';
+      secondaryText = 'Dropped Pin';
+    } else {
+      mainText = address.split(',')[0];
+      secondaryText = address.includes(',') ? address.substring(address.indexOf(',') + 1).trim() : '';
+    }
+
+    return {
+      place_id: `saved_${locType}_${i}_${address}`,
+      description: nearbyAddress || address,
+      saved: true,
+      savedType: locType,
+      savedName: name,
+      savedLat: loc.lat,
+      savedLng: loc.lng,
+      structured: { main_text: mainText, secondary_text: secondaryText },
+    };
+  }
+
   const loadSavedLocations = useCallback(async (target: 'origin' | 'destination', search?: string) => {
     try {
       const baseUrl = getApiUrl();
@@ -386,16 +423,7 @@ export default function CreateJobScreen() {
         const savedLocations = await res.json();
         const savedItems = (Array.isArray(savedLocations) ? savedLocations : [])
           .filter((loc: any) => loc.address && !dismissedLocations.has(loc.address.toLowerCase()))
-          .map((loc: any, i: number) => ({
-            place_id: `saved_${loc.type}_${i}_${loc.address}`,
-            description: loc.address,
-            saved: true,
-            savedType: loc.type,
-            savedName: loc.name,
-            savedLat: loc.lat,
-            savedLng: loc.lng,
-            structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
-          }));
+          .map((loc: any, i: number) => formatSavedItem(loc, i));
         if (target === 'origin') { setOriginSuggestions(savedItems); setShowOriginSuggestions(savedItems.length > 0); }
         else { setDestSuggestions(savedItems); setShowDestSuggestions(savedItems.length > 0); }
       } else {
@@ -446,16 +474,7 @@ export default function CreateJobScreen() {
           return addr.includes(lowerInput) || name.includes(lowerInput);
         })
         .slice(0, 3)
-        .map((loc: any, i: number) => ({
-          place_id: `saved_${loc.type}_${i}_${loc.address}`,
-          description: loc.address,
-          saved: true,
-          savedType: loc.type,
-          savedName: loc.name,
-          savedLat: loc.lat,
-          savedLng: loc.lng,
-          structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
-        }));
+        .map((loc: any, i: number) => formatSavedItem(loc, i));
 
       const combined = [...savedItems, ...(Array.isArray(placesData) ? placesData : [])];
       if (target === 'origin') { setOriginSuggestions(combined); setShowOriginSuggestions(true); }
@@ -994,14 +1013,11 @@ export default function CreateJobScreen() {
                         <Text style={[styles.suggestionMain, s.saved && { color: Colors.textPrimary }]} numberOfLines={1}>
                           {s.structured?.main_text || s.description}
                         </Text>
-                        {s.structured?.secondary_text ? (
+                        {s.saved && s.structured?.secondary_text ? (
+                          <Text style={[styles.suggestionSub, { color: Colors.primary }]} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                        ) : s.structured?.secondary_text ? (
                           <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
                         ) : null}
-                        {s.saved && !s.structured?.secondary_text && (
-                          <Text style={[styles.suggestionSub, { color: Colors.primary }]} numberOfLines={1}>
-                            {s.savedType === 'project' ? 'Project Site' : 'Recent Job'}
-                          </Text>
-                        )}
                       </View>
                       {s.saved && s.savedType !== 'project' && (
                         <Pressable
@@ -1067,14 +1083,11 @@ export default function CreateJobScreen() {
                         <Text style={[styles.suggestionMain, s.saved && { color: Colors.textPrimary }]} numberOfLines={1}>
                           {s.structured?.main_text || s.description}
                         </Text>
-                        {s.structured?.secondary_text ? (
+                        {s.saved && s.structured?.secondary_text ? (
+                          <Text style={[styles.suggestionSub, { color: Colors.primary }]} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                        ) : s.structured?.secondary_text ? (
                           <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
                         ) : null}
-                        {s.saved && !s.structured?.secondary_text && (
-                          <Text style={[styles.suggestionSub, { color: Colors.primary }]} numberOfLines={1}>
-                            {s.savedType === 'project' ? 'Project Site' : 'Recent Job'}
-                          </Text>
-                        )}
                       </View>
                       {s.saved && s.savedType !== 'project' && (
                         <Pressable
