@@ -278,7 +278,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
     const auth = getCompanionAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    return res.json(addDualKeys(auth.user));
+    return res.json({ user: addDualKeys(auth.user) });
   });
 
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {

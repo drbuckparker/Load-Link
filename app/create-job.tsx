@@ -728,11 +728,11 @@ export default function CreateJobScreen() {
         truckType: truckType,
         ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
         originAddress: originAddress.trim(),
-        ...(originLat ? { originLat: originLat } : {}),
-        ...(originLng ? { originLng: originLng } : {}),
+        ...(originLat ? { originLat: String(originLat) } : {}),
+        ...(originLng ? { originLng: String(originLng) } : {}),
         destinationAddress: destinationAddress.trim(),
-        ...(destLat ? { destinationLat: destLat } : {}),
-        ...(destLng ? { destinationLng: destLng } : {}),
+        ...(destLat ? { destinationLat: String(destLat) } : {}),
+        ...(destLng ? { destinationLng: String(destLng) } : {}),
         rate: String(parseFloat(rate)),
         rateType: rateType,
         trucksNeeded: trucksNeeded,
@@ -746,18 +746,18 @@ export default function CreateJobScreen() {
       if (scheduledDate) body.scheduledDate = scheduledDate.trim();
       if (pickupTime) body.pickupTime = pickupTime.trim();
       if (jobType === 'multi_day') {
-        if (estimatedDays) body.estimatedDays = parseInt(estimatedDays, 10);
+        if (estimatedDays) body.estimatedDays = String(parseInt(estimatedDays, 10));
         body.includesWeekends = includesWeekends;
       }
-      if (calculatedTrips > 0) body.estimatedTrips = calculatedTrips;
-      else if (estimatedTrips) body.estimatedTrips = parseInt(estimatedTrips, 10);
+      if (calculatedTrips > 0) body.estimatedTrips = String(calculatedTrips);
+      else if (estimatedTrips) body.estimatedTrips = String(parseInt(estimatedTrips, 10));
       if (totalUnit === 'hours' && parseFloat(totalTonsNeeded) > 0) {
-        body.totalHours = parseFloat(totalTonsNeeded);
+        body.totalHours = String(parseFloat(totalTonsNeeded));
       } else if (totalInTons > 0) {
-        body.totalTonsNeeded = totalInTons;
+        body.totalTonsNeeded = String(totalInTons);
       }
-      if (calculatedCost > 0) body.estimatedCost = calculatedCost;
-      else if (estimatedCost) body.estimatedCost = parseFloat(estimatedCost);
+      if (calculatedCost > 0) body.estimatedCost = String(calculatedCost);
+      else if (estimatedCost) body.estimatedCost = String(parseFloat(estimatedCost));
       if (truckCapacity) {
         const capLabel = capacityUnit === 'yards' 
           ? `${truckCapacity} yards (≈${capacityInTons.toFixed(1)} tons)` 
