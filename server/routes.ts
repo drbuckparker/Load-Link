@@ -105,16 +105,18 @@ async function proxyToCompanion(
   req: Request,
   res: Response,
   overridePath?: string,
-  overrideOptions?: { method?: string; body?: any }
+  overrideOptions?: { method?: string; body?: any } | ((data: any) => any),
 ) {
+  const transform = typeof overrideOptions === 'function' ? overrideOptions : undefined;
+  const opts = typeof overrideOptions === 'function' ? undefined : overrideOptions;
   const auth = getCompanionAuth(req);
   if (!auth) {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
   const targetPath = overridePath || req.path;
-  const method = overrideOptions?.method || req.method;
-  const body = overrideOptions?.body || (method !== "GET" ? req.body : undefined);
+  const method = opts?.method || req.method;
+  const body = opts?.body || (method !== "GET" ? req.body : undefined);
 
   const query: Record<string, string> = {};
   for (const [k, v] of Object.entries(req.query)) {
@@ -142,9 +144,12 @@ async function proxyToCompanion(
       return res.status(companionRes.status).send(text);
     }
 
-    const data = await companionRes.json();
+    let data = await companionRes.json();
     if (companionRes.status >= 400) {
       console.error(`Proxy ${method} ${targetPath} → ${companionRes.status}:`, JSON.stringify(data));
+    }
+    if (transform && companionRes.status < 400) {
+      data = transform(data);
     }
     const enriched = addDualKeys(data);
     return res.status(companionRes.status).json(enriched);
@@ -391,11 +396,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/conversations", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToCompanion(req, res, undefined, (data: any) => {
+      if (Array.isArray(data)) return data.filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId));
+      return data;
+    });
   });
 
   app.get("/api/conversations/archived", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToCompanion(req, res, undefined, (data: any) => {
+      if (Array.isArray(data)) return data.filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId));
+      return data;
+    });
   });
 
   app.post("/api/conversations/:jobId/archive", requireAuth, async (req: Request, res: Response) => {
@@ -411,7 +422,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/messages/unread-count", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/notifications/unread-count");
+    try {
+      const auth = getCompanionAuth(req);
+      if (!auth) return res.status(401).json({ message: "Not authenticated" });
+      const convsRes = await companionFetch("/api/conversations", { method: "GET", jwt: auth.jwt });
+      if (!convsRes.ok) {
+        return proxyToCompanion(req, res, "/api/notifications/unread-count");
+      }
+      const convs = await convsRes.json();
+      if (!Array.isArray(convs)) {
+        return proxyToCompanion(req, res, "/api/notifications/unread-count");
+      }
+      const count = convs
+        .filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId))
+        .reduce((sum: number, c: any) => sum + (c.unread_count || 0), 0);
+      return res.json({ count });
+    } catch {
+      return proxyToCompanion(req, res, "/api/notifications/unread-count");
+    }
   });
 
   app.get("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {

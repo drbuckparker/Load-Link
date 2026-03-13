@@ -437,8 +437,15 @@ export default function CreateJobScreen() {
       const savedLocations = savedRes && savedRes.ok ? await savedRes.json() : [];
       const placesData = placesRes.ok ? await placesRes.json() : [];
 
-      const savedItems = savedLocations
-        .filter((loc: any) => !dismissedLocations.has(loc.address.toLowerCase()))
+      const lowerInput = input.toLowerCase();
+      const savedItems = (Array.isArray(savedLocations) ? savedLocations : [])
+        .filter((loc: any) => {
+          if (dismissedLocations.has(loc.address?.toLowerCase())) return false;
+          const addr = (loc.address || '').toLowerCase();
+          const name = (loc.name || loc.label || '').toLowerCase();
+          return addr.includes(lowerInput) || name.includes(lowerInput);
+        })
+        .slice(0, 3)
         .map((loc: any, i: number) => ({
           place_id: `saved_${loc.type}_${i}_${loc.address}`,
           description: loc.address,
@@ -450,7 +457,7 @@ export default function CreateJobScreen() {
           structured: { main_text: loc.name || loc.address.split(',')[0], secondary_text: loc.name ? loc.address : '' },
         }));
 
-      const combined = [...savedItems, ...placesData];
+      const combined = [...savedItems, ...(Array.isArray(placesData) ? placesData : [])];
       if (target === 'origin') { setOriginSuggestions(combined); setShowOriginSuggestions(true); }
       else { setDestSuggestions(combined); setShowDestSuggestions(true); }
     } catch {}
@@ -966,7 +973,7 @@ export default function CreateJobScreen() {
                 )}
               </View>
               {showOriginSuggestions && originSuggestions.length > 0 && (
-                <View style={styles.suggestionsDropdown}>
+                <ScrollView style={styles.suggestionsDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
                   {originSuggestions.map((s: any, idx: number) => (
                     <Pressable
                       key={s.place_id + '_' + idx}
@@ -1003,7 +1010,7 @@ export default function CreateJobScreen() {
                       )}
                     </Pressable>
                   ))}
-                </View>
+                </ScrollView>
               )}
               {originLat && (
                 <View style={styles.coordBadge}>
@@ -1039,7 +1046,7 @@ export default function CreateJobScreen() {
                 )}
               </View>
               {showDestSuggestions && destSuggestions.length > 0 && (
-                <View style={styles.suggestionsDropdown}>
+                <ScrollView style={styles.suggestionsDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
                   {destSuggestions.map((s: any, idx: number) => (
                     <Pressable
                       key={s.place_id + '_' + idx}
@@ -1076,7 +1083,7 @@ export default function CreateJobScreen() {
                       )}
                     </Pressable>
                   ))}
-                </View>
+                </ScrollView>
               )}
               {destLat && (
                 <View style={styles.coordBadge}>

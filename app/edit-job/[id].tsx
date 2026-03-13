@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
-import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
+import { apiRequest, queryClient, getApiUrl, getAuthToken } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
 
 const JOB_TYPES = [
@@ -204,14 +204,16 @@ export default function EditJobScreen() {
     }
     try {
       const baseUrl = getApiUrl();
+      const authHeaders: Record<string, string> = {};
+      const authToken = getAuthToken();
+      if (authToken) authHeaders['Authorization'] = `Bearer ${authToken}`;
       let url = `${baseUrl}/api/places/autocomplete?input=${encodeURIComponent(input)}`;
       if (userLat && userLng) url += `&lat=${userLat}&lng=${userLng}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: authHeaders });
       const data = await res.json();
-      if (data.predictions) {
-        if (target === 'origin') { setOriginSuggestions(data.predictions); setShowOriginSuggestions(true); }
-        else { setDestSuggestions(data.predictions); setShowDestSuggestions(true); }
-      }
+      const results = Array.isArray(data) ? data : (data.predictions || []);
+      if (target === 'origin') { setOriginSuggestions(results); setShowOriginSuggestions(true); }
+      else { setDestSuggestions(results); setShowDestSuggestions(true); }
     } catch (err) {}
   }
 
@@ -237,7 +239,10 @@ export default function EditJobScreen() {
     }
     try {
       const baseUrl = getApiUrl();
-      const res = await fetch(`${baseUrl}/api/places/details?place_id=${placeId}`);
+      const detailHeaders: Record<string, string> = {};
+      const tk = getAuthToken();
+      if (tk) detailHeaders['Authorization'] = `Bearer ${tk}`;
+      const res = await fetch(`${baseUrl}/api/places/details?place_id=${placeId}`, { headers: detailHeaders });
       const data = await res.json();
       if (data.location) {
         if (target === 'origin') { setOriginLat(data.location.lat); setOriginLng(data.location.lng); }
@@ -429,7 +434,7 @@ export default function EditJobScreen() {
                 )}
               </View>
               {showOriginSuggestions && originSuggestions.length > 0 && (
-                <View style={styles.suggestionsDropdown}>
+                <ScrollView style={styles.suggestionsDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
                   {originSuggestions.map((s: any) => (
                     <Pressable
                       key={s.place_id}
@@ -447,7 +452,7 @@ export default function EditJobScreen() {
                       </View>
                     </Pressable>
                   ))}
-                </View>
+                </ScrollView>
               )}
               {originLat && (
                 <View style={styles.coordBadge}>
@@ -475,7 +480,7 @@ export default function EditJobScreen() {
                 )}
               </View>
               {showDestSuggestions && destSuggestions.length > 0 && (
-                <View style={styles.suggestionsDropdown}>
+                <ScrollView style={styles.suggestionsDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
                   {destSuggestions.map((s: any) => (
                     <Pressable
                       key={s.place_id}
@@ -493,7 +498,7 @@ export default function EditJobScreen() {
                       </View>
                     </Pressable>
                   ))}
-                </View>
+                </ScrollView>
               )}
               {destLat && (
                 <View style={styles.coordBadge}>

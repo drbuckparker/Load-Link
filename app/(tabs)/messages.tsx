@@ -27,7 +27,8 @@ function PendingReviewsBanner() {
     queryKey: ['/api/reviews/pending'],
   });
 
-  const items = pendingReviews || [];
+  const raw = pendingReviews as any;
+  const items = Array.isArray(raw) ? raw : (Array.isArray(raw?.reviews) ? raw.reviews : []);
   if (items.length === 0) return null;
 
   return (
