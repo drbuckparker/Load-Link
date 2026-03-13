@@ -733,7 +733,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       url.searchParams.set("components", "country:us|country:ca");
       if (lat && lng) {
         url.searchParams.set("location", `${lat},${lng}`);
-        url.searchParams.set("radius", "80000");
+        url.searchParams.set("radius", "160000");
+        url.searchParams.set("strictbounds", "true");
       }
 
       const response = await fetch(url.toString());

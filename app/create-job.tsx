@@ -527,9 +527,6 @@ export default function CreateJobScreen() {
     if (originDebounceRef.current) clearTimeout(originDebounceRef.current);
     if (originGeoRef.current) clearTimeout(originGeoRef.current);
     originDebounceRef.current = setTimeout(() => fetchPlaceSuggestions(text, 'origin'), 300);
-    originGeoRef.current = setTimeout(() => {
-      if (text.trim().length >= 3) geocodeAddress(text, 'origin');
-    }, 2000);
   }
 
   function handleDestTextChange(text: string) {
@@ -540,9 +537,6 @@ export default function CreateJobScreen() {
     if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
     if (destGeoRef.current) clearTimeout(destGeoRef.current);
     destDebounceRef.current = setTimeout(() => fetchPlaceSuggestions(text, 'destination'), 300);
-    destGeoRef.current = setTimeout(() => {
-      if (text.trim().length >= 3) geocodeAddress(text, 'destination');
-    }, 2000);
   }
 
   async function selectSuggestion(placeId: string, description: string, target: 'origin' | 'destination', suggestion?: any) {

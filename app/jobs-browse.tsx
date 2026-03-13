@@ -220,9 +220,7 @@ export default function JobsBrowseScreen() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [projectsQueryUrl] });
-      queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/projects?include_deleted=true'] });
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
       setEditingProject(null);
       setSelectedProjectFilter(null);
       setActiveTab('projects');
@@ -239,9 +237,7 @@ export default function JobsBrowseScreen() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [projectsQueryUrl] });
-      queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/projects?include_deleted=true'] });
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: () => {
