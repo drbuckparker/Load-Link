@@ -1,10 +1,29 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 const COMPANION_API_URL = process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
 
-const tokenToJwt = new Map<string, { jwt: string; userId: string; user: any }>();
+const DATA_DIR = join(process.cwd(), ".data");
+try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+
+function loadJsonMap<T>(filename: string): Map<string, T> {
+  try {
+    const raw = readFileSync(join(DATA_DIR, filename), "utf-8");
+    const entries: [string, T][] = JSON.parse(raw);
+    return new Map(entries);
+  } catch { return new Map(); }
+}
+
+function saveJsonMap<T>(filename: string, map: Map<string, T>) {
+  try {
+    writeFileSync(join(DATA_DIR, filename), JSON.stringify([...map.entries()]), "utf-8");
+  } catch {}
+}
+
+const tokenToJwt = loadJsonMap<{ jwt: string; userId: string; user: any }>("sessions.json");
 
 const hiddenJobIds = new Set([
   "71a89320-160a-40c4-9967-1b2e8db25942",
@@ -207,6 +226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const localToken = require("crypto").randomBytes(32).toString("hex");
       tokenToJwt.set(localToken, { jwt, userId: user.id, user });
+      saveJsonMap("sessions.json", tokenToJwt);
 
       const enrichedUser = addDualKeys(user);
       return res.json({ token: localToken, user: enrichedUser });
@@ -235,6 +255,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (jwt && user) {
         const localToken = require("crypto").randomBytes(32).toString("hex");
         tokenToJwt.set(localToken, { jwt, userId: user.id, user });
+        saveJsonMap("sessions.json", tokenToJwt);
         return res.json({ token: localToken, user: addDualKeys(user) });
       }
 
@@ -249,6 +270,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith("Bearer ")) {
       tokenToJwt.delete(authHeader.slice(7));
+      saveJsonMap("sessions.json", tokenToJwt);
     }
     return res.json({ ok: true });
   });
@@ -601,7 +623,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToCompanion(req, res, `/api/invoices/${req.params.id}/status`);
   });
 
-  const localProjects = new Map<string, any>();
+  const localProjects = loadJsonMap<any>("projects.json");
 
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -654,6 +676,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       createdAt: new Date().toISOString(),
     };
     localProjects.set(id, project);
+    saveJsonMap("projects.json", localProjects);
     return res.status(201).json(addDualKeys(project));
   });
 
@@ -666,6 +689,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     };
     const updated = { ...existing, ...req.body, id: req.params.id };
     localProjects.set(req.params.id, updated);
+    saveJsonMap("projects.json", localProjects);
     return res.json(addDualKeys(updated));
   });
 
@@ -674,6 +698,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (existing) {
       existing.status = "deleted";
       localProjects.set(req.params.id, existing);
+      saveJsonMap("projects.json", localProjects);
     }
     return res.json({ ok: true });
   });
@@ -683,6 +708,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (existing) {
       existing.status = "active";
       localProjects.set(req.params.id, existing);
+      saveJsonMap("projects.json", localProjects);
     }
     return res.json({ ok: true });
   });
