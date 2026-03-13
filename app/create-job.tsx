@@ -566,9 +566,12 @@ export default function CreateJobScreen() {
 
     try {
       const baseUrl = getApiUrl();
+      const detailHeaders: Record<string, string> = {};
+      const detailToken = getAuthToken();
+      if (detailToken) detailHeaders['Authorization'] = `Bearer ${detailToken}`;
       const url = new URL('/api/places/details', baseUrl);
       url.searchParams.set('place_id', placeId);
-      const res = await fetch(url.toString(), { credentials: 'include' });
+      const res = await fetch(url.toString(), { credentials: 'include', headers: detailHeaders });
       if (res.ok) {
         const data = await res.json();
         if (target === 'origin') {
@@ -588,12 +591,15 @@ export default function CreateJobScreen() {
     setFetchingRoute(true);
     try {
       const baseUrl = getApiUrl();
+      const routeHeaders: Record<string, string> = {};
+      const routeToken = getAuthToken();
+      if (routeToken) routeHeaders['Authorization'] = `Bearer ${routeToken}`;
       const url = new URL('/api/directions', baseUrl);
       url.searchParams.set('origin_lat', String(oLat));
       url.searchParams.set('origin_lng', String(oLng));
       url.searchParams.set('dest_lat', String(dLat));
       url.searchParams.set('dest_lng', String(dLng));
-      const res = await fetch(url.toString(), { credentials: 'include' });
+      const res = await fetch(url.toString(), { credentials: 'include', headers: routeHeaders });
       if (res.ok) {
         const data = await res.json();
         setRouteInfo(data);
