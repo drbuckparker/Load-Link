@@ -120,6 +120,29 @@ async function companionFetch(
   return fetch(url.toString(), fetchOpts);
 }
 
+async function refreshCompanionJwt(localToken: string, auth: { jwt: string; userId: string; user: any }): Promise<string | null> {
+  try {
+    const email = auth.user?.email;
+    if (!email) return null;
+    const refreshRes = await companionFetch("/api/companion/auth/login", {
+      method: "POST",
+      body: { email },
+    });
+    if (!refreshRes.ok) return null;
+    const data = await refreshRes.json();
+    if (data.token) {
+      const updated = { ...auth, jwt: data.token, user: data.user || auth.user };
+      tokenToJwt.set(localToken, updated);
+      saveJsonMap("sessions.json", tokenToJwt);
+      console.log("Refreshed companion JWT for", email);
+      return data.token;
+    }
+  } catch (e: any) {
+    console.error("JWT refresh failed:", e.message);
+  }
+  return null;
+}
+
 async function proxyToCompanion(
   req: Request,
   res: Response,
@@ -133,6 +156,7 @@ async function proxyToCompanion(
     return res.status(401).json({ message: "Not authenticated" });
   }
 
+  const localToken = req.headers.authorization?.slice(7) || "";
   const targetPath = overridePath || req.path;
   const method = opts?.method || req.method;
   const body = opts?.body || (method !== "GET" ? req.body : undefined);
@@ -142,13 +166,19 @@ async function proxyToCompanion(
     if (typeof v === "string") query[k] = v;
   }
 
+  async function doFetch(jwt: string) {
+    return companionFetch(targetPath, { method, body, jwt, query });
+  }
+
   try {
-    const companionRes = await companionFetch(targetPath, {
-      method,
-      body,
-      jwt: auth.jwt,
-      query,
-    });
+    let companionRes = await doFetch(auth.jwt);
+
+    if ((companionRes.status === 401 || companionRes.status === 403 || companionRes.status === 500) && localToken) {
+      const newJwt = await refreshCompanionJwt(localToken, auth);
+      if (newJwt) {
+        companionRes = await doFetch(newJwt);
+      }
+    }
 
     const contentType = companionRes.headers.get("content-type") || "";
 
