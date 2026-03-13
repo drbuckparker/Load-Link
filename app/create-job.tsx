@@ -715,7 +715,7 @@ export default function CreateJobScreen() {
         });
         const proj = await newProject.json();
         resolvedProjectId = proj.id;
-        queryClient.invalidateQueries({ queryKey: ['/api/projects'] });
+        queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
       }
 
       const body: Record<string, any> = {
