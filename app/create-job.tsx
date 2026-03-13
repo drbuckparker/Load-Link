@@ -384,8 +384,8 @@ export default function CreateJobScreen() {
       const res = await fetch(savedUrl.toString(), { credentials: 'include', headers });
       if (res.ok) {
         const savedLocations = await res.json();
-        const savedItems = savedLocations
-          .filter((loc: any) => !dismissedLocations.has(loc.address.toLowerCase()))
+        const savedItems = (Array.isArray(savedLocations) ? savedLocations : [])
+          .filter((loc: any) => loc.address && !dismissedLocations.has(loc.address.toLowerCase()))
           .map((loc: any, i: number) => ({
             place_id: `saved_${loc.type}_${i}_${loc.address}`,
             description: loc.address,
@@ -430,12 +430,12 @@ export default function CreateJobScreen() {
             url.searchParams.set('lat', String(userLat));
             url.searchParams.set('lng', String(userLng));
           }
-          return fetch(url.toString(), { credentials: 'include', headers: authHeaders });
+          return fetch(url.toString(), { credentials: 'include', headers: authHeaders }).catch(() => null);
         })(),
       ]);
 
       const savedLocations = savedRes && savedRes.ok ? await savedRes.json() : [];
-      const placesData = placesRes.ok ? await placesRes.json() : [];
+      const placesData = placesRes && placesRes.ok ? await placesRes.json() : [];
 
       const lowerInput = input.toLowerCase();
       const savedItems = (Array.isArray(savedLocations) ? savedLocations : [])

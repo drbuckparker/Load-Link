@@ -197,7 +197,12 @@ export default function TabLayout() {
 
   const role = user?.role || 'driver';
 
-  if (isLiquidGlassAvailable()) {
+  let useLiquidGlass = false;
+  try {
+    useLiquidGlass = isLiquidGlassAvailable();
+  } catch {}
+
+  if (useLiquidGlass) {
     return <NativeTabLayout role={role} />;
   }
   return <ClassicTabLayout role={role} />;
