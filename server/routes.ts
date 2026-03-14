@@ -367,8 +367,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/jobs", requireAuth, async (req: Request, res: Response) => {
-    console.log("POST /api/jobs body:", JSON.stringify(req.body, null, 2));
-    return proxyToCompanion(req, res);
+    const body = { ...req.body };
+    if (body.projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.projectId)) {
+      console.log("Stripping local projectId:", body.projectId);
+      delete body.projectId;
+    }
+    if (body.estimatedCost) {
+      body.estimatedCost = String(parseFloat(parseFloat(body.estimatedCost).toFixed(2)));
+    }
+    return proxyToCompanion(req, res, undefined, { method: 'POST', body });
   });
 
   app.put("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
