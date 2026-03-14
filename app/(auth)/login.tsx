@@ -228,52 +228,6 @@ export default function LoginScreen() {
             </View>
           ) : null}
 
-          {!needsPassword && (
-            <View style={styles.socialSection}>
-              <Pressable
-                style={({ pressed }) => [styles.socialBtn, styles.googleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
-                onPress={handleGoogleSignIn}
-                disabled={isAnyLoading}
-                testID="google-sign-in"
-              >
-                {socialLoading === 'google' ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <>
-                    <View style={styles.googleIconWrap}>
-                      <Text style={styles.googleG}>G</Text>
-                    </View>
-                    <Text style={styles.socialBtnText}>Continue with Google</Text>
-                  </>
-                )}
-              </Pressable>
-
-              {Platform.OS === 'ios' && (
-                <Pressable
-                  style={({ pressed }) => [styles.socialBtn, styles.appleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
-                  onPress={handleAppleSignIn}
-                  disabled={isAnyLoading}
-                  testID="apple-sign-in"
-                >
-                  {socialLoading === 'apple' ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <>
-                      <Ionicons name="logo-apple" size={20} color="#fff" />
-                      <Text style={styles.socialBtnText}>Continue with Apple</Text>
-                    </>
-                  )}
-                </Pressable>
-              )}
-
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>or</Text>
-                <View style={styles.dividerLine} />
-              </View>
-            </View>
-          )}
-
           <View style={styles.inputGroup}>
             <Text style={styles.inputLabel}>Email</Text>
             <View style={styles.inputWrapper}>
@@ -356,6 +310,52 @@ export default function LoginScreen() {
             <Pressable onPress={() => { setNeedsPassword(false); setPassword(''); setConfirmPassword(''); setError(''); }} style={styles.backBtn}>
               <Text style={styles.backBtnText}>Back to Sign In</Text>
             </Pressable>
+          )}
+
+          {!needsPassword && (
+            <View style={styles.socialSection}>
+              <View style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>or</Text>
+                <View style={styles.dividerLine} />
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [styles.socialBtn, styles.googleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                onPress={handleGoogleSignIn}
+                disabled={isAnyLoading}
+                testID="google-sign-in"
+              >
+                {socialLoading === 'google' ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <View style={styles.googleIconWrap}>
+                      <Text style={styles.googleG}>G</Text>
+                    </View>
+                    <Text style={styles.socialBtnText}>Continue with Google</Text>
+                  </>
+                )}
+              </Pressable>
+
+              {Platform.OS === 'ios' && (
+                <Pressable
+                  style={({ pressed }) => [styles.socialBtn, styles.appleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                  onPress={handleAppleSignIn}
+                  disabled={isAnyLoading}
+                  testID="apple-sign-in"
+                >
+                  {socialLoading === 'apple' ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="logo-apple" size={20} color="#fff" />
+                      <Text style={styles.socialBtnText}>Continue with Apple</Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
+            </View>
           )}
         </View>
 
@@ -480,7 +480,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   socialSection: {
-    marginBottom: 4,
+    marginTop: 16,
   },
   socialBtn: {
     flexDirection: 'row',
