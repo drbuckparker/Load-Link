@@ -1,31 +1,18 @@
-import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform, ScrollView } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import * as WebBrowser from 'expo-web-browser';
-import { useAuthRequest, makeRedirectUri, ResponseType } from 'expo-auth-session';
-import { maybeCompleteAuthSession } from 'expo-web-browser';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiRequest } from '@/lib/query-client';
+import { apiRequest, getApiUrl } from '@/lib/query-client';
 
-let AppleAuth: typeof import('expo-apple-authentication') | null = null;
-if (Platform.OS === 'ios') {
-  try {
-    AppleAuth = require('expo-apple-authentication');
-  } catch {}
-}
+WebBrowser.maybeCompleteAuthSession();
 
-maybeCompleteAuthSession();
-
-const googleDiscovery = {
-  authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-  tokenEndpoint: 'https://oauth2.googleapis.com/token',
-  revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
-};
+const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -39,41 +26,12 @@ export default function LoginScreen() {
   const [needsPassword, setNeedsPassword] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [appleAvailable, setAppleAvailable] = useState(Platform.OS === 'web');
 
-  const googleClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
-  const redirectUri = makeRedirectUri({ scheme: 'loadlink' });
-
-  const [googleRequest, googleResponse, googlePromptAsync] = useAuthRequest(
-    {
-      clientId: googleClientId,
-      redirectUri,
-      responseType: ResponseType.Token,
-      scopes: ['openid', 'profile', 'email'],
-    },
-    googleDiscovery,
-  );
-
-  useEffect(() => {
-    if (Platform.OS === 'ios' && AppleAuth) {
-      AppleAuth.isAvailableAsync().then(setAppleAvailable);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (googleResponse?.type === 'success') {
-      const token = googleResponse.params.access_token || googleResponse.params.id_token;
-      if (token) {
-        handleSocialAuth('google', token);
-      }
-    }
-  }, [googleResponse]);
-
-  async function handleSocialAuth(provider: 'google' | 'apple', token: string, email?: string) {
+  async function handleSocialAuth(provider: 'google' | 'apple', token: string, authEmail?: string) {
     setError('');
     setSocialLoading(provider);
     try {
-      await socialLogin(provider, token, email);
+      await socialLogin(provider, token, authEmail);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       while (router.canGoBack()) {
         router.back();
@@ -87,29 +45,60 @@ export default function LoginScreen() {
   }
 
   async function handleGoogleSignIn() {
-    if (!googleClientId) {
+    if (!GOOGLE_CLIENT_ID) {
       setError('Google sign in is not configured yet. Please use email/password.');
       return;
     }
     setError('');
+    setSocialLoading('google');
     try {
-      await googlePromptAsync({ showInRecents: true });
-    } catch (e: any) {
-      if (e.message?.includes('cancel') || e.message?.includes('dismiss')) {
-        return;
+      const { makeRedirectUri, AuthRequest, ResponseType } = await import('expo-auth-session');
+      const redirectUri = makeRedirectUri({ scheme: 'loadlink' });
+      const discovery = {
+        authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+        tokenEndpoint: 'https://oauth2.googleapis.com/token',
+      };
+      const request = new AuthRequest({
+        clientId: GOOGLE_CLIENT_ID,
+        redirectUri,
+        responseType: ResponseType.Token,
+        scopes: ['openid', 'profile', 'email'],
+      });
+      const result = await request.promptAsync(discovery, { showInRecents: true });
+      if (result.type === 'success') {
+        const token = result.params.access_token || result.params.id_token;
+        if (token) {
+          await handleSocialAuth('google', token);
+        } else {
+          setError('No token received from Google');
+          setSocialLoading(null);
+        }
+      } else {
+        setSocialLoading(null);
       }
-      setError('Google sign in was cancelled');
+    } catch (e: any) {
+      if (!e.message?.includes('cancel') && !e.message?.includes('dismiss')) {
+        setError(e.message || 'Google sign in failed');
+      }
+      setSocialLoading(null);
     }
   }
 
   async function handleAppleSignIn() {
-    if (!AppleAuth) {
-      setError('Apple sign in is not available on this device');
+    if (Platform.OS !== 'ios') {
+      setError('Apple sign in is only available on iOS devices');
       return;
     }
     setError('');
     setSocialLoading('apple');
     try {
+      const AppleAuth = await import('expo-apple-authentication');
+      const isAvailable = await AppleAuth.isAvailableAsync();
+      if (!isAvailable) {
+        setError('Apple sign in is not available on this device');
+        setSocialLoading(null);
+        return;
+      }
       const credential = await AppleAuth.signInAsync({
         requestedScopes: [
           AppleAuth.AppleAuthenticationScope.FULL_NAME,
@@ -242,6 +231,7 @@ export default function LoginScreen() {
                 style={({ pressed }) => [styles.socialBtn, styles.googleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
                 onPress={handleGoogleSignIn}
                 disabled={isAnyLoading}
+                testID="google-sign-in"
               >
                 {socialLoading === 'google' ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -255,11 +245,12 @@ export default function LoginScreen() {
                 )}
               </Pressable>
 
-              {appleAvailable && Platform.OS === 'ios' && (
+              {Platform.OS === 'ios' && (
                 <Pressable
                   style={({ pressed }) => [styles.socialBtn, styles.appleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
                   onPress={handleAppleSignIn}
                   disabled={isAnyLoading}
+                  testID="apple-sign-in"
                 >
                   {socialLoading === 'apple' ? (
                     <ActivityIndicator size="small" color="#fff" />
@@ -346,6 +337,7 @@ export default function LoginScreen() {
             style={({ pressed }) => [styles.loginBtn, pressed && styles.loginBtnPressed, isAnyLoading && styles.loginBtnDisabled]}
             onPress={needsPassword ? handleSetPassword : handleLogin}
             disabled={isAnyLoading}
+            testID="sign-in-btn"
           >
             {loading ? (
               <ActivityIndicator size="small" color={Colors.primaryForeground} />
