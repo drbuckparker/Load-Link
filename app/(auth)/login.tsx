@@ -1,25 +1,127 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import * as WebBrowser from 'expo-web-browser';
+import { useAuthRequest, makeRedirectUri, ResponseType } from 'expo-auth-session';
+import { maybeCompleteAuthSession } from 'expo-web-browser';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/lib/query-client';
 
+let AppleAuth: typeof import('expo-apple-authentication') | null = null;
+if (Platform.OS === 'ios') {
+  try {
+    AppleAuth = require('expo-apple-authentication');
+  } catch {}
+}
+
+maybeCompleteAuthSession();
+
+const googleDiscovery = {
+  authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+  tokenEndpoint: 'https://oauth2.googleapis.com/token',
+  revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
+};
+
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { login } = useAuth();
+  const { login, socialLogin } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [socialLoading, setSocialLoading] = useState<'google' | 'apple' | null>(null);
   const [error, setError] = useState('');
   const [needsPassword, setNeedsPassword] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [appleAvailable, setAppleAvailable] = useState(Platform.OS === 'web');
+
+  const googleClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
+  const redirectUri = makeRedirectUri({ scheme: 'loadlink' });
+
+  const [googleRequest, googleResponse, googlePromptAsync] = useAuthRequest(
+    {
+      clientId: googleClientId,
+      redirectUri,
+      responseType: ResponseType.Token,
+      scopes: ['openid', 'profile', 'email'],
+    },
+    googleDiscovery,
+  );
+
+  useEffect(() => {
+    if (Platform.OS === 'ios' && AppleAuth) {
+      AppleAuth.isAvailableAsync().then(setAppleAvailable);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (googleResponse?.type === 'success') {
+      const token = googleResponse.params.access_token || googleResponse.params.id_token;
+      if (token) {
+        handleSocialAuth('google', token);
+      }
+    }
+  }, [googleResponse]);
+
+  async function handleSocialAuth(provider: 'google' | 'apple', token: string, email?: string) {
+    setError('');
+    setSocialLoading(provider);
+    try {
+      await socialLogin(provider, token, email);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      while (router.canGoBack()) {
+        router.back();
+      }
+      router.replace('/(tabs)');
+    } catch (e: any) {
+      setError(e.message || `${provider === 'google' ? 'Google' : 'Apple'} sign in failed`);
+    } finally {
+      setSocialLoading(null);
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    setError('');
+    try {
+      await googlePromptAsync();
+    } catch (e: any) {
+      setError('Google sign in was cancelled');
+    }
+  }
+
+  async function handleAppleSignIn() {
+    if (!AppleAuth) {
+      setError('Apple sign in is not available on this device');
+      return;
+    }
+    setError('');
+    setSocialLoading('apple');
+    try {
+      const credential = await AppleAuth.signInAsync({
+        requestedScopes: [
+          AppleAuth.AppleAuthenticationScope.FULL_NAME,
+          AppleAuth.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (credential.identityToken) {
+        await handleSocialAuth('apple', credential.identityToken, credential.email || undefined);
+      } else {
+        setError('Apple sign in failed - no identity token received');
+        setSocialLoading(null);
+      }
+    } catch (e: any) {
+      if (e.code !== 'ERR_REQUEST_CANCELED') {
+        setError('Apple sign in failed');
+      }
+      setSocialLoading(null);
+    }
+  }
 
   async function handleLogin() {
     if (!email || !password) {
@@ -79,6 +181,8 @@ export default function LoginScreen() {
     }
   }
 
+  const isAnyLoading = loading || !!socialLoading;
+
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 + insets.top : insets.top }]}>
       <LinearGradient
@@ -124,6 +228,50 @@ export default function LoginScreen() {
               <Text style={styles.successText}>{successMsg}</Text>
             </View>
           ) : null}
+
+          {!needsPassword && (
+            <View style={styles.socialSection}>
+              <Pressable
+                style={({ pressed }) => [styles.socialBtn, styles.googleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                onPress={handleGoogleSignIn}
+                disabled={isAnyLoading || !googleRequest}
+              >
+                {socialLoading === 'google' ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <View style={styles.googleIconWrap}>
+                      <Text style={styles.googleG}>G</Text>
+                    </View>
+                    <Text style={styles.socialBtnText}>Continue with Google</Text>
+                  </>
+                )}
+              </Pressable>
+
+              {appleAvailable && Platform.OS === 'ios' && (
+                <Pressable
+                  style={({ pressed }) => [styles.socialBtn, styles.appleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                  onPress={handleAppleSignIn}
+                  disabled={isAnyLoading}
+                >
+                  {socialLoading === 'apple' ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="logo-apple" size={20} color="#fff" />
+                      <Text style={styles.socialBtnText}>Continue with Apple</Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
+
+              <View style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>or</Text>
+                <View style={styles.dividerLine} />
+              </View>
+            </View>
+          )}
 
           <View style={styles.inputGroup}>
             <Text style={styles.inputLabel}>Email</Text>
@@ -188,9 +336,9 @@ export default function LoginScreen() {
           )}
 
           <Pressable
-            style={({ pressed }) => [styles.loginBtn, pressed && styles.loginBtnPressed, loading && styles.loginBtnDisabled]}
+            style={({ pressed }) => [styles.loginBtn, pressed && styles.loginBtnPressed, isAnyLoading && styles.loginBtnDisabled]}
             onPress={needsPassword ? handleSetPassword : handleLogin}
-            disabled={loading}
+            disabled={isAnyLoading}
           >
             {loading ? (
               <ActivityIndicator size="small" color={Colors.primaryForeground} />
@@ -328,6 +476,68 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.success,
     flex: 1,
+  },
+  socialSection: {
+    marginBottom: 4,
+  },
+  socialBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 48,
+    borderRadius: 8,
+    gap: 10,
+    marginBottom: 10,
+  },
+  socialBtnPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
+  socialBtnDisabled: {
+    opacity: 0.5,
+  },
+  googleBtn: {
+    backgroundColor: '#4285F4',
+  },
+  appleBtn: {
+    backgroundColor: '#000',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  googleIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleG: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: '#4285F4',
+  },
+  socialBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: '#fff',
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 16,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.borderMedium,
+  },
+  dividerText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginHorizontal: 12,
   },
   backBtn: {
     alignItems: 'center',

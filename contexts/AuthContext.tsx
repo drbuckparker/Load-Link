@@ -37,6 +37,7 @@ interface AuthContextValue {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
+  socialLogin: (provider: 'google' | 'apple', token: string, email?: string) => Promise<void>;
   register: (data: { email: string; password: string; fullName: string; phone: string; role: string }) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<void>;
@@ -153,6 +154,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     registerForPushNotifications().catch(() => {});
   }
 
+  async function socialLogin(provider: 'google' | 'apple', token: string, email?: string) {
+    const res = await apiRequest('POST', '/api/auth/social-login', { provider, token, email });
+    const data = await res.json();
+
+    if (data.token) {
+      setAuthToken(data.token);
+      await AsyncStorage.setItem('loadlink_token', data.token);
+    }
+
+    const mapped = mapDbUser(data.user);
+    await safeStore(mapped);
+    setUser(mapped);
+    registerForPushNotifications().catch(() => {});
+  }
+
   async function register(data: { email: string; password: string; fullName: string; phone: string; role: string }) {
     const res = await apiRequest('POST', '/api/auth/register', data);
     const responseData = await res.json();
@@ -228,6 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading,
     isAuthenticated: !!user,
     login,
+    socialLogin,
     register,
     logout,
     updateUser,

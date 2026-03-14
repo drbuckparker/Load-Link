@@ -307,6 +307,96 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
+  app.post("/api/auth/social-login", async (req: Request, res: Response) => {
+    try {
+      const { provider, token, email: clientEmail } = req.body;
+      if (!provider || !token) {
+        return res.status(400).json({ message: "Provider and token are required" });
+      }
+
+      let verifiedEmail: string | null = null;
+
+      if (provider === "google") {
+        try {
+          const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
+          if (googleRes.ok) {
+            const info = await googleRes.json();
+            if (info.email_verified === "true" || info.email_verified === true) {
+              verifiedEmail = info.email;
+            }
+          }
+          if (!verifiedEmail) {
+            const userinfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (userinfoRes.ok) {
+              const info = await userinfoRes.json();
+              if (info.email_verified) {
+                verifiedEmail = info.email;
+              }
+            }
+          }
+        } catch (e: any) {
+          console.error("Google token verification failed:", e.message);
+        }
+      } else if (provider === "apple") {
+        try {
+          const parts = token.split(".");
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+            if (payload.iss === "https://appleid.apple.com" && payload.email) {
+              verifiedEmail = payload.email;
+            }
+          }
+        } catch (e: any) {
+          console.error("Apple token decode failed:", e.message);
+        }
+        if (!verifiedEmail && clientEmail) {
+          verifiedEmail = clientEmail;
+        }
+      }
+
+      if (!verifiedEmail) {
+        return res.status(401).json({ message: "Could not verify your identity. Please try again." });
+      }
+
+      const companionRes = await companionFetch("/api/companion/auth/login", {
+        method: "POST",
+        body: { email: verifiedEmail },
+      });
+
+      const data = await companionRes.json();
+
+      if (!companionRes.ok) {
+        if (companionRes.status === 404 || (data.message && data.message.toLowerCase().includes("not found"))) {
+          return res.status(404).json({
+            message: "No LoadLink account found with this email. Please sign up first on loadlink.replit.app",
+            email: verifiedEmail,
+          });
+        }
+        return res.status(companionRes.status).json({
+          message: data.message || data.error || "Authentication failed",
+        });
+      }
+
+      const jwt = data.token;
+      const user = data.user;
+      if (!jwt || !user) {
+        return res.status(500).json({ message: "Invalid response from auth service" });
+      }
+
+      const localToken = require("crypto").randomBytes(32).toString("hex");
+      tokenToJwt.set(localToken, { jwt, userId: user.id, user });
+      saveJsonMap("sessions.json", tokenToJwt);
+
+      const enrichedUser = addDualKeys(user);
+      return res.json({ token: localToken, user: enrichedUser });
+    } catch (err: any) {
+      console.error("Social login error:", err.message);
+      return res.status(500).json({ message: "Authentication service unavailable" });
+    }
+  });
+
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
