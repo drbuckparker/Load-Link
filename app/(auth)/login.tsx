@@ -66,6 +66,7 @@ export default function LoginScreen() {
         redirectUri,
         responseType: ResponseType.Token,
         scopes: ['openid', 'profile', 'email'],
+        usePKCE: false,
       });
       const result = await request.promptAsync(discovery, { showInRecents: true });
       if (result.type === 'success') {
