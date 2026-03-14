@@ -173,7 +173,7 @@ async function proxyToCompanion(
   try {
     let companionRes = await doFetch(auth.jwt);
 
-    if ((companionRes.status === 401 || companionRes.status === 403 || companionRes.status === 500) && localToken) {
+    if ((companionRes.status === 401 || companionRes.status === 403) && localToken) {
       const newJwt = await refreshCompanionJwt(localToken, auth);
       if (newJwt) {
         companionRes = await doFetch(newJwt);
@@ -367,6 +367,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/jobs", requireAuth, async (req: Request, res: Response) => {
+    console.log("POST /api/jobs body:", JSON.stringify(req.body, null, 2));
     return proxyToCompanion(req, res);
   });
 
