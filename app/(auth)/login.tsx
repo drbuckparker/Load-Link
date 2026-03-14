@@ -56,7 +56,10 @@ export default function LoginScreen() {
     setSocialLoading('google');
     try {
       const { makeRedirectUri, AuthRequest, ResponseType } = await import('expo-auth-session');
-      const redirectUri = makeRedirectUri({ scheme: 'loadlink' });
+      const redirectUri = makeRedirectUri({
+        scheme: 'loadlink',
+        useProxy: true,
+      });
       const discovery = {
         authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
         tokenEndpoint: 'https://oauth2.googleapis.com/token',
@@ -68,7 +71,10 @@ export default function LoginScreen() {
         scopes: ['openid', 'profile', 'email'],
         usePKCE: false,
       });
-      const result = await request.promptAsync(discovery, { showInRecents: true });
+      const result = await request.promptAsync(discovery, {
+        showInRecents: true,
+        useProxy: true,
+      });
       if (result.type === 'success') {
         const token = result.params.access_token || result.params.id_token;
         if (token) {
