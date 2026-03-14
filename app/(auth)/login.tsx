@@ -87,10 +87,17 @@ export default function LoginScreen() {
   }
 
   async function handleGoogleSignIn() {
+    if (!googleClientId) {
+      setError('Google sign in is not configured yet. Please use email/password.');
+      return;
+    }
     setError('');
     try {
-      await googlePromptAsync();
+      await googlePromptAsync({ showInRecents: true });
     } catch (e: any) {
+      if (e.message?.includes('cancel') || e.message?.includes('dismiss')) {
+        return;
+      }
       setError('Google sign in was cancelled');
     }
   }
@@ -234,7 +241,7 @@ export default function LoginScreen() {
               <Pressable
                 style={({ pressed }) => [styles.socialBtn, styles.googleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
                 onPress={handleGoogleSignIn}
-                disabled={isAnyLoading || !googleRequest}
+                disabled={isAnyLoading}
               >
                 {socialLoading === 'google' ? (
                   <ActivityIndicator size="small" color="#fff" />
