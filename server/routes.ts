@@ -72,6 +72,66 @@ function addDualKeys(obj: any): any {
   return result;
 }
 
+interface CacheEntry {
+  data: any;
+  status: number;
+  timestamp: number;
+}
+const responseCache = new Map<string, CacheEntry>();
+
+function getCached(key: string, ttlMs: number): CacheEntry | null {
+  const entry = responseCache.get(key);
+  if (entry && Date.now() - entry.timestamp < ttlMs) return entry;
+  if (entry) responseCache.delete(key);
+  return null;
+}
+
+function setCache(key: string, data: any, status: number) {
+  responseCache.set(key, { data, status, timestamp: Date.now() });
+  if (responseCache.size > 500) {
+    const oldest = responseCache.keys().next().value;
+    if (oldest) responseCache.delete(oldest);
+  }
+}
+
+function invalidateCache(pattern: string) {
+  for (const key of responseCache.keys()) {
+    if (key.includes(pattern)) responseCache.delete(key);
+  }
+  if (pattern.includes('/api/jobs') || pattern.includes('/api/contractor/jobs') || pattern.includes('/api/driver/jobs')) {
+    for (const key of responseCache.keys()) {
+      if (key.includes('_raw_jobs')) responseCache.delete(key);
+    }
+  }
+}
+
+const CACHE_TTLS: Record<string, number> = {
+  '/api/messages/unread-count': 15_000,
+  '/api/dashboard': 30_000,
+  '/api/notifications': 30_000,
+  '/api/conversations': 30_000,
+  '/api/conversations/archived': 60_000,
+  '/api/reviews/pending': 60_000,
+  '/api/invoices': 60_000,
+  '/api/contractor/jobs': 20_000,
+  '/api/jobs': 20_000,
+  '/api/driver/jobs': 20_000,
+  '/api/calendar/jobs': 30_000,
+  '/api/vehicles': 60_000,
+  '/api/availability': 60_000,
+  '/api/saved-locations': 60_000,
+  '/api/materials': 120_000,
+  '/api/truck-calendar': 60_000,
+};
+
+function getCacheTtl(path: string): number {
+  for (const [pattern, ttl] of Object.entries(CACHE_TTLS)) {
+    if (path === pattern || path.startsWith(pattern + '/') || path.startsWith(pattern + '?')) return ttl;
+  }
+  if (path.match(/^\/api\/jobs\/[^/]+$/)) return 15_000;
+  return 0;
+}
+
 function getCompanionAuth(req: Request): { jwt: string; userId: string; user: any } | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
@@ -166,6 +226,17 @@ async function proxyToCompanion(
     if (typeof v === "string") query[k] = v;
   }
 
+  const queryStr = Object.keys(query).length ? '?' + new URLSearchParams(query).toString() : '';
+  const cacheKey = `${auth.userId}:${targetPath}${queryStr}`;
+  const ttl = method === 'GET' ? getCacheTtl(targetPath) : 0;
+
+  if (ttl > 0) {
+    const cached = getCached(cacheKey, ttl);
+    if (cached) {
+      return res.status(cached.status).json(cached.data);
+    }
+  }
+
   async function doFetch(jwt: string) {
     return companionFetch(targetPath, { method, body, jwt, query });
   }
@@ -201,9 +272,18 @@ async function proxyToCompanion(
       data = await transform(data);
     }
     const enriched = addDualKeys(data);
+
+    if (ttl > 0 && companionRes.status < 500) {
+      setCache(cacheKey, enriched, companionRes.status);
+    }
+
     return res.status(companionRes.status).json(enriched);
   } catch (err: any) {
     console.error(`Proxy error ${method} ${targetPath}:`, err.message);
+    if (ttl > 0) {
+      const stale = responseCache.get(cacheKey);
+      if (stale) return res.status(stale.status).json(stale.data);
+    }
     return res.status(502).json({ message: "Failed to reach companion service" });
   }
 }
@@ -348,15 +428,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getCompanionAuth(req)!;
-      const query: Record<string, string> = {};
-      for (const [k, v] of Object.entries(req.query)) {
-        if (typeof v === "string") query[k] = v;
+      const allJobs = await fetchAllJobsCached(auth);
+      const startDate = req.query.start_date as string | undefined;
+      const endDate = req.query.end_date as string | undefined;
+      const status = req.query.status as string | undefined;
+      let jobs = allJobs;
+      if (startDate) {
+        const start = new Date(startDate).getTime();
+        jobs = jobs.filter((j: any) => {
+          const jDate = new Date(j.startDate || j.start_date || j.createdAt || j.created_at).getTime();
+          return jDate >= start;
+        });
       }
-      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt, query });
-      if (!jobsRes.ok) return res.status(jobsRes.status).json([]);
-      const allJobs = await jobsRes.json();
-      const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
-      return res.json(jobs.map(addDualKeys));
+      if (endDate) {
+        const end = new Date(endDate).getTime();
+        jobs = jobs.filter((j: any) => {
+          const jDate = new Date(j.startDate || j.start_date || j.createdAt || j.created_at).getTime();
+          return jDate <= end;
+        });
+      }
+      if (status) {
+        jobs = jobs.filter((j: any) => (j.status || '').toLowerCase() === status.toLowerCase());
+      }
+      return res.json(jobs);
     } catch {
       return res.json([]);
     }
@@ -375,19 +469,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (body.estimatedCost) {
       body.estimatedCost = String(parseFloat(parseFloat(body.estimatedCost).toFixed(2)));
     }
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/contractor/jobs');
+    invalidateCache('/api/dashboard');
+    invalidateCache('/api/calendar');
     return proxyToCompanion(req, res, undefined, { method: 'POST', body });
   });
 
   app.put("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/contractor/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}`);
   });
 
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     hiddenJobIds.add(req.params.id);
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/contractor/jobs');
+    invalidateCache('/api/dashboard');
     await proxyToCompanion(req, res, `/api/jobs/${req.params.id}`);
   });
 
   app.post("/api/jobs/:id/accept", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/contractor/jobs');
+    invalidateCache('/api/driver/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/accept`);
   });
 
@@ -396,18 +504,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/jobs/:id/counter-bid", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/counter-bid`);
   });
 
   app.post("/api/jobs/:id/withdraw", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/withdraw`);
   });
 
   app.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}`);
   });
 
   app.post("/api/cleanup-duplicate-assignments", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
     return proxyToCompanion(req, res);
   });
 
@@ -416,22 +529,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/jobs/:id/assignments/:assignmentId/approve", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`);
   });
 
   app.post("/api/jobs/:id/assignments/:assignmentId/reject", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/reject`);
   });
 
   app.put("/api/assignments/:assignmentId/vehicle", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/vehicles');
     return proxyToCompanion(req, res, `/api/assignments/${req.params.assignmentId}/vehicle`);
   });
 
   app.post("/api/jobs/:id/clock-in", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/clock-in`);
   });
 
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/dashboard');
+    invalidateCache('/api/invoices');
     return proxyToCompanion(req, res, `/api/job-runs/${req.params.runId}/clock-out`);
   });
 
@@ -470,14 +593,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/conversations/:jobId/archive", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/conversations');
+    invalidateCache('/api/messages');
     return proxyToCompanion(req, res, `/api/conversations/${req.params.jobId}/archive`);
   });
 
   app.post("/api/conversations/:jobId/unarchive", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/conversations');
+    invalidateCache('/api/messages');
     return proxyToCompanion(req, res, `/api/conversations/${req.params.jobId}/unarchive`);
   });
 
   app.post("/api/conversations/:jobId/delete", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/conversations');
+    invalidateCache('/api/messages');
     return proxyToCompanion(req, res, `/api/conversations/${req.params.jobId}/delete`);
   });
 
@@ -485,6 +614,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getCompanionAuth(req);
       if (!auth) return res.status(401).json({ message: "Not authenticated" });
+
+      const cacheKey = `${auth.userId}:/api/messages/unread-count`;
+      const cached = getCached(cacheKey, 15_000);
+      if (cached) return res.status(cached.status).json(cached.data);
+
       const convsRes = await companionFetch("/api/conversations", { method: "GET", jwt: auth.jwt });
       if (!convsRes.ok) {
         return proxyToCompanion(req, res, "/api/notifications/unread-count");
@@ -496,7 +630,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const count = convs
         .filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId))
         .reduce((sum: number, c: any) => sum + (c.unread_count || 0), 0);
-      return res.json({ count });
+      const result = { count };
+      setCache(cacheKey, result, 200);
+      return res.json(result);
     } catch {
       return proxyToCompanion(req, res, "/api/notifications/unread-count");
     }
@@ -507,6 +643,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/messages');
+    invalidateCache('/api/conversations');
     return proxyToCompanion(req, res, `/api/messages/${req.params.jobId}`);
   });
 
@@ -551,14 +689,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/vehicles');
     return proxyToCompanion(req, res);
   });
 
   app.put("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/vehicles');
     return proxyToCompanion(req, res, `/api/vehicles/${req.params.id}`);
   });
 
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/vehicles');
     return proxyToCompanion(req, res, `/api/vehicles/${req.params.id}`);
   });
 
@@ -579,6 +720,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/notifications/mark-read", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/notifications');
     return proxyToCompanion(req, res);
   });
 
@@ -593,14 +735,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getCompanionAuth(req)!;
-      const query: Record<string, string> = {};
-      for (const [k, v] of Object.entries(req.query)) {
-        if (typeof v === "string" && k !== "project_id") query[k] = v;
-      }
-      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt, query });
-      if (!jobsRes.ok) return res.json([]);
-      const allJobs = await jobsRes.json();
-      let jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
+      let jobs = await fetchAllJobsCached(auth);
       const contractorId = auth.userId;
       jobs = jobs.filter((j: any) => {
         const cId = j.contractorId || j.contractor_id;
@@ -613,20 +748,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return pId === projectFilter;
         });
       }
-      return res.json(jobs.map(addDualKeys));
+      return res.json(jobs);
     } catch {
       return res.json([]);
     }
   });
 
+  async function fetchAllJobsCached(auth: { jwt: string; userId: string; user: any }): Promise<any[]> {
+    const cacheKey = `${auth.userId}:/api/_raw_jobs`;
+    const cached = getCached(cacheKey, 20_000);
+    if (cached) return cached.data;
+    const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
+    if (!jobsRes.ok) return [];
+    const allJobs = await jobsRes.json();
+    const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
+    const result = jobs.map(addDualKeys);
+    setCache(cacheKey, result, 200);
+    return result;
+  }
+
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getCompanionAuth(req)!;
-      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
-      if (!jobsRes.ok) return res.json([]);
-      const allJobs = await jobsRes.json();
-      const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
-      return res.json(jobs.map(addDualKeys));
+      const jobs = await fetchAllJobsCached(auth);
+      return res.json(jobs);
     } catch {
       return res.json([]);
     }
@@ -635,11 +780,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getCompanionAuth(req)!;
-      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
-      if (!jobsRes.ok) return res.json([]);
-      const allJobs = await jobsRes.json();
-      const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
-      return res.json(jobs.map(addDualKeys));
+      const jobs = await fetchAllJobsCached(auth);
+      return res.json(jobs);
     } catch {
       return res.json([]);
     }

@@ -42,6 +42,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Built locally from website data**: dashboard, profile, calendar/jobs, contractor/jobs, driver/jobs, earnings, projects, materials, saved-locations, availability, messages/unread-count
     - **Handled locally**: Google Maps/Places autocomplete/details/geocode/directions/polyline/embed
 - **Response format**: All JSON responses include both camelCase and snake_case keys via `addDualKeys()` utility, ensuring backward compatibility with frontend code that uses either format.
+- **Server-side response caching**: In-memory `responseCache` Map with per-endpoint TTLs (unread-count: 15s, dashboard: 30s, jobs: 20s, vehicles: 60s). Cache is keyed by `userId:path` and automatically invalidated on mutations. All job-fetching endpoints (`/api/jobs`, `/api/contractor/jobs`, `/api/driver/jobs`, `/api/calendar/jobs`) share a single `_raw_jobs` cache entry via `fetchAllJobsCached()`, with client-side filtering for role/project. Endpoints with custom handlers (unread-count, contractor/jobs) have manual cache lookups since they bypass `proxyToCompanion`.
 - **Environment variables**:
     - `COMPANION_API_KEY` — API key for authenticating with the LoadLink website
     - `COMPANION_API_URL` — Base URL of the LoadLink website (default: `https://loadlink.replit.app`)
