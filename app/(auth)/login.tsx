@@ -338,23 +338,21 @@ export default function LoginScreen() {
                 )}
               </Pressable>
 
-              {Platform.OS === 'ios' && (
-                <Pressable
-                  style={({ pressed }) => [styles.socialBtn, styles.appleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
-                  onPress={handleAppleSignIn}
-                  disabled={isAnyLoading}
-                  testID="apple-sign-in"
-                >
-                  {socialLoading === 'apple' ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <>
-                      <Ionicons name="logo-apple" size={20} color="#fff" />
-                      <Text style={styles.socialBtnText}>Continue with Apple</Text>
-                    </>
-                  )}
-                </Pressable>
-              )}
+              <Pressable
+                style={({ pressed }) => [styles.socialBtn, styles.appleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                onPress={handleAppleSignIn}
+                disabled={isAnyLoading}
+                testID="apple-sign-in"
+              >
+                {socialLoading === 'apple' ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="logo-apple" size={20} color="#fff" />
+                    <Text style={styles.socialBtnText}>Continue with Apple</Text>
+                  </>
+                )}
+              </Pressable>
             </View>
           )}
         </View>
