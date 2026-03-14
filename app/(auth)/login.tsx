@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import Constants from 'expo-constants';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/lib/query-client';
@@ -16,6 +17,7 @@ try {
 }
 
 const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
+const isExpoGo = Constants.appOwnership === 'expo' || __DEV__;
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -58,7 +60,7 @@ export default function LoginScreen() {
       const { makeRedirectUri, AuthRequest, ResponseType } = await import('expo-auth-session');
       const redirectUri = makeRedirectUri({
         scheme: 'loadlink',
-        useProxy: true,
+        ...(isExpoGo ? { useProxy: true } : {}),
       });
       const discovery = {
         authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -73,7 +75,7 @@ export default function LoginScreen() {
       });
       const result = await request.promptAsync(discovery, {
         showInRecents: true,
-        useProxy: true,
+        ...(isExpoGo ? { useProxy: true } : {}),
       });
       if (result.type === 'success') {
         const token = result.params.access_token || result.params.id_token;
