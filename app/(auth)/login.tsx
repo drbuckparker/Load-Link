@@ -1,16 +1,19 @@
-import { useState, useEffect } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform, ScrollView } from 'react-native';
+import { useState } from 'react';
+import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import * as WebBrowser from 'expo-web-browser';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiRequest, getApiUrl } from '@/lib/query-client';
+import { apiRequest } from '@/lib/query-client';
 
-WebBrowser.maybeCompleteAuthSession();
+try {
+  const WebBrowser = require('expo-web-browser');
+  WebBrowser.maybeCompleteAuthSession();
+} catch (e) {
+}
 
 const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
 
