@@ -77,5 +77,5 @@ ensurePreviewReachable = "/status"
 
 [userenv.shared]
 DATABASE_URL = "postgresql://neondb_owner:npg_bhcy8Vikf3ep@ep-quiet-moon-a59bvzdf.us-east-2.aws.neon.tech/neondb?sslmode=require"
-COMPANION_API_URL = "https://loadlink.replit.app"
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID = "862930088432-oqe4bg3t1ef8lui1o56itm5higlgtmaa.apps.googleusercontent.com"
+WEBSITE_API_URL = "https://loadlink.replit.app"
