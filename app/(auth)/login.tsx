@@ -330,13 +330,13 @@ export default function LoginScreen() {
               </View>
 
               <Pressable
-                style={({ pressed }) => [styles.socialBtn, styles.googleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
                 onPress={handleGoogleSignIn}
                 disabled={isAnyLoading}
                 testID="google-sign-in"
               >
                 {socialLoading === 'google' ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <ActivityIndicator size="small" color={Colors.text} />
                 ) : (
                   <>
                     <View style={styles.googleIconWrap}>
@@ -348,16 +348,16 @@ export default function LoginScreen() {
               </Pressable>
 
               <Pressable
-                style={({ pressed }) => [styles.socialBtn, styles.appleBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
                 onPress={handleAppleSignIn}
                 disabled={isAnyLoading}
                 testID="apple-sign-in"
               >
                 {socialLoading === 'apple' ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <ActivityIndicator size="small" color={Colors.text} />
                 ) : (
                   <>
-                    <Ionicons name="logo-apple" size={20} color="#fff" />
+                    <Ionicons name="logo-apple" size={20} color={Colors.text} />
                     <Text style={styles.socialBtnText}>Continue with Apple</Text>
                   </>
                 )}
@@ -497,39 +497,35 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 10,
     marginBottom: 10,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.borderMedium,
   },
   socialBtnPressed: {
     opacity: 0.85,
     transform: [{ scale: 0.98 }],
+    backgroundColor: Colors.cardHover,
   },
   socialBtnDisabled: {
     opacity: 0.5,
   },
-  googleBtn: {
-    backgroundColor: '#4285F4',
-  },
-  appleBtn: {
-    backgroundColor: '#000',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
   googleIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
   },
   googleG: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700' as const,
     color: '#4285F4',
   },
   socialBtnText: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 15,
-    color: '#fff',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.text,
   },
   dividerRow: {
     flexDirection: 'row',
