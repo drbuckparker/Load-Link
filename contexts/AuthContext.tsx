@@ -95,6 +95,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function silentRelogin(): Promise<boolean> {
+    try {
+      const email = await AsyncStorage.getItem('loadlink_email');
+      const password = await AsyncStorage.getItem('loadlink_password');
+      if (!email) return false;
+
+      const baseUrl = getApiUrl();
+      const body: any = { email };
+      if (password) body.password = password;
+
+      const res = await fetch(new URL('/api/auth/login', baseUrl).toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token) {
+          setAuthToken(data.token);
+          await AsyncStorage.setItem('loadlink_token', data.token);
+          const mapped = mapDbUser(data.user);
+          await safeStore(mapped);
+          setUser(mapped);
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   async function checkAuth() {
     try {
       const storedToken = await AsyncStorage.getItem('loadlink_token');
@@ -123,9 +157,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await safeStore(mapped);
           setUser(mapped);
         } else {
-          await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token']).catch(() => {});
-          setAuthToken(null);
-          setUser(null);
+          const reloginOk = await silentRelogin();
+          if (!reloginOk) {
+            await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']).catch(() => {});
+            setAuthToken(null);
+            setUser(null);
+          }
         }
       } else {
         if (!stored) {
@@ -148,6 +185,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.setItem('loadlink_token', data.token);
     }
 
+    await AsyncStorage.setItem('loadlink_email', email);
+    if (password) await AsyncStorage.setItem('loadlink_password', password);
+
     const mapped = mapDbUser(data.user);
     await safeStore(mapped);
     setUser(mapped);
@@ -161,6 +201,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (data.token) {
       setAuthToken(data.token);
       await AsyncStorage.setItem('loadlink_token', data.token);
+    }
+
+    if (data.user?.email) {
+      await AsyncStorage.setItem('loadlink_email', data.user.email);
     }
 
     const mapped = mapDbUser(data.user);
@@ -178,6 +222,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.setItem('loadlink_token', responseData.token);
     }
 
+    await AsyncStorage.setItem('loadlink_email', data.email);
+    if (data.password) await AsyncStorage.setItem('loadlink_password', data.password);
+
     const mapped = mapDbUser(responseData.user);
     await safeStore(mapped);
     setUser(mapped);
@@ -188,7 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await apiRequest('POST', '/api/auth/logout');
     } catch {}
-    await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token']).catch(() => {});
+    await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']).catch(() => {});
     setAuthToken(null);
     setUser(null);
   }

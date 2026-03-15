@@ -1,7 +1,9 @@
 import { fetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 let _authToken: string | null = null;
+let _reloginInProgress: Promise<boolean> | null = null;
 
 export function setAuthToken(token: string | null) {
   _authToken = token;
@@ -21,6 +23,43 @@ export function getApiUrl(): string {
   let url = new URL(`https://${host}`);
 
   return url.href;
+}
+
+async function attemptSilentRelogin(): Promise<boolean> {
+  if (_reloginInProgress) return _reloginInProgress;
+  _reloginInProgress = (async () => {
+    try {
+      const email = await AsyncStorage.getItem('loadlink_email');
+      const password = await AsyncStorage.getItem('loadlink_password');
+      if (!email) return false;
+
+      const baseUrl = getApiUrl();
+      const body: any = { email };
+      if (password) body.password = password;
+
+      const res = await fetch(new URL('/api/auth/login', baseUrl).toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token) {
+          _authToken = data.token;
+          await AsyncStorage.setItem('loadlink_token', data.token);
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      _reloginInProgress = null;
+    }
+  })();
+  return _reloginInProgress;
 }
 
 function getHeaders(includeContent?: boolean): Record<string, string> {
@@ -61,12 +100,24 @@ export async function apiRequest(
   const baseUrl = getApiUrl();
   const url = new URL(route, baseUrl);
 
-  const res = await fetch(url.toString(), {
+  let res = await fetch(url.toString(), {
     method,
     headers: getHeaders(!!data),
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
+
+  if (res.status === 401 && !route.includes('/api/auth/')) {
+    const reloginOk = await attemptSilentRelogin();
+    if (reloginOk) {
+      res = await fetch(url.toString(), {
+        method,
+        headers: getHeaders(!!data),
+        body: data ? JSON.stringify(data) : undefined,
+        credentials: "include",
+      });
+    }
+  }
 
   await throwIfResNotOk(res);
   return res;
@@ -81,10 +132,20 @@ export const getQueryFn: <T>(options: {
     const baseUrl = getApiUrl();
     const url = new URL(queryKey.join("/") as string, baseUrl);
 
-    const res = await fetch(url.toString(), {
+    let res = await fetch(url.toString(), {
       headers: getHeaders(),
       credentials: "include",
     });
+
+    if (res.status === 401) {
+      const reloginOk = await attemptSilentRelogin();
+      if (reloginOk) {
+        res = await fetch(url.toString(), {
+          headers: getHeaders(),
+          credentials: "include",
+        });
+      }
+    }
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
