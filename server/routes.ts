@@ -183,27 +183,38 @@ async function websiteFetch(
   return fetch(url.toString(), fetchOpts);
 }
 
+const _jwtRefreshInProgress = new Map<string, Promise<string | null>>();
+
 async function refreshWebsiteJwt(localToken: string, auth: { jwt: string; userId: string; user: any }): Promise<string | null> {
-  try {
-    const email = auth.user?.email;
-    if (!email) return null;
-    const refreshRes = await websiteFetch("/api/companion/auth/login", {
-      method: "POST",
-      body: { email },
-    });
-    if (!refreshRes.ok) return null;
-    const data = await refreshRes.json();
-    if (data.token) {
-      const updated = { ...auth, jwt: data.token, user: data.user || auth.user };
-      tokenToJwt.set(localToken, updated);
-      saveJsonMap("sessions.json", tokenToJwt);
-      console.log("Refreshed website JWT for", email);
-      return data.token;
+  const existing = _jwtRefreshInProgress.get(localToken);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    try {
+      const email = auth.user?.email;
+      if (!email) return null;
+      const refreshRes = await websiteFetch("/api/companion/auth/login", {
+        method: "POST",
+        body: { email },
+      });
+      if (!refreshRes.ok) return null;
+      const data = await refreshRes.json();
+      if (data.token) {
+        const updated = { ...auth, jwt: data.token, user: data.user || auth.user };
+        tokenToJwt.set(localToken, updated);
+        saveJsonMap("sessions.json", tokenToJwt);
+        console.log("Refreshed website JWT for", email);
+        return data.token;
+      }
+    } catch (e: any) {
+      console.error("JWT refresh failed:", e.message);
     }
-  } catch (e: any) {
-    console.error("JWT refresh failed:", e.message);
-  }
-  return null;
+    return null;
+  })();
+
+  _jwtRefreshInProgress.set(localToken, promise);
+  promise.finally(() => _jwtRefreshInProgress.delete(localToken));
+  return promise;
 }
 
 async function proxyToWebsite(
@@ -247,7 +258,7 @@ async function proxyToWebsite(
   try {
     let websiteRes = await doFetch(auth.jwt);
 
-    if ((websiteRes.status === 401 || websiteRes.status === 403) && localToken) {
+    if (websiteRes.status === 401 && localToken) {
       const newJwt = await refreshWebsiteJwt(localToken, auth);
       if (newJwt) {
         websiteRes = await doFetch(newJwt);
@@ -297,6 +308,62 @@ function formatDuration(totalSeconds: number): string {
   if (hours > 0 && minutes > 0) return `${hours} hr ${minutes} min`;
   if (hours > 0) return `${hours} hr`;
   return `${minutes} min`;
+}
+
+let _prewarmFetchAllJobs: ((auth: { jwt: string; userId: string; user: any }) => Promise<any[]>) | null = null;
+const _prewarmInFlight = new Map<string, Promise<any>>();
+
+function getOrFetchEndpoint(cacheKey: string, ep: string, jwt: string): Promise<any> {
+  const ttl = getCacheTtl(ep) || 30_000;
+  const cached = getCached(cacheKey, ttl);
+  if (cached) return Promise.resolve(cached.data);
+
+  const existing = _prewarmInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    try {
+      const r = await websiteFetch(ep, { jwt });
+      if (r.ok) {
+        const data = addDualKeys(await r.json());
+        setCache(cacheKey, data, r.status);
+        return data;
+      }
+    } catch {}
+    return null;
+  })();
+
+  _prewarmInFlight.set(cacheKey, promise);
+  promise.finally(() => _prewarmInFlight.delete(cacheKey));
+  return promise;
+}
+
+async function prewarmCache(auth: { jwt: string; userId: string; user: any }) {
+  const t0 = Date.now();
+  const endpoints = ['/api/dashboard', '/api/notifications', '/api/conversations'];
+  const tasks: Promise<void>[] = endpoints.map(async (ep) => {
+    const cacheKey = `${auth.userId}:${ep}`;
+    await getOrFetchEndpoint(cacheKey, ep, auth.jwt);
+  });
+  if (_prewarmFetchAllJobs) {
+    tasks.push(_prewarmFetchAllJobs(auth).then(() => {}));
+  } else {
+    tasks.push((async () => {
+      const rawKey = `${auth.userId}:/api/_raw_jobs`;
+      if (getCached(rawKey, 20_000)) return;
+      try {
+        const r = await websiteFetch("/api/jobs", { jwt: auth.jwt });
+        if (r.ok) {
+          const allJobs = await r.json();
+          const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
+          const result = jobs.map(addDualKeys);
+          setCache(rawKey, result, 200);
+        }
+      } catch {}
+    })());
+  }
+  await Promise.allSettled(tasks);
+  console.log(`Prewarm completed in ${Date.now() - t0}ms (${tasks.length} endpoints)`);
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -389,11 +456,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const localToken = require("crypto").randomBytes(32).toString("hex");
-      tokenToJwt.set(localToken, { jwt, userId: user.id, user });
+      const authEntry = { jwt, userId: user.id, user };
+      tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
 
       const enrichedUser = addDualKeys(user);
-      return res.json({ token: localToken, user: enrichedUser });
+      res.json({ token: localToken, user: enrichedUser });
+
+      prewarmCache(authEntry).catch(() => {});
+      return;
     } catch (err: any) {
       console.error("Social login error:", err.message);
       return res.status(500).json({ message: "Authentication service unavailable" });
@@ -428,11 +499,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const localToken = require("crypto").randomBytes(32).toString("hex");
-      tokenToJwt.set(localToken, { jwt, userId: user.id, user });
+      const authEntry = { jwt, userId: user.id, user };
+      tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
 
       const enrichedUser = addDualKeys(user);
-      return res.json({ token: localToken, user: enrichedUser });
+      res.json({ token: localToken, user: enrichedUser });
+
+      prewarmCache(authEntry).catch(() => {});
+      return;
     } catch (err: any) {
       console.error("Login error:", err.message);
       return res.status(500).json({ message: "Authentication service unavailable" });
@@ -846,6 +921,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const cacheKey = `${auth.userId}:/api/notifications`;
+    try {
+      const data = await getOrFetchEndpoint(cacheKey, '/api/notifications', auth.jwt);
+      if (data) return res.json(data);
+    } catch {}
     return proxyToWebsite(req, res);
   });
 
@@ -855,6 +936,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const cacheKey = `${auth.userId}:/api/dashboard`;
+    try {
+      const data = await getOrFetchEndpoint(cacheKey, '/api/dashboard', auth.jwt);
+      if (data) return res.json(data);
+    } catch {}
     return proxyToWebsite(req, res);
   });
 
@@ -884,18 +971,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const _jobsFetchInProgress = new Map<string, Promise<any[]>>();
+
   async function fetchAllJobsCached(auth: { jwt: string; userId: string; user: any }): Promise<any[]> {
     const cacheKey = `${auth.userId}:/api/_raw_jobs`;
     const cached = getCached(cacheKey, 20_000);
     if (cached) return cached.data;
-    const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
-    if (!jobsRes.ok) return [];
-    const allJobs = await jobsRes.json();
-    const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
-    const result = jobs.map(addDualKeys);
-    setCache(cacheKey, result, 200);
-    return result;
+
+    const existing = _jobsFetchInProgress.get(cacheKey);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      try {
+        const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
+        if (!jobsRes.ok) return [];
+        const allJobs = await jobsRes.json();
+        const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
+        const result = jobs.map(addDualKeys);
+        setCache(cacheKey, result, 200);
+        return result;
+      } catch {
+        return [];
+      }
+    })();
+
+    _jobsFetchInProgress.set(cacheKey, promise);
+    promise.finally(() => _jobsFetchInProgress.delete(cacheKey));
+    return promise;
   }
+
+  _prewarmFetchAllJobs = fetchAllJobsCached;
 
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
