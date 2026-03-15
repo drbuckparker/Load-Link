@@ -267,15 +267,11 @@ async function proxyToWebsite(
 
     const contentType = websiteRes.headers.get("content-type") || "";
 
-    if (contentType.includes("text/html")) {
+    if (contentType.includes("text/html") || !contentType.includes("application/json")) {
       const text = await websiteRes.text();
-      res.setHeader("Content-Type", "text/html");
-      return res.status(websiteRes.status).send(text);
-    }
-
-    if (!contentType.includes("application/json")) {
-      const text = await websiteRes.text();
-      return res.status(websiteRes.status).send(text);
+      const status = websiteRes.status >= 400 ? websiteRes.status : 502;
+      console.error(`Proxy ${method} ${targetPath} returned non-JSON (${contentType}): ${text.slice(0, 200)}`);
+      return res.status(status).json({ message: "The LoadLink service is temporarily unavailable. Please try again." });
     }
 
     let data = await websiteRes.json();

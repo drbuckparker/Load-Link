@@ -88,6 +88,9 @@ async function throwIfResNotOk(res: Response) {
         }
       }
     } catch {}
+    if (message.includes('<!DOCTYPE') || message.includes('<html') || message.includes('<head')) {
+      message = 'The LoadLink service is temporarily unavailable. Please try again.';
+    }
     throw new Error(message);
   }
 }
