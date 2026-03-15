@@ -3,11 +3,11 @@ import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-// This mobile app is the COMPANION to the main LoadLink WEBSITE.
-// COMPANION_API_URL / COMPANION_API_KEY point to the WEBSITE (the original/source of truth).
+// This mobile app is the companion to the main LoadLink WEBSITE.
+// WEBSITE_API_URL / WEBSITE_API_KEY point to the WEBSITE (the original/source of truth).
 // "websiteFetch" calls the WEBSITE API. "proxyToWebsite" forwards mobile requests to it.
-const COMPANION_API_URL = process.env.COMPANION_API_URL || "https://loadlink.replit.app";
-const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
+const WEBSITE_API_URL = process.env.WEBSITE_API_URL || "https://loadlink.replit.app";
+const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || "";
 
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
@@ -153,7 +153,7 @@ async function websiteFetch(
     query?: Record<string, string>;
   } = {}
 ): Promise<Response> {
-  const url = new URL(path, COMPANION_API_URL);
+  const url = new URL(path, WEBSITE_API_URL);
   if (options.query) {
     for (const [k, v] of Object.entries(options.query)) {
       if (v !== undefined && v !== null && v !== "") {
@@ -163,7 +163,7 @@ async function websiteFetch(
   }
 
   const headers: Record<string, string> = {
-    "X-API-Key": COMPANION_API_KEY,
+    "X-API-Key": WEBSITE_API_KEY,
     "Content-Type": "application/json",
   };
 

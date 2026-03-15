@@ -50,8 +50,8 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Response format**: All JSON responses include both camelCase and snake_case keys via `addDualKeys()` utility, ensuring backward compatibility with frontend code that uses either format.
 - **Server-side response caching**: In-memory `responseCache` Map with per-endpoint TTLs (unread-count: 15s, dashboard: 30s, jobs: 20s, vehicles: 60s). Cache is keyed by `userId:path` and automatically invalidated on mutations. All job-fetching endpoints (`/api/jobs`, `/api/contractor/jobs`, `/api/driver/jobs`, `/api/calendar/jobs`) share a single `_raw_jobs` cache entry via `fetchAllJobsCached()`, with client-side filtering for role/project.
 - **Environment variables**:
-    - `COMPANION_API_KEY` — API key for authenticating with the LoadLink website API (named "companion" because this mobile app is the companion)
-    - `COMPANION_API_URL` — Base URL of the LoadLink website (default: `https://loadlink.replit.app`)
+    - `WEBSITE_API_KEY` — API key for authenticating with the LoadLink website API
+    - `WEBSITE_API_URL` — Base URL of the LoadLink website (default: `https://loadlink.replit.app`)
     - `GOOGLE_MAPS_API_KEY` — Google Maps/Places API key
     - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` — Google OAuth Client ID for social sign-in
 - **Google Maps API note**: The Google Geocoding API is not enabled on the project. The `/api/places/geocode` route uses Google's "Find Place from Text" API instead.
