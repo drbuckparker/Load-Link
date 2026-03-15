@@ -293,7 +293,7 @@ export default function JobsBrowseScreen() {
   }, [rawJobs]);
 
   const filteredProjects = useMemo(() => {
-    let list = projects;
+    let list = projects || [];
     if (showArchived) {
       list = list.filter(p => !!(p as any).deleted_at);
     } else {
@@ -310,7 +310,7 @@ export default function JobsBrowseScreen() {
 
   const selectedProjectData = useMemo(() => {
     if (!selectedProjectFilter) return null;
-    return projects.find(p => String(p.id) === selectedProjectFilter) || null;
+    return (projects || []).find(p => String(p.id) === selectedProjectFilter) || null;
   }, [selectedProjectFilter, projects]);
 
   const topPadding = Platform.OS === 'web' ? 67 : insets.top;
@@ -832,7 +832,7 @@ export default function JobsBrowseScreen() {
               showsVerticalScrollIndicator={false}
               onRefresh={refetchProjects}
               refreshing={false}
-              ListFooterComponent={!showArchived && projects.some((p: any) => p.deleted_at) ? (
+              ListFooterComponent={!showArchived && (projects || []).some((p: any) => p.deleted_at) ? (
                 <Pressable
                   style={{
                     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
