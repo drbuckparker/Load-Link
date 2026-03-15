@@ -156,9 +156,10 @@ export default function CreateJobScreen() {
   const [showHaulDirectionModal, setShowHaulDirectionModal] = useState(false);
   const [pendingProject, setPendingProject] = useState<any>(null);
 
-  const { data: projects = [] } = useQuery<any[]>({
+  const { data: _projects } = useQuery<any[]>({
     queryKey: ['/api/projects'],
   });
+  const projects = _projects || [];
 
   useEffect(() => {
     AsyncStorage.getItem(DISMISSED_KEY).then(val => {

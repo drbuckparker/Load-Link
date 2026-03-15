@@ -80,9 +80,10 @@ export default function VehiclesScreen() {
     }, 300);
   }, []);
 
-  const { data: vehicles = [], isLoading } = useQuery<Vehicle[]>({
+  const { data: _vehicles, isLoading } = useQuery<Vehicle[]>({
     queryKey: ['/api/vehicles'],
   });
+  const vehicles = _vehicles || [];
 
   const saveMutation = useMutation({
     mutationFn: async () => {
