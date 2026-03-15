@@ -563,6 +563,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     invalidateCache('/api/contractor/jobs');
     invalidateCache('/api/dashboard');
     invalidateCache('/api/calendar');
+
+    const auth = getCompanionAuth(req);
+    const userRole = auth?.user?.role || '';
+    if (userRole && !userRole.includes('driver') && !userRole.includes('contractor')) {
+      try {
+        await companionFetch("/api/users/" + auth!.userId, {
+          method: "PUT",
+          body: { role: "contractor" },
+          jwt: auth!.jwt,
+        });
+        auth!.user.role = "contractor";
+        const localToken = req.headers.authorization?.slice(7) || "";
+        if (localToken) {
+          tokenToJwt.set(localToken, auth!);
+          saveJsonMap("sessions.json", tokenToJwt);
+        }
+        const newJwt = await refreshCompanionJwt(localToken, auth!);
+        if (newJwt) {
+          auth!.jwt = newJwt;
+        }
+      } catch (e: any) {
+        console.log("Role update attempt:", e.message);
+      }
+    }
+
     return proxyToCompanion(req, res, undefined, { method: 'POST', body });
   });
 
@@ -766,6 +791,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const { role } = req.body;
     if (role) {
       auth.user.role = role;
+      try {
+        await companionFetch("/api/users/" + auth.userId, {
+          method: "PUT",
+          body: { role },
+          jwt: auth.jwt,
+        });
+      } catch {}
+    }
+    const localToken = req.headers.authorization?.slice(7) || "";
+    if (localToken) {
+      tokenToJwt.set(localToken, auth);
+      saveJsonMap("sessions.json", tokenToJwt);
     }
     return res.json(addDualKeys(auth.user));
   });
