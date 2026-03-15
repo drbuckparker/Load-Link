@@ -357,7 +357,7 @@ export default function LoginScreen() {
                   <ActivityIndicator size="small" color={Colors.text} />
                 ) : (
                   <>
-                    <Ionicons name="logo-apple" size={20} color={Colors.text} />
+                    <Ionicons name="logo-apple" size={20} color={Colors.primary} />
                     <Text style={styles.socialBtnText}>Continue with Apple</Text>
                   </>
                 )}
