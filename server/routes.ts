@@ -4,8 +4,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 // This mobile app is the COMPANION to the main LoadLink WEBSITE.
-// COMPANION_API_URL points to the WEBSITE (the original/source of truth).
-// "companionFetch" calls the WEBSITE API on behalf of this mobile companion app.
+// COMPANION_API_URL / COMPANION_API_KEY point to the WEBSITE (the original/source of truth).
+// "websiteFetch" calls the WEBSITE API. "proxyToWebsite" forwards mobile requests to it.
 const COMPANION_API_URL = process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
 
@@ -135,7 +135,7 @@ function getCacheTtl(path: string): number {
   return 0;
 }
 
-function getCompanionAuth(req: Request): { jwt: string; userId: string; user: any } | null {
+function getWebsiteAuth(req: Request): { jwt: string; userId: string; user: any } | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
@@ -144,7 +144,7 @@ function getCompanionAuth(req: Request): { jwt: string; userId: string; user: an
   return null;
 }
 
-async function companionFetch(
+async function websiteFetch(
   path: string,
   options: {
     method?: string;
@@ -183,11 +183,11 @@ async function companionFetch(
   return fetch(url.toString(), fetchOpts);
 }
 
-async function refreshCompanionJwt(localToken: string, auth: { jwt: string; userId: string; user: any }): Promise<string | null> {
+async function refreshWebsiteJwt(localToken: string, auth: { jwt: string; userId: string; user: any }): Promise<string | null> {
   try {
     const email = auth.user?.email;
     if (!email) return null;
-    const refreshRes = await companionFetch("/api/companion/auth/login", {
+    const refreshRes = await websiteFetch("/api/companion/auth/login", {
       method: "POST",
       body: { email },
     });
@@ -197,7 +197,7 @@ async function refreshCompanionJwt(localToken: string, auth: { jwt: string; user
       const updated = { ...auth, jwt: data.token, user: data.user || auth.user };
       tokenToJwt.set(localToken, updated);
       saveJsonMap("sessions.json", tokenToJwt);
-      console.log("Refreshed companion JWT for", email);
+      console.log("Refreshed website JWT for", email);
       return data.token;
     }
   } catch (e: any) {
@@ -206,7 +206,7 @@ async function refreshCompanionJwt(localToken: string, auth: { jwt: string; user
   return null;
 }
 
-async function proxyToCompanion(
+async function proxyToWebsite(
   req: Request,
   res: Response,
   overridePath?: string,
@@ -214,7 +214,7 @@ async function proxyToCompanion(
 ) {
   const transform = typeof overrideOptions === 'function' ? overrideOptions : undefined;
   const opts = typeof overrideOptions === 'function' ? undefined : overrideOptions;
-  const auth = getCompanionAuth(req);
+  const auth = getWebsiteAuth(req);
   if (!auth) {
     return res.status(401).json({ message: "Not authenticated" });
   }
@@ -241,53 +241,53 @@ async function proxyToCompanion(
   }
 
   async function doFetch(jwt: string) {
-    return companionFetch(targetPath, { method, body, jwt, query });
+    return websiteFetch(targetPath, { method, body, jwt, query });
   }
 
   try {
-    let companionRes = await doFetch(auth.jwt);
+    let websiteRes = await doFetch(auth.jwt);
 
-    if ((companionRes.status === 401 || companionRes.status === 403) && localToken) {
-      const newJwt = await refreshCompanionJwt(localToken, auth);
+    if ((websiteRes.status === 401 || websiteRes.status === 403) && localToken) {
+      const newJwt = await refreshWebsiteJwt(localToken, auth);
       if (newJwt) {
-        companionRes = await doFetch(newJwt);
+        websiteRes = await doFetch(newJwt);
       }
     }
 
-    const contentType = companionRes.headers.get("content-type") || "";
+    const contentType = websiteRes.headers.get("content-type") || "";
 
     if (contentType.includes("text/html")) {
-      const text = await companionRes.text();
+      const text = await websiteRes.text();
       res.setHeader("Content-Type", "text/html");
-      return res.status(companionRes.status).send(text);
+      return res.status(websiteRes.status).send(text);
     }
 
     if (!contentType.includes("application/json")) {
-      const text = await companionRes.text();
-      return res.status(companionRes.status).send(text);
+      const text = await websiteRes.text();
+      return res.status(websiteRes.status).send(text);
     }
 
-    let data = await companionRes.json();
-    if (companionRes.status >= 400) {
-      console.error(`Proxy ${method} ${targetPath} → ${companionRes.status}:`, JSON.stringify(data));
+    let data = await websiteRes.json();
+    if (websiteRes.status >= 400) {
+      console.error(`Proxy ${method} ${targetPath} → ${websiteRes.status}:`, JSON.stringify(data));
     }
-    if (transform && companionRes.status < 400) {
+    if (transform && websiteRes.status < 400) {
       data = await transform(data);
     }
     const enriched = addDualKeys(data);
 
-    if (ttl > 0 && companionRes.status < 500) {
-      setCache(cacheKey, enriched, companionRes.status);
+    if (ttl > 0 && websiteRes.status < 500) {
+      setCache(cacheKey, enriched, websiteRes.status);
     }
 
-    return res.status(companionRes.status).json(enriched);
+    return res.status(websiteRes.status).json(enriched);
   } catch (err: any) {
     console.error(`Proxy error ${method} ${targetPath}:`, err.message);
     if (ttl > 0) {
       const stale = responseCache.get(cacheKey);
       if (stale) return res.status(stale.status).json(stale.data);
     }
-    return res.status(502).json({ message: "Failed to reach companion service" });
+    return res.status(502).json({ message: "Failed to reach website API" });
   }
 }
 
@@ -301,10 +301,10 @@ function formatDuration(totalSeconds: number): string {
 
 export async function registerRoutes(app: Express): Promise<Server> {
   function requireAuth(req: Request, res: Response, next: Function) {
-    const auth = getCompanionAuth(req);
+    const auth = getWebsiteAuth(req);
     if (auth) {
       (req as any).userId = auth.userId;
-      (req as any).companionJwt = auth.jwt;
+      (req as any).websiteJwt = auth.jwt;
       return next();
     }
     return res.status(401).json({ message: "Not authenticated" });
@@ -363,21 +363,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Could not verify your identity. Please try again." });
       }
 
-      const companionRes = await companionFetch("/api/companion/auth/login", {
+      const websiteRes = await websiteFetch("/api/companion/auth/login", {
         method: "POST",
         body: { email: verifiedEmail },
       });
 
-      const data = await companionRes.json();
+      const data = await websiteRes.json();
 
-      if (!companionRes.ok) {
-        if (companionRes.status === 404 || (data.message && data.message.toLowerCase().includes("not found"))) {
+      if (!websiteRes.ok) {
+        if (websiteRes.status === 404 || (data.message && data.message.toLowerCase().includes("not found"))) {
           return res.status(404).json({
             message: "No LoadLink account found with this email. Please sign up first on loadlink.replit.app",
             email: verifiedEmail,
           });
         }
-        return res.status(companionRes.status).json({
+        return res.status(websiteRes.status).json({
           message: data.message || data.error || "Authentication failed",
         });
       }
@@ -407,15 +407,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Email is required" });
       }
 
-      const companionRes = await companionFetch("/api/companion/auth/login", {
+      const websiteRes = await websiteFetch("/api/companion/auth/login", {
         method: "POST",
         body: { email },
       });
 
-      const data = await companionRes.json();
+      const data = await websiteRes.json();
 
-      if (!companionRes.ok) {
-        return res.status(companionRes.status).json({
+      if (!websiteRes.ok) {
+        return res.status(websiteRes.status).json({
           message: data.message || data.error || "Invalid credentials",
         });
       }
@@ -441,15 +441,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
-      const companionRes = await companionFetch("/api/companion/auth/register", {
+      const websiteRes = await websiteFetch("/api/companion/auth/register", {
         method: "POST",
         body: req.body,
       });
 
-      const data = await companionRes.json();
+      const data = await websiteRes.json();
 
-      if (!companionRes.ok) {
-        return res.status(companionRes.status).json(data);
+      if (!websiteRes.ok) {
+        return res.status(websiteRes.status).json(data);
       }
 
       const jwt = data.token;
@@ -479,19 +479,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
+    const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     return res.json({ user: addDualKeys(auth.user) });
   });
 
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
     try {
-      const companionRes = await companionFetch("/api/auth/forgot-password", {
+      const websiteRes = await websiteFetch("/api/auth/forgot-password", {
         method: "POST",
         body: req.body,
       });
-      const data = await companionRes.json();
-      return res.status(companionRes.status).json(data);
+      const data = await websiteRes.json();
+      return res.status(websiteRes.status).json(data);
     } catch {
       return res.json({ message: "If an account exists with that email, a reset link has been sent." });
     }
@@ -499,28 +499,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
     try {
-      const companionRes = await companionFetch("/api/auth/reset-password", {
+      const websiteRes = await websiteFetch("/api/auth/reset-password", {
         method: "POST",
         body: req.body,
       });
-      const data = await companionRes.json();
-      return res.status(companionRes.status).json(data);
+      const data = await websiteRes.json();
+      return res.status(websiteRes.status).json(data);
     } catch {
       return res.status(500).json({ message: "Server error" });
     }
   });
 
   app.post("/api/auth/set-password", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/auth/set-password");
+    return proxyToWebsite(req, res, "/api/auth/set-password");
   });
 
   app.post("/api/push/register", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/push/subscribe");
+    return proxyToWebsite(req, res, "/api/push/subscribe");
   });
 
   app.get("/api/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getCompanionAuth(req)!;
+      const auth = getWebsiteAuth(req)!;
       const allJobs = await fetchAllJobsCached(auth);
       const startDate = req.query.start_date as string | undefined;
       const endDate = req.query.end_date as string | undefined;
@@ -550,7 +550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}`);
   });
 
   app.post("/api/jobs", requireAuth, async (req: Request, res: Response) => {
@@ -567,11 +567,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     invalidateCache('/api/dashboard');
     invalidateCache('/api/calendar');
 
-    const auth = getCompanionAuth(req);
+    const auth = getWebsiteAuth(req);
     const userRole = auth?.user?.role || '';
     if (userRole && !userRole.includes('driver') && !userRole.includes('contractor')) {
       try {
-        await companionFetch("/api/users/" + auth!.userId, {
+        await websiteFetch("/api/users/" + auth!.userId, {
           method: "PUT",
           body: { role: "contractor" },
           jwt: auth!.jwt,
@@ -582,7 +582,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           tokenToJwt.set(localToken, auth!);
           saveJsonMap("sessions.json", tokenToJwt);
         }
-        const newJwt = await refreshCompanionJwt(localToken, auth!);
+        const newJwt = await refreshWebsiteJwt(localToken, auth!);
         if (newJwt) {
           auth!.jwt = newJwt;
         }
@@ -591,14 +591,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
 
-    return proxyToCompanion(req, res, undefined, { method: 'POST', body });
+    return proxyToWebsite(req, res, undefined, { method: 'POST', body });
   });
 
   app.put("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
     invalidateCache('/api/contractor/jobs');
     invalidateCache('/api/dashboard');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}`);
   });
 
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
@@ -606,7 +606,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     invalidateCache('/api/jobs');
     invalidateCache('/api/contractor/jobs');
     invalidateCache('/api/dashboard');
-    await proxyToCompanion(req, res, `/api/jobs/${req.params.id}`);
+    await proxyToWebsite(req, res, `/api/jobs/${req.params.id}`);
   });
 
   app.post("/api/jobs/:id/accept", requireAuth, async (req: Request, res: Response) => {
@@ -614,97 +614,97 @@ export async function registerRoutes(app: Express): Promise<Server> {
     invalidateCache('/api/contractor/jobs');
     invalidateCache('/api/driver/jobs');
     invalidateCache('/api/dashboard');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/accept`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/accept`);
   });
 
   app.get("/api/jobs/:id/vehicle-conflicts", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/vehicle-conflicts`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/vehicle-conflicts`);
   });
 
   app.post("/api/jobs/:id/counter-bid", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/counter-bid`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/counter-bid`);
   });
 
   app.post("/api/jobs/:id/withdraw", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
     invalidateCache('/api/dashboard');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/withdraw`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/withdraw`);
   });
 
   app.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}`);
   });
 
   app.post("/api/cleanup-duplicate-assignments", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/assignments`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments`);
   });
 
   app.post("/api/jobs/:id/assignments/:assignmentId/approve", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
     invalidateCache('/api/dashboard');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`);
   });
 
   app.post("/api/jobs/:id/assignments/:assignmentId/reject", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
     invalidateCache('/api/dashboard');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/reject`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/reject`);
   });
 
   app.put("/api/assignments/:assignmentId/vehicle", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/vehicles');
-    return proxyToCompanion(req, res, `/api/assignments/${req.params.assignmentId}/vehicle`);
+    return proxyToWebsite(req, res, `/api/assignments/${req.params.assignmentId}/vehicle`);
   });
 
   app.post("/api/jobs/:id/clock-in", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
     invalidateCache('/api/dashboard');
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.id}/clock-in`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/clock-in`);
   });
 
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
     invalidateCache('/api/dashboard');
     invalidateCache('/api/invoices');
-    return proxyToCompanion(req, res, `/api/job-runs/${req.params.runId}/clock-out`);
+    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}/clock-out`);
   });
 
   app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/job-runs/${req.params.runId}`);
+    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}`);
   });
 
   app.delete("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/job-runs/${req.params.runId}`);
+    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}`);
   });
 
   app.post("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/job-runs/${req.params.runId}/weight-tickets`);
+    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}/weight-tickets`);
   });
 
   app.get("/api/jobs/:jobId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/jobs/${req.params.jobId}/weight-tickets`);
+    return proxyToWebsite(req, res, `/api/jobs/${req.params.jobId}/weight-tickets`);
   });
 
   app.get("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/job-runs/${req.params.runId}/weight-tickets`);
+    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}/weight-tickets`);
   });
 
   app.get("/api/conversations", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, undefined, (data: any) => {
+    return proxyToWebsite(req, res, undefined, (data: any) => {
       if (Array.isArray(data)) return data.filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId));
       return data;
     });
   });
 
   app.get("/api/conversations/archived", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, undefined, (data: any) => {
+    return proxyToWebsite(req, res, undefined, (data: any) => {
       if (Array.isArray(data)) return data.filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId));
       return data;
     });
@@ -713,37 +713,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/conversations/:jobId/archive", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/conversations');
     invalidateCache('/api/messages');
-    return proxyToCompanion(req, res, `/api/conversations/${req.params.jobId}/archive`);
+    return proxyToWebsite(req, res, `/api/conversations/${req.params.jobId}/archive`);
   });
 
   app.post("/api/conversations/:jobId/unarchive", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/conversations');
     invalidateCache('/api/messages');
-    return proxyToCompanion(req, res, `/api/conversations/${req.params.jobId}/unarchive`);
+    return proxyToWebsite(req, res, `/api/conversations/${req.params.jobId}/unarchive`);
   });
 
   app.post("/api/conversations/:jobId/delete", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/conversations');
     invalidateCache('/api/messages');
-    return proxyToCompanion(req, res, `/api/conversations/${req.params.jobId}/delete`);
+    return proxyToWebsite(req, res, `/api/conversations/${req.params.jobId}/delete`);
   });
 
   app.get("/api/messages/unread-count", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getCompanionAuth(req);
+      const auth = getWebsiteAuth(req);
       if (!auth) return res.status(401).json({ message: "Not authenticated" });
 
       const cacheKey = `${auth.userId}:/api/messages/unread-count`;
       const cached = getCached(cacheKey, 15_000);
       if (cached) return res.status(cached.status).json(cached.data);
 
-      const convsRes = await companionFetch("/api/conversations", { method: "GET", jwt: auth.jwt });
+      const convsRes = await websiteFetch("/api/conversations", { method: "GET", jwt: auth.jwt });
       if (!convsRes.ok) {
-        return proxyToCompanion(req, res, "/api/notifications/unread-count");
+        return proxyToWebsite(req, res, "/api/notifications/unread-count");
       }
       const convs = await convsRes.json();
       if (!Array.isArray(convs)) {
-        return proxyToCompanion(req, res, "/api/notifications/unread-count");
+        return proxyToWebsite(req, res, "/api/notifications/unread-count");
       }
       const count = convs
         .filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId))
@@ -752,35 +752,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       setCache(cacheKey, result, 200);
       return res.json(result);
     } catch {
-      return proxyToCompanion(req, res, "/api/notifications/unread-count");
+      return proxyToWebsite(req, res, "/api/notifications/unread-count");
     }
   });
 
   app.get("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/messages/${req.params.jobId}`);
+    return proxyToWebsite(req, res, `/api/messages/${req.params.jobId}`);
   });
 
   app.post("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/messages');
     invalidateCache('/api/conversations');
-    return proxyToCompanion(req, res, `/api/messages/${req.params.jobId}`);
+    return proxyToWebsite(req, res, `/api/messages/${req.params.jobId}`);
   });
 
   app.get("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
+    const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
+    const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     Object.assign(auth.user, req.body);
     return res.json(addDualKeys(auth.user));
   });
 
   app.put("/api/profile/status", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
+    const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     const { is_connected, isConnected } = req.body;
     auth.user.isConnected = is_connected ?? isConnected ?? true;
@@ -789,13 +789,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.put("/api/profile/role", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req);
+    const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     const { role } = req.body;
     if (role) {
       auth.user.role = role;
       try {
-        await companionFetch("/api/users/" + auth.userId, {
+        await websiteFetch("/api/users/" + auth.userId, {
           method: "PUT",
           body: { role },
           jwt: auth.jwt,
@@ -811,60 +811,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.get("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.post("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/vehicles');
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.put("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/vehicles');
-    return proxyToCompanion(req, res, `/api/vehicles/${req.params.id}`);
+    return proxyToWebsite(req, res, `/api/vehicles/${req.params.id}`);
   });
 
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/vehicles');
-    return proxyToCompanion(req, res, `/api/vehicles/${req.params.id}`);
+    return proxyToWebsite(req, res, `/api/vehicles/${req.params.id}`);
   });
 
   app.get("/api/vehicles/:vehicleId/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/vehicles/${req.params.vehicleId}/jobs`);
+    return proxyToWebsite(req, res, `/api/vehicles/${req.params.vehicleId}/jobs`);
   });
 
   app.get("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/me/availability");
+    return proxyToWebsite(req, res, "/api/me/availability");
   });
 
   app.post("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/me/availability");
+    return proxyToWebsite(req, res, "/api/me/availability");
   });
 
   app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.post("/api/notifications/mark-read", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/notifications');
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.get("/api/earnings", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/driver/earnings");
+    return proxyToWebsite(req, res, "/api/driver/earnings");
   });
 
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getCompanionAuth(req)!;
+      const auth = getWebsiteAuth(req)!;
       let jobs = await fetchAllJobsCached(auth);
       const contractorId = auth.userId;
       jobs = jobs.filter((j: any) => {
@@ -888,7 +888,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const cacheKey = `${auth.userId}:/api/_raw_jobs`;
     const cached = getCached(cacheKey, 20_000);
     if (cached) return cached.data;
-    const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
+    const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
     if (!jobsRes.ok) return [];
     const allJobs = await jobsRes.json();
     const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
@@ -899,7 +899,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getCompanionAuth(req)!;
+      const auth = getWebsiteAuth(req)!;
       const jobs = await fetchAllJobsCached(auth);
       return res.json(jobs);
     } catch {
@@ -909,7 +909,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getCompanionAuth(req)!;
+      const auth = getWebsiteAuth(req)!;
       const jobs = await fetchAllJobsCached(auth);
       return res.json(jobs);
     } catch {
@@ -918,28 +918,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/truck-calendar");
+    return proxyToWebsite(req, res, "/api/truck-calendar");
   });
 
   app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.get("/api/invoices/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/invoices/${req.params.id}`);
+    return proxyToWebsite(req, res, `/api/invoices/${req.params.id}`);
   });
 
   app.put("/api/invoices/:id/status", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/invoices/${req.params.id}/status`);
+    return proxyToWebsite(req, res, `/api/invoices/${req.params.id}/status`);
   });
 
   const localProjects = loadJsonMap<any>("projects.json");
 
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getCompanionAuth(req)!;
+      const auth = getWebsiteAuth(req)!;
       const includeDeleted = req.query.include_deleted === "true";
-      const jobsRes = await companionFetch("/api/jobs", { jwt: auth.jwt });
+      const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
       const allJobs = jobsRes.ok ? await jobsRes.json() : [];
       const projectMap = new Map<string, any>();
       for (const j of (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id))) {
@@ -972,7 +972,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-    const auth = getCompanionAuth(req)!;
+    const auth = getWebsiteAuth(req)!;
     const project = {
       id,
       name: req.body.name || req.body.projectName || "Untitled Project",
@@ -991,7 +991,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    const auth = getCompanionAuth(req)!;
+    const auth = getWebsiteAuth(req)!;
     const existing = localProjects.get(req.params.id) || {
       id: req.params.id,
       contractorId: auth.userId,
@@ -1024,11 +1024,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/materials", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, "/api/contractor-materials");
+    return proxyToWebsite(req, res, "/api/contractor-materials");
   });
 
   app.get("/api/saved-locations", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, undefined, async (data: any) => {
+    return proxyToWebsite(req, res, undefined, async (data: any) => {
       if (!Array.isArray(data)) return data;
       const apiKey = process.env.GOOGLE_MAPS_API_KEY;
       if (!apiKey) return data;
@@ -1055,23 +1055,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.get("/api/reviews/pending", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res);
+    return proxyToWebsite(req, res);
   });
 
   app.get("/api/reviews/:userId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/reviews/${req.params.userId}`);
+    return proxyToWebsite(req, res, `/api/reviews/${req.params.userId}`);
   });
 
   app.get("/api/favorites/:driverId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/favorites/${req.params.driverId}`);
+    return proxyToWebsite(req, res, `/api/favorites/${req.params.driverId}`);
   });
 
   app.post("/api/favorites/:driverId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToCompanion(req, res, `/api/favorites/${req.params.driverId}`);
+    return proxyToWebsite(req, res, `/api/favorites/${req.params.driverId}`);
   });
 
   app.get("/api/places/autocomplete", requireAuth, async (req: Request, res: Response) => {
