@@ -214,10 +214,10 @@ export default function CreateJobScreen() {
     }
   }, [routeParams.projectId, projects]);
 
-  const { data: rawMaterials = [] } = useQuery<any[]>({
+  const { data: rawMaterials } = useQuery<any[]>({
     queryKey: ['/api/materials'],
   });
-  const pastMaterials = rawMaterials.map((m: any) => typeof m === 'string' ? m : (m.name || m.normalizedName || String(m)));
+  const pastMaterials = (rawMaterials || []).map((m: any) => typeof m === 'string' ? m : (m.name || m.normalizedName || String(m)));
 
   const filteredMaterials = material.trim()
     ? pastMaterials.filter((m: string) =>
