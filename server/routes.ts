@@ -6,8 +6,8 @@ import { join } from "node:path";
 // This mobile app is the companion to the main LoadLink WEBSITE.
 // WEBSITE_API_URL / WEBSITE_API_KEY point to the WEBSITE (the original/source of truth).
 // "websiteFetch" calls the WEBSITE API. "proxyToWebsite" forwards mobile requests to it.
-const WEBSITE_API_URL = process.env.WEBSITE_API_URL || "https://loadlink.replit.app";
-const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || "";
+const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
+const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
 
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
