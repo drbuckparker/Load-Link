@@ -520,7 +520,7 @@ const styles = StyleSheet.create({
   googleG: {
     fontSize: 14,
     fontWeight: '700' as const,
-    color: '#4285F4',
+    color: Colors.primary,
   },
   socialBtnText: {
     fontFamily: 'Inter_500Medium',
