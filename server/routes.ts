@@ -3,6 +3,9 @@ import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
+// This mobile app is the COMPANION to the main LoadLink WEBSITE.
+// COMPANION_API_URL points to the WEBSITE (the original/source of truth).
+// "companionFetch" calls the WEBSITE API on behalf of this mobile companion app.
 const COMPANION_API_URL = process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const COMPANION_API_KEY = process.env.COMPANION_API_KEY || "";
 
