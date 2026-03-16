@@ -872,14 +872,21 @@ export default function CalendarScreen() {
                       ) : null}
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                         <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
-                        <View style={[styles.calJobStatusBadge, {
-                          backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
-                            job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
-                        }]}>
-                          <Text style={[styles.calJobStatusText, {
-                            color: job.status === 'open' || job.status === 'pending' ? Colors.success :
-                              job.status === 'in_progress' ? Colors.warning : Colors.info
-                          }]}>{job.status === 'in_progress' ? 'Active' : job.status.charAt(0).toUpperCase() + job.status.slice(1)}</Text>
+                        <View style={{ flexDirection: 'row', gap: 6 }}>
+                          {job.isMultiDay && (
+                            <View style={[styles.calJobStatusBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                              <Text style={[styles.calJobStatusText, { color: '#8b5cf6' }]}>DAY {job.dayNumber}/{job.totalDays}</Text>
+                            </View>
+                          )}
+                          <View style={[styles.calJobStatusBadge, {
+                            backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
+                              job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
+                          }]}>
+                            <Text style={[styles.calJobStatusText, {
+                              color: job.status === 'open' || job.status === 'pending' ? Colors.success :
+                                job.status === 'in_progress' ? Colors.warning : Colors.info
+                            }]}>{job.status === 'in_progress' ? 'Active' : job.status.charAt(0).toUpperCase() + job.status.slice(1)}</Text>
+                          </View>
                         </View>
                       </View>
 
