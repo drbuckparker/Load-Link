@@ -171,6 +171,7 @@ export default function JobsBrowseScreen() {
   const { data: rawJobs, isLoading, refetch } = useQuery<any[]>({
     queryKey: [queryUrl],
     enabled: !!user && activeTab === 'jobs',
+    refetchOnMount: 'always',
   });
 
   const projectsQueryUrl = '/api/projects?include_deleted=true';
