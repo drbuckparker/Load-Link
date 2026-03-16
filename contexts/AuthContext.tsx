@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiRequest, getApiUrl, setAuthToken, getAuthToken } from '@/lib/query-client';
+import { apiRequest, getApiUrl, setAuthToken, getAuthToken, queryClient } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
 import { registerForPushNotifications } from '@/lib/notifications';
 
@@ -238,6 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']).catch(() => {});
     setAuthToken(null);
     setUser(null);
+    queryClient.clear();
   }
 
   async function updateUser(updates: Partial<User>) {

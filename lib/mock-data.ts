@@ -79,7 +79,7 @@ export interface Earning {
 
 
 export function formatRate(rate: number, rateType: string): string {
-  const formatted = '$' + rate.toFixed(0);
+  const formatted = rate % 1 === 0 ? '$' + rate.toFixed(0) : '$' + rate.toFixed(2);
   switch (rateType) {
     case 'per_hour': return formatted + '/hr';
     case 'per_ton': return formatted + '/ton';

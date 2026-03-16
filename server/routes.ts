@@ -22,6 +22,12 @@ function loadJsonMap<T>(filename: string): Map<string, T> {
 
 function saveJsonMap<T>(filename: string, map: Map<string, T>) {
   try {
+    if (map.size > 200) {
+      const entries = [...map.entries()];
+      const trimmed = entries.slice(entries.length - 200);
+      map.clear();
+      for (const [k, v] of trimmed) map.set(k, v);
+    }
     writeFileSync(join(DATA_DIR, filename), JSON.stringify([...map.entries()]), "utf-8");
   } catch {}
 }
@@ -751,14 +757,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}`);
   });
 
   app.delete("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
+    invalidateCache('/api/dashboard');
     return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}`);
   });
 
   app.post("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/jobs');
     return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}/weight-tickets`);
   });
 
@@ -1282,6 +1293,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/reviews/pending');
+    invalidateCache('/api/notifications');
     return proxyToWebsite(req, res);
   });
 
@@ -1298,6 +1311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/favorites/:driverId", requireAuth, async (req: Request, res: Response) => {
+    invalidateCache('/api/favorites');
     return proxyToWebsite(req, res, `/api/favorites/${req.params.driverId}`);
   });
 
