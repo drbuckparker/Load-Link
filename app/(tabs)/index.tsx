@@ -14,7 +14,7 @@ import { timeAgo } from '@/lib/mock-data';
 import MapSection from '@/components/MapSection';
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor');
+  return role.includes('contractor') || role === 'trucking_company';
 }
 
 function FleetRunTimer({ clockInTime }: { clockInTime: string }) {

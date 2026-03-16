@@ -144,5 +144,5 @@ export function timeAgo(dateString: string): string {
 }
 
 export function isContractorRole(role: string): boolean {
-  return role?.includes('contractor') ?? false;
+  return (role?.includes('contractor') || role === 'trucking_company') ?? false;
 }

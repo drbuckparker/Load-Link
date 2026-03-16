@@ -14,8 +14,8 @@ import { apiRequest, getApiUrl } from '@/lib/query-client';
 import JobCard from '@/components/JobCard';
 import LocationPickerModal from '@/components/LocationPickerModal';
 
-function isContractorRole(role?: string) {
-  return role?.includes('contractor') ?? false;
+function isContractorRole(role?: string): boolean {
+  return (role?.includes('contractor') || role === 'trucking_company') ?? false;
 }
 
 function mapDbJob(raw: any): Job {

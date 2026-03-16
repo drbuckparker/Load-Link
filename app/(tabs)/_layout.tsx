@@ -11,7 +11,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Redirect } from "expo-router";
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor');
+  return role.includes('contractor') || role === 'trucking_company';
 }
 
 function useUnreadCount() {

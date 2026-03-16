@@ -12,7 +12,7 @@ import { apiRequest } from '@/lib/query-client';
 import { queryClient, getApiUrl } from '@/lib/query-client';
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor');
+  return role.includes('contractor') || role === 'trucking_company';
 }
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];

@@ -15,7 +15,7 @@ import { Earning } from '@/lib/mock-data';
 import LocationPickerModal from '@/components/LocationPickerModal';
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor');
+  return role.includes('contractor') || role === 'trucking_company';
 }
 
 type SettingsTab = 'profile' | 'role' | 'earnings' | 'help' | 'account' | 'billing';

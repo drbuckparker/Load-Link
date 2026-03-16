@@ -12,7 +12,7 @@ import { queryClient } from '@/lib/query-client';
 import { formatTruckType } from '@/lib/mock-data';
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor');
+  return role.includes('contractor') || role === 'trucking_company';
 }
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
