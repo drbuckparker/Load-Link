@@ -95,5 +95,5 @@ Endpoint mappings (mobile app path → website path):
 - `/api/materials` → `/api/contractor-materials`
 - `/api/push/register` → `/api/push/subscribe`
 - `/api/messages/unread-count` → `/api/notifications/unread-count`
-- `/api/calendar/jobs` → `/api/jobs` (filtered client-side by date)
-- `/api/contractor/calendar-capacity` → `/api/truck-calendar`
+- `/api/calendar/jobs` → built locally from `fetchAllJobsCached()` (filtered by driver, month/year, active status)
+- `/api/contractor/calendar-capacity` → built locally from `fetchAllJobsCached()` (filtered by contractor, month/year, active status; computes dailyCapacity/dailyJobs/fleetSize)

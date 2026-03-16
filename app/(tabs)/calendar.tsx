@@ -219,6 +219,8 @@ export default function CalendarScreen() {
   const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, any[]> }>({
     queryKey: ['/api/contractor/calendar-capacity', `?month=${currentMonth + 1}&year=${currentYear}`],
     enabled: !!user && isContractor,
+    staleTime: 30_000,
+    refetchOnMount: 'always',
   });
 
   const vehiclesQuery = useQuery<any[]>({
@@ -295,6 +297,8 @@ export default function CalendarScreen() {
   }>({
     queryKey: ['/api/calendar/jobs', `?month=${currentMonth + 1}&year=${currentYear}`],
     enabled: !!user && !isContractor,
+    staleTime: 30_000,
+    refetchOnMount: 'always',
   });
 
   const dateJobsQueryParams = useMemo(() => {

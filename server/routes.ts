@@ -1011,15 +1011,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const jobs = await fetchAllJobsCached(auth);
-      return res.json(jobs);
+      const allJobs = await fetchAllJobsCached(auth);
+      const driverId = auth.userId;
+      const month = parseInt(req.query.month as string) || (new Date().getMonth() + 1);
+      const year = parseInt(req.query.year as string) || new Date().getFullYear();
+      const activeStatuses = new Set(['open', 'in_progress', 'pending', 'assigned']);
+      const myJobs = allJobs.filter((j: any) => {
+        const dId = j.driverId || j.driver_id;
+        const assignments = j.assignments || [];
+        const isMyJob = dId === driverId || assignments.some((a: any) => a.driverId === driverId || a.driver_id === driverId);
+        if (!isMyJob) return false;
+        const status = (j.status || '').toLowerCase();
+        return activeStatuses.has(status);
+      });
+      const dailyJobs: Record<string, any[]> = {};
+      const jobDateSet = new Set<string>();
+      for (const job of myJobs) {
+        const sd = job.scheduledDate || job.scheduled_date || job.startDate || job.start_date;
+        if (!sd) continue;
+        const d = new Date(sd);
+        const addToDay = (dateKey: string, entry: any) => {
+          const [y, m] = dateKey.split('-').map(Number);
+          if (y !== year || m !== month) return;
+          if (!dailyJobs[dateKey]) dailyJobs[dateKey] = [];
+          dailyJobs[dateKey].push(entry);
+          jobDateSet.add(dateKey);
+        };
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        addToDay(key, job);
+        const estDays = job.estimatedDays || job.estimated_days || 1;
+        if (estDays > 1) {
+          for (let i = 1; i < Math.ceil(estDays); i++) {
+            const nd = new Date(d);
+            nd.setUTCDate(nd.getUTCDate() + i);
+            const nk = `${nd.getUTCFullYear()}-${String(nd.getUTCMonth() + 1).padStart(2, '0')}-${String(nd.getUTCDate()).padStart(2, '0')}`;
+            addToDay(nk, { ...job, isMultiDay: true, dayNumber: i + 1, totalDays: Math.ceil(estDays) });
+          }
+        }
+      }
+      return res.json({ dailyJobs, jobDates: Array.from(jobDateSet).sort() });
     } catch {
-      return res.json([]);
+      return res.json({ dailyJobs: {}, jobDates: [] });
     }
   });
 
   app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, "/api/truck-calendar");
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const allJobs = await fetchAllJobsCached(auth);
+      const contractorId = auth.userId;
+      const month = parseInt(req.query.month as string) || (new Date().getMonth() + 1);
+      const year = parseInt(req.query.year as string) || new Date().getFullYear();
+      const activeStatuses = new Set(['open', 'in_progress', 'pending', 'assigned']);
+      const myJobs = allJobs.filter((j: any) => {
+        const cId = j.contractorId || j.contractor_id;
+        if (cId !== contractorId) return false;
+        const status = (j.status || '').toLowerCase();
+        return activeStatuses.has(status);
+      });
+      const dailyJobs: Record<string, any[]> = {};
+      const dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> = {};
+      const addToDay = (dateKey: string, jobEntry: any) => {
+        const [y, m] = dateKey.split('-').map(Number);
+        if (y !== year || m !== month) return;
+        if (!dailyJobs[dateKey]) dailyJobs[dateKey] = [];
+        dailyJobs[dateKey].push(jobEntry);
+        const trucksNeeded = jobEntry.trucksNeeded || jobEntry.trucks_needed || 0;
+        const booked = jobEntry.assignedTruckCount || jobEntry.assigned_truck_count || jobEntry.approvedCount || jobEntry.approved_count || 0;
+        if (!dailyCapacity[dateKey]) dailyCapacity[dateKey] = { booked: 0, needed: 0, jobCount: 0 };
+        dailyCapacity[dateKey].booked += booked;
+        dailyCapacity[dateKey].needed += trucksNeeded;
+        dailyCapacity[dateKey].jobCount += 1;
+      };
+      for (const job of myJobs) {
+        const sd = job.scheduledDate || job.scheduled_date || job.startDate || job.start_date;
+        if (!sd) continue;
+        const d = new Date(sd);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        addToDay(key, job);
+        const estDays = job.estimatedDays || job.estimated_days || 1;
+        if (estDays > 1) {
+          for (let i = 1; i < Math.ceil(estDays); i++) {
+            const nd = new Date(d);
+            nd.setUTCDate(nd.getUTCDate() + i);
+            const nk = `${nd.getUTCFullYear()}-${String(nd.getUTCMonth() + 1).padStart(2, '0')}-${String(nd.getUTCDate()).padStart(2, '0')}`;
+            addToDay(nk, { ...job, isMultiDay: true, dayNumber: i + 1, totalDays: Math.ceil(estDays) });
+          }
+        }
+      }
+      const fleetSize = Object.values(dailyCapacity).reduce((max, cap) => Math.max(max, cap.needed), 0);
+      return res.json({ fleetSize, dailyCapacity, dailyJobs });
+    } catch {
+      return res.json({ fleetSize: 0, dailyCapacity: {}, dailyJobs: {} });
+    }
   });
 
   app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
