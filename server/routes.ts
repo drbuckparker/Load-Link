@@ -2,10 +2,9 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { pool } from "./db";
+import { fullSync, syncJobs, syncProjects, pushToWebsite, startPeriodicSync, recordUserActivity } from "./sync";
 
-// This mobile app is the companion to the main LoadLink WEBSITE.
-// WEBSITE_API_URL / WEBSITE_API_KEY point to the WEBSITE (the original/source of truth).
-// "websiteFetch" calls the WEBSITE API. "proxyToWebsite" forwards mobile requests to it.
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
 
@@ -374,6 +373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (auth) {
       (req as any).userId = auth.userId;
       (req as any).websiteJwt = auth.jwt;
+      recordUserActivity(auth.userId);
       return next();
     }
     return res.status(401).json({ message: "Not authenticated" });
@@ -465,7 +465,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const enrichedUser = addDualKeys(user);
       res.json({ token: localToken, user: enrichedUser });
 
-      prewarmCache(authEntry).catch(() => {});
+      fullSync(authEntry).catch(() => {});
       return;
     } catch (err: any) {
       console.error("Social login error:", err.message);
@@ -508,7 +508,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const enrichedUser = addDualKeys(user);
       res.json({ token: localToken, user: enrichedUser });
 
-      prewarmCache(authEntry).catch(() => {});
+      fullSync(authEntry).catch(() => {});
       return;
     } catch (err: any) {
       console.error("Login error:", err.message);
@@ -598,31 +598,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const allJobs = await fetchAllJobsCached(auth);
       const startDate = req.query.start_date as string | undefined;
       const endDate = req.query.end_date as string | undefined;
       const status = req.query.status as string | undefined;
-      let jobs = allJobs;
+
+      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.id NOT IN (${[...hiddenJobIds].map((_, i) => `$${i + 1}`).join(',')})`;
+      const params: any[] = [...hiddenJobIds];
+      let paramIdx = params.length + 1;
+
       if (startDate) {
-        const start = new Date(startDate).getTime();
-        jobs = jobs.filter((j: any) => {
-          const jDate = new Date(j.startDate || j.start_date || j.createdAt || j.created_at).getTime();
-          return jDate >= start;
-        });
+        query += ` AND (j.scheduled_date >= $${paramIdx} OR j.created_at >= $${paramIdx})`;
+        params.push(new Date(startDate));
+        paramIdx++;
       }
       if (endDate) {
-        const end = new Date(endDate).getTime();
-        jobs = jobs.filter((j: any) => {
-          const jDate = new Date(j.startDate || j.start_date || j.createdAt || j.created_at).getTime();
-          return jDate <= end;
-        });
+        query += ` AND (j.scheduled_date <= $${paramIdx} OR j.created_at <= $${paramIdx})`;
+        params.push(new Date(endDate));
+        paramIdx++;
       }
       if (status) {
-        jobs = jobs.filter((j: any) => (j.status || '').toLowerCase() === status.toLowerCase());
+        query += ` AND LOWER(j.status::text) = LOWER($${paramIdx})`;
+        params.push(status);
+        paramIdx++;
       }
-      return res.json(jobs);
-    } catch {
-      return res.json([]);
+      query += ` ORDER BY j.created_at DESC`;
+
+      const result = await pool.query(query, params);
+      let jobs = result.rows;
+
+      if (jobs.length === 0) {
+        const allJobs = await fetchAllJobsCached(auth);
+        return res.json(allJobs);
+      }
+
+      return res.json(jobs.map(addDualKeys));
+    } catch (e: any) {
+      console.error("GET /api/jobs local error:", e.message);
+      try {
+        const auth = getWebsiteAuth(req)!;
+        const allJobs = await fetchAllJobsCached(auth);
+        return res.json(allJobs);
+      } catch {
+        return res.json([]);
+      }
     }
   });
 
@@ -986,20 +1004,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      let jobs = await fetchAllJobsCached(auth);
       const contractorId = auth.userId;
-      jobs = jobs.filter((j: any) => {
-        const cId = j.contractorId || j.contractor_id;
-        return cId === contractorId;
-      });
       const projectFilter = req.query.project_id as string | undefined;
+
+      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1`;
+      const params: any[] = [contractorId];
+      let paramIdx = 2;
+
       if (projectFilter) {
-        jobs = jobs.filter((j: any) => {
-          const pId = j.projectId || j.project_id;
-          return pId === projectFilter;
-        });
+        query += ` AND j.project_id = $${paramIdx}`;
+        params.push(projectFilter);
+        paramIdx++;
       }
-      return res.json(jobs);
+      query += ` ORDER BY j.created_at DESC`;
+
+      const result = await pool.query(query, params);
+      let jobs = result.rows;
+
+      if (jobs.length === 0) {
+        jobs = await fetchAllJobsCached(auth);
+        jobs = jobs.filter((j: any) => {
+          const cId = j.contractorId || j.contractor_id;
+          return cId === contractorId;
+        });
+        if (projectFilter) {
+          jobs = jobs.filter((j: any) => {
+            const pId = j.projectId || j.project_id;
+            return pId === projectFilter;
+          });
+        }
+        return res.json(jobs);
+      }
+
+      return res.json(jobs.map(addDualKeys));
     } catch {
       return res.json([]);
     }
@@ -1039,10 +1076,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+
+      const result = await pool.query(
+        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+         WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+         ORDER BY j.created_at DESC`,
+        [auth.userId]
+      );
+
+      if (result.rows.length > 0) {
+        return res.json(result.rows.map(addDualKeys));
+      }
+
       const jobs = await fetchAllJobsCached(auth);
       return res.json(jobs);
     } catch {
-      return res.json([]);
+      try {
+        const auth = getWebsiteAuth(req)!;
+        const jobs = await fetchAllJobsCached(auth);
+        return res.json(jobs);
+      } catch {
+        return res.json([]);
+      }
     }
   });
 
@@ -1065,10 +1120,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return dates;
   }
 
+  async function getJobsForCalendar(auth: { jwt: string; userId: string; user: any }, role: 'driver' | 'contractor'): Promise<any[]> {
+    try {
+      let result;
+      if (role === 'contractor') {
+        result = await pool.query(
+          `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 ORDER BY j.scheduled_date DESC`,
+          [auth.userId]
+        );
+      } else {
+        result = await pool.query(
+          `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+           WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+           ORDER BY j.scheduled_date DESC`,
+          [auth.userId]
+        );
+      }
+      if (result.rows.length > 0) return result.rows.map(addDualKeys);
+    } catch {}
+    return fetchAllJobsCached(auth);
+  }
+
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const allJobs = await fetchAllJobsCached(auth);
+      const allJobs = await getJobsForCalendar(auth, 'driver');
       const driverId = auth.userId;
       const month = parseInt(req.query.month as string) || (new Date().getMonth() + 1);
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
@@ -1113,7 +1189,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/contractor/calendar-capacity", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const allJobs = await fetchAllJobsCached(auth);
+      const allJobs = await getJobsForCalendar(auth, 'contractor');
       const contractorId = auth.userId;
       const month = parseInt(req.query.month as string) || (new Date().getMonth() + 1);
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
@@ -1171,110 +1247,147 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return proxyToWebsite(req, res, `/api/invoices/${req.params.id}/status`);
   });
 
-  const localProjects = loadJsonMap<any>("projects.json");
-
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
       const includeDeleted = req.query.include_deleted === "true";
-      const projectMap = new Map<string, any>();
 
-      const websiteProjectsRes = await websiteFetch("/api/projects", { jwt: auth.jwt });
-      if (websiteProjectsRes.ok) {
-        const websiteProjects = await websiteProjectsRes.json();
-        for (const p of (Array.isArray(websiteProjects) ? websiteProjects : [])) {
-          if (p.id) {
-            projectMap.set(p.id, { ...p, status: p.status || 'active' });
-          }
-        }
-      }
-
-      if (projectMap.size === 0) {
-        const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
-        const allJobs = jobsRes.ok ? await jobsRes.json() : [];
-        for (const j of (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id))) {
-          const cId = j.contractorId || j.contractor_id;
-          const pId = j.projectId || j.project_id;
-          const pName = j.projectName || j.project_name;
-          if (pId && pName) {
-            if (!projectMap.has(pId)) {
-              projectMap.set(pId, {
-                id: pId,
-                name: pName,
-                contractorId: cId || auth.userId,
-                status: "active",
-              });
-            }
-          }
-        }
-      }
-
-      for (const [id, proj] of localProjects) {
-        if (proj.contractorId === auth.userId) {
-          projectMap.set(id, proj);
-        }
-      }
-      let results = [...projectMap.values()];
+      let query = `SELECT * FROM contractor_projects WHERE contractor_id = $1`;
+      const params: any[] = [auth.userId];
       if (!includeDeleted) {
-        results = results.filter((p: any) => p.status !== "deleted");
+        query += ` AND (status != 'deleted' OR status IS NULL) AND deleted_at IS NULL`;
       }
-      return res.json(results.map(addDualKeys));
-    } catch {
-      return res.json([]);
+      query += ` ORDER BY created_at DESC`;
+
+      const result = await pool.query(query, params);
+      let projects = result.rows;
+
+      if (projects.length === 0) {
+        const jobResult = await pool.query(
+          `SELECT DISTINCT project_id, material as name, contractor_id FROM jobs WHERE contractor_id = $1 AND project_id IS NOT NULL`,
+          [auth.userId]
+        );
+        if (jobResult.rows.length > 0) {
+          projects = jobResult.rows.map((r: any) => ({
+            id: r.project_id,
+            name: r.name || 'Untitled Project',
+            contractor_id: r.contractor_id,
+            status: 'active',
+          }));
+        }
+      }
+
+      if (projects.length === 0) {
+        const syncAuth = getWebsiteAuth(req)!;
+        syncProjects(syncAuth).catch(() => {});
+        return proxyToWebsite(req, res);
+      }
+
+      return res.json(projects.map(addDualKeys));
+    } catch (e: any) {
+      console.error("GET /api/projects error:", e.message);
+      return proxyToWebsite(req, res);
     }
   });
 
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
-    const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-    const auth = getWebsiteAuth(req)!;
-    const project = {
-      id,
-      name: req.body.name || req.body.projectName || "Untitled Project",
-      jobNumber: req.body.jobNumber || req.body.job_number || null,
-      siteAddress: req.body.siteAddress || req.body.site_address || null,
-      siteLat: req.body.siteLat || req.body.site_lat || null,
-      siteLng: req.body.siteLng || req.body.site_lng || null,
-      notes: req.body.notes || null,
-      contractorId: auth.userId,
-      status: "active",
-      createdAt: new Date().toISOString(),
-    };
-    localProjects.set(id, project);
-    saveJsonMap("projects.json", localProjects);
-    return res.status(201).json(addDualKeys(project));
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const id = require("crypto").randomUUID();
+      const name = req.body.name || req.body.projectName || req.body.project_name || "Untitled Project";
+      const jobNumber = req.body.jobNumber || req.body.job_number || null;
+      const siteAddress = req.body.siteAddress || req.body.site_address || null;
+      const siteLat = req.body.siteLat || req.body.site_lat || null;
+      const siteLng = req.body.siteLng || req.body.site_lng || null;
+      const notes = req.body.notes || null;
+
+      await pool.query(
+        `INSERT INTO contractor_projects (id, contractor_id, name, job_number, site_address, site_lat, site_lng, notes, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', NOW(), NOW())`,
+        [id, auth.userId, name, jobNumber, siteAddress, siteLat, siteLng, notes]
+      );
+
+      const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [id]);
+      const project = result.rows[0];
+
+      pushToWebsite("/api/projects", auth, { method: "POST", body: { ...req.body, id } }).catch(() => {});
+
+      return res.status(201).json(addDualKeys(project));
+    } catch (e: any) {
+      console.error("POST /api/projects error:", e.message);
+      return proxyToWebsite(req, res);
+    }
   });
 
   app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    const auth = getWebsiteAuth(req)!;
-    const existing = localProjects.get(req.params.id) || {
-      id: req.params.id,
-      contractorId: auth.userId,
-      status: "active",
-    };
-    const updated = { ...existing, ...req.body, id: req.params.id };
-    localProjects.set(req.params.id, updated);
-    saveJsonMap("projects.json", localProjects);
-    return res.json(addDualKeys(updated));
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIdx = 1;
+
+      const fieldMap: Record<string, string> = {
+        name: 'name', projectName: 'name', project_name: 'name',
+        jobNumber: 'job_number', job_number: 'job_number',
+        siteAddress: 'site_address', site_address: 'site_address',
+        siteLat: 'site_lat', site_lat: 'site_lat',
+        siteLng: 'site_lng', site_lng: 'site_lng',
+        notes: 'notes', status: 'status',
+      };
+
+      for (const [bodyKey, dbCol] of Object.entries(fieldMap)) {
+        if (req.body[bodyKey] !== undefined) {
+          updates.push(`${dbCol} = $${paramIdx}`);
+          values.push(req.body[bodyKey]);
+          paramIdx++;
+        }
+      }
+
+      if (updates.length > 0) {
+        updates.push(`updated_at = NOW()`);
+        values.push(req.params.id);
+        await pool.query(
+          `UPDATE contractor_projects SET ${updates.join(', ')} WHERE id = $${paramIdx}`,
+          values
+        );
+      }
+
+      const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [req.params.id]);
+      const project = result.rows[0] || { id: req.params.id, status: 'active' };
+
+      pushToWebsite(`/api/projects/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
+
+      return res.json(addDualKeys(project));
+    } catch (e: any) {
+      console.error("PUT /api/projects error:", e.message);
+      return proxyToWebsite(req, res, `/api/projects/${req.params.id}`);
+    }
   });
 
   app.delete("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
-    const existing = localProjects.get(req.params.id);
-    if (existing) {
-      existing.status = "deleted";
-      localProjects.set(req.params.id, existing);
-      saveJsonMap("projects.json", localProjects);
+    try {
+      await pool.query(
+        `UPDATE contractor_projects SET status = 'deleted', deleted_at = NOW() WHERE id = $1`,
+        [req.params.id]
+      );
+      const auth = getWebsiteAuth(req)!;
+      pushToWebsite(`/api/projects/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
     }
-    return res.json({ ok: true });
   });
 
   app.post("/api/projects/:id/restore", requireAuth, async (req: Request, res: Response) => {
-    const existing = localProjects.get(req.params.id);
-    if (existing) {
-      existing.status = "active";
-      localProjects.set(req.params.id, existing);
-      saveJsonMap("projects.json", localProjects);
+    try {
+      await pool.query(
+        `UPDATE contractor_projects SET status = 'active', deleted_at = NULL WHERE id = $1`,
+        [req.params.id]
+      );
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
     }
-    return res.json({ ok: true });
   });
 
   app.get("/api/materials", requireAuth, async (req: Request, res: Response) => {
@@ -1584,6 +1697,14 @@ function initMap(){
       return res.status(500).json({ message: "Server error" });
     }
   });
+
+  startPeriodicSync(() => {
+    const auths: { jwt: string; userId: string; user: any }[] = [];
+    for (const [, auth] of tokenToJwt) {
+      auths.push(auth);
+    }
+    return auths;
+  }, 60000);
 
   const httpServer = createServer(app);
   return httpServer;

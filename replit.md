@@ -1,7 +1,7 @@
 # LoadLink Mobile Companion App
 
 ## Overview
-The LoadLink Mobile App is the **companion** to the main LoadLink website (`loadlink.replit.app` / `loadlinklive.com`). The **website is the original source of truth** for all data — this mobile app reads and writes via the website's REST API. The mobile app extends the website's functionality to iOS/Android devices, serving all user roles within the short-haul trucking and construction industries: truck drivers, contractors, trucking companies, and foremen.
+The LoadLink Mobile App is the **companion** to the main LoadLink website (`loadlink.replit.app` / `loadlinklive.com`). The app uses a **local-first architecture**: a PostgreSQL database stores all data locally for fast reads, with background sync to/from the website API. On login, a full sync pulls all user data from the website. Periodic sync (every 60s) keeps data fresh. Writes go to the local DB first for instant response, then are pushed to the website asynchronously. The mobile app extends the website's functionality to iOS/Android devices, serving all user roles within the short-haul trucking and construction industries: truck drivers, contractors, trucking companies, and foremen.
 
 ## User Preferences
 I want to prioritize a clean, maintainable, and well-structured codebase. I prefer clear and concise explanations for any proposed changes, focusing on the "why" as much as the "what." For development, I prefer an iterative approach, with small, testable changes. Please ask for confirmation before implementing major architectural changes or refactoring large portions of the codebase. When making changes, ensure that all existing features continue to function as expected, especially role-based access and UI elements.
@@ -27,12 +27,20 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
 - **Social Sign-In**: Google (via `expo-auth-session` with in-app browser sheet) and Apple (via `expo-apple-authentication`, iOS native). Both use the Expo auth proxy in development and native redirects in production builds.
 
-### Backend (Express Proxy to Website API)
-- **Technology**: Express.js acting as a thin proxy layer to the main LoadLink website API.
-- **Architecture**: The Express backend has **NO direct database access**. All reads and writes go through the website's REST API. The backend handles auth token mapping, Google Maps/Places proxying, and constructs some derived endpoints (dashboard, calendar, earnings) from website API data.
+### Backend (Local DB + Website Sync)
+- **Technology**: Express.js with local PostgreSQL database and background sync to the LoadLink website API.
+- **Architecture**: The Express backend uses a **local PostgreSQL database as the primary data source** for fast reads. Data is synced from the website API on login (full sync) and periodically every 60 seconds. Writes go to the local DB first (instant response), then are pushed to the website API asynchronously. For endpoints not yet migrated to local DB, the backend still acts as a proxy to the website API.
+- **Sync Engine** (`server/sync.ts`):
+    - `fullSync(auth)` — Called on login; syncs jobs, projects, assignments, vehicles, availability, invoices, notifications
+    - `startPeriodicSync()` — Runs every 60s for active sessions
+    - `pushToWebsite()` — Async write-through to website API after local DB writes
+    - Falls back to website proxy if local DB has no data (first login before sync completes)
 - **Key files**:
-    - `server/routes.ts` — Proxy route handlers: auth, website API forwarding, Google Maps/Places, derived endpoints
+    - `server/routes.ts` — Route handlers with local DB reads + website API fallback
+    - `server/sync.ts` — Sync engine for pulling/pushing data between local DB and website
+    - `server/db.ts` — PostgreSQL connection pool (drizzle ORM)
     - `server/index.ts` — Express app setup (CORS, body parsing, landing page)
+    - `shared/schema.ts` — Drizzle schema definitions for all tables
 - **Authentication flow**:
     1. Frontend sends `POST /api/auth/login` with `{email, password}`
     2. Express forwards email to `POST https://loadlink.replit.app/api/companion/auth/login` with `X-API-Key` header (password not sent — API key establishes trust)
