@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -193,7 +193,12 @@ export default function DashboardScreen() {
       await apiRequest('PUT', '/api/profile/role', { role: newRole });
       await updateUser({ role: newRole });
       queryClient.invalidateQueries();
-    } catch {}
+    } catch (e: any) {
+      console.error('Role switch failed:', e?.message || e);
+      if (Platform.OS !== 'web') {
+        Alert.alert('Role Switch Failed', 'Could not switch roles. Please try again.');
+      }
+    }
     setSwitchingRole(false);
   }
 
@@ -306,12 +311,12 @@ export default function DashboardScreen() {
           <Text style={[styles.roleToggleText, role === 'trucking_company' && styles.roleToggleTextActive]}>Fleet Manager</Text>
         </Pressable>
         <Pressable
-          style={[styles.roleToggleBtn, isContractorRole(role) && styles.roleToggleBtnActive]}
+          style={[styles.roleToggleBtn, role !== 'trucking_company' && isContractorRole(role) && styles.roleToggleBtnActive]}
           onPress={() => handleRoleToggle('contractor')}
           disabled={switchingRole}
         >
-          <Ionicons name="construct" size={16} color={isContractorRole(role) ? Colors.primaryForeground : Colors.textMuted} />
-          <Text style={[styles.roleToggleText, isContractorRole(role) && styles.roleToggleTextActive]}>Construction Co</Text>
+          <Ionicons name="construct" size={16} color={role !== 'trucking_company' && isContractorRole(role) ? Colors.primaryForeground : Colors.textMuted} />
+          <Text style={[styles.roleToggleText, role !== 'trucking_company' && isContractorRole(role) && styles.roleToggleTextActive]}>Construction Co</Text>
         </Pressable>
         {switchingRole && <ActivityIndicator size="small" color={Colors.primary} style={styles.roleSpinner} />}
       </View>
