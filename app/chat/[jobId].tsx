@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { View, Text, FlatList, TextInput, Pressable, StyleSheet, Platform, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, TextInput, Pressable, StyleSheet, Platform, KeyboardAvoidingView, ActivityIndicator, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -82,8 +82,9 @@ export default function ChatScreen() {
       queryClient.invalidateQueries({ queryKey: [`/api/messages/${jobId}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/conversations'] });
       queryClient.invalidateQueries({ queryKey: ['/api/messages/unread-count'] });
-    } catch (e) {
-      console.log('Failed to send message:', e);
+    } catch (e: any) {
+      Alert.alert('Send Failed', e?.message || 'Could not send message. Please try again.');
+      setMessageText(text);
     }
   }
 

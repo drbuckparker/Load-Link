@@ -850,6 +850,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     Object.assign(auth.user, req.body);
+    try {
+      await websiteFetch("/api/users/" + auth.userId, {
+        method: "PUT",
+        body: req.body,
+        jwt: auth.jwt,
+      });
+    } catch (e: any) {
+      console.log("Profile update forward failed:", e?.message);
+    }
     return res.json(addDualKeys(auth.user));
   });
 
@@ -857,8 +866,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     const { is_connected, isConnected } = req.body;
-    auth.user.isConnected = is_connected ?? isConnected ?? true;
-    auth.user.is_connected = auth.user.isConnected;
+    const newStatus = is_connected ?? isConnected ?? true;
+    auth.user.isConnected = newStatus;
+    auth.user.is_connected = newStatus;
+    try {
+      await websiteFetch("/api/users/" + auth.userId, {
+        method: "PUT",
+        body: { is_connected: newStatus },
+        jwt: auth.jwt,
+      });
+    } catch (e: any) {
+      console.log("Status update forward failed:", e?.message);
+    }
     return res.json(addDualKeys(auth.user));
   });
 
@@ -869,12 +888,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (role) {
       auth.user.role = role;
       try {
-        await websiteFetch("/api/users/" + auth.userId, {
+        const roleRes = await websiteFetch("/api/users/" + auth.userId, {
           method: "PUT",
           body: { role },
           jwt: auth.jwt,
         });
-      } catch {}
+        if (!roleRes.ok) {
+          console.log("Role switch website error:", roleRes.status);
+        }
+      } catch (e: any) {
+        console.log("Role switch forward failed:", e?.message);
+      }
     }
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) {

@@ -669,7 +669,9 @@ export default function JobDetailScreen() {
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
-    } catch (e: any) {}
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to delete run. Please try again.');
+    }
     setDeletingRunId(null);
     setConfirmDeleteRunId(null);
   }
