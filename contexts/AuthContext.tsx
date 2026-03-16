@@ -140,29 +140,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (stored) {
         setUser(JSON.parse(stored));
+        setIsLoading(false);
       }
 
       if (storedToken) {
         const baseUrl = getApiUrl();
-        const res = await fetch(new URL('/api/auth/me', baseUrl).toString(), {
-          headers: {
-            'Authorization': `Bearer ${storedToken}`,
-          },
-          credentials: 'include',
-        });
+        try {
+          const res = await fetch(new URL('/api/auth/me', baseUrl).toString(), {
+            headers: {
+              'Authorization': `Bearer ${storedToken}`,
+            },
+            credentials: 'include',
+          });
 
-        if (res.ok) {
-          const data = await res.json();
-          const mapped = mapDbUser(data.user);
-          await safeStore(mapped);
-          setUser(mapped);
-        } else {
-          const reloginOk = await silentRelogin();
-          if (!reloginOk) {
-            await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']).catch(() => {});
-            setAuthToken(null);
-            setUser(null);
+          if (res.ok) {
+            const data = await res.json();
+            const mapped = mapDbUser(data.user);
+            await safeStore(mapped);
+            setUser(mapped);
+          } else {
+            const reloginOk = await silentRelogin();
+            if (!reloginOk) {
+              await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']).catch(() => {});
+              setAuthToken(null);
+              setUser(null);
+            }
           }
+        } catch (e) {
+          console.log('Auth refresh failed (offline?):', e);
         }
       } else {
         if (!stored) {
@@ -170,7 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (e) {
-      console.log('Auth check failed (offline?):', e);
+      console.log('Auth check failed:', e);
     } finally {
       setIsLoading(false);
     }
