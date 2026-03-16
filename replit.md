@@ -57,7 +57,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Google Maps API note**: The Google Geocoding API is not enabled on the project. The `/api/places/geocode` route uses Google's "Find Place from Text" API instead.
 
 ### Core Features
-- **Job Management**: Drivers can browse, accept, clock-in/out, and track earnings. Contractors can post, manage assignments (approve/reject drivers), and view invoices.
+- **Job Management**: Drivers can browse, accept, clock-in/out, and track earnings. Contractors can post, manage assignments (approve/reject drivers with conflict re-check and fleet truck assignment), and view invoices.
 - **User Roles**: Supports `driver`, `contractor`, `trucking_company`, `trucking_company_contractor`, `driver_contractor`, `foreman`, `driver_trucking_company` with role-based feature access. All non-driver roles can post jobs.
 - **Messaging**: Real-time messaging between users related to specific jobs, including auto-messages for job events.
 - **Review System**: Allows users to submit and view reviews for completed jobs, impacting user ratings.

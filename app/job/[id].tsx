@@ -217,6 +217,12 @@ export default function JobDetailScreen() {
   const [backingOut, setBackingOut] = useState(false);
   const [confirmBackOut, setConfirmBackOut] = useState(false);
   const [removingAssignmentId, setRemovingAssignmentId] = useState<string | null>(null);
+  const [fleetTruckPickerVisible, setFleetTruckPickerVisible] = useState(false);
+  const [pendingApproveAssignment, setPendingApproveAssignment] = useState<Assignment | null>(null);
+  const [selectedFleetVehicleId, setSelectedFleetVehicleId] = useState<string | null>(null);
+  const [approvingAssignment, setApprovingAssignment] = useState(false);
+  const [fleetConflictsData, setFleetConflictsData] = useState<any>(null);
+  const [loadingFleetData, setLoadingFleetData] = useState(false);
   const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string | null>(null);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [editingRun, setEditingRun] = useState<any>(null);
@@ -246,6 +252,10 @@ export default function JobDetailScreen() {
     enabled: truckSelectVisible && !!id,
     staleTime: 0,
     gcTime: 0,
+  });
+  const { data: fleetVehiclesData } = useQuery<any[]>({
+    queryKey: ['/api/vehicles'],
+    enabled: fleetTruckPickerVisible && isContractor,
   });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -423,7 +433,28 @@ export default function JobDetailScreen() {
     return 60 + billedSegments * 15;
   }
 
-  async function handleApproveAssignment(assignmentId: string) {
+  async function handleApproveAssignment(assignmentId: string, skipTruckPicker?: boolean) {
+    const assignment = assignments.find(a => a.id === assignmentId);
+    if (!assignment) return;
+
+    if (isContractor && !skipTruckPicker) {
+      setPendingApproveAssignment(assignment);
+      setSelectedFleetVehicleId(assignment.vehicle?.id || null);
+      setFleetConflictsData(null);
+      setLoadingFleetData(true);
+      setFleetTruckPickerVisible(true);
+
+      try {
+        const conflictRes = await apiRequest('GET', `/api/jobs/${id}/vehicle-conflicts`);
+        const conflicts = await conflictRes.json();
+        setFleetConflictsData(conflicts);
+      } catch {
+        setFleetConflictsData(null);
+      }
+      setLoadingFleetData(false);
+      return;
+    }
+
     try {
       await apiRequest('POST', `/api/jobs/${id}/assignments/${assignmentId}/approve`);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -433,6 +464,64 @@ export default function JobDetailScreen() {
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to approve driver');
     }
+  }
+
+  function closeFleetPicker() {
+    if (approvingAssignment) return;
+    setFleetTruckPickerVisible(false);
+    setPendingApproveAssignment(null);
+    setSelectedFleetVehicleId(null);
+    setFleetConflictsData(null);
+    setLoadingFleetData(false);
+  }
+
+  async function handleFleetApprove() {
+    if (!pendingApproveAssignment) return;
+
+    if (!fleetConflictsData && !loadingFleetData) {
+      Alert.alert(
+        'Conflict Check Failed',
+        'Could not verify truck availability. Would you like to retry?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Retry', onPress: async () => {
+            setLoadingFleetData(true);
+            try {
+              const conflictRes = await apiRequest('GET', `/api/jobs/${id}/vehicle-conflicts`);
+              const conflicts = await conflictRes.json();
+              setFleetConflictsData(conflicts);
+            } catch {
+              Alert.alert('Error', 'Still unable to check conflicts. Please try again later.');
+            }
+            setLoadingFleetData(false);
+          }},
+        ]
+      );
+      return;
+    }
+
+    if (selectedFleetVehicleId && fleetConflictsData?.vehicleConflicts?.[selectedFleetVehicleId]?.blocked) {
+      Alert.alert('Truck Unavailable', 'The selected truck has a scheduling conflict. Please choose another truck.');
+      return;
+    }
+
+    setApprovingAssignment(true);
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/assignments/${pendingApproveAssignment.id}/approve`, {
+        ...(selectedFleetVehicleId ? { vehicleId: selectedFleetVehicleId } : {}),
+      });
+
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      closeFleetPicker();
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/assignments`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/contractor/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/contractor/calendar-capacity'] });
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to approve driver');
+    }
+    setApprovingAssignment(false);
   }
 
   async function handleRejectAssignment(assignmentId: string) {
@@ -2682,6 +2771,160 @@ export default function JobDetailScreen() {
                 )}
               </Pressable>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={fleetTruckPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeFleetPicker}
+      >
+        <Pressable style={styles.modalOverlay} onPress={closeFleetPicker}>
+          <Pressable style={styles.truckSelectSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.truckSelectTitle}>ASSIGN TRUCK & APPROVE</Text>
+            <Text style={styles.truckSelectSubtitle}>
+              {pendingApproveAssignment
+                ? `Assign a truck for ${pendingApproveAssignment.truckingCompanyName || pendingApproveAssignment.driverCompany || pendingApproveAssignment.driverName} on this job.`
+                : 'Select which truck this driver will use.'}
+            </Text>
+
+            {pendingApproveAssignment?.vehicle && (
+              <View style={{ backgroundColor: 'rgba(34,197,94,0.08)', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(34,197,94,0.2)' }}>
+                <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 11, color: Colors.success, letterSpacing: 0.5, marginBottom: 4 }}>DRIVER'S TRUCK</Text>
+                <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text }}>
+                  {[pendingApproveAssignment.vehicle.year, pendingApproveAssignment.vehicle.make, pendingApproveAssignment.vehicle.model].filter(Boolean).join(' ')}
+                  {pendingApproveAssignment.vehicle.truckNumber ? ` #${pendingApproveAssignment.vehicle.truckNumber}` : ''}
+                </Text>
+              </View>
+            )}
+
+            {loadingFleetData ? (
+              <View style={{ padding: 32, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text style={{ color: Colors.textMuted, fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: 10 }}>Checking availability...</Text>
+              </View>
+            ) : !fleetVehiclesData || fleetVehiclesData.length === 0 ? (
+              <View style={styles.noTrucksBox}>
+                <TruckIcon size={32} />
+                <Text style={styles.noTrucksText}>No fleet trucks found</Text>
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 4 }}>
+                  {pendingApproveAssignment?.vehicle ? 'You can approve with the driver\'s own truck.' : 'Add trucks to your fleet first.'}
+                </Text>
+              </View>
+            ) : (
+              <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false} bounces={false}>
+                {fleetVehiclesData.map((v: any) => {
+                  const vId = v.id;
+                  const isSelected = selectedFleetVehicleId === vId;
+                  const conflict = fleetConflictsData?.vehicleConflicts?.[vId];
+                  const isBlocked = conflict?.blocked === true;
+                  const isWrongType = conflict?.wrongType === true;
+                  const truckLabel = [v.year, v.make, v.model].filter(Boolean).join(' ');
+                  const truckTypeLabel = v.truck_type ? formatTruckType(v.truck_type) : '';
+                  const assignedDriverName = v.assigned_driver_name || v.assignedDriverName || null;
+
+                  return (
+                    <Pressable
+                      key={vId}
+                      style={[
+                        styles.truckOption,
+                        isSelected && styles.truckOptionSelected,
+                        isBlocked && styles.truckOptionBlocked,
+                      ]}
+                      onPress={() => {
+                        if (isBlocked) {
+                          const msg = isWrongType
+                            ? 'This truck doesn\'t match the required type for this job.'
+                            : `This truck is already booked${conflict?.conflictDates?.[0] ? ` on ${conflict.conflictDates[0]}` : ''}.`;
+                          Alert.alert('Unavailable', msg);
+                          return;
+                        }
+                        if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setSelectedFleetVehicleId(isSelected ? null : vId);
+                      }}
+                    >
+                      <View style={[styles.truckCheckbox, isSelected && styles.truckCheckboxSelected, isBlocked && styles.truckCheckboxBlocked]}>
+                        {isSelected && <Ionicons name="checkmark" size={16} color="#fff" />}
+                        {isBlocked && !isSelected && <Ionicons name="close" size={14} color="#cc3300" />}
+                      </View>
+                      <TruckIcon size={24} color={isBlocked ? '#cc3300' : isSelected ? Colors.primary : Colors.textMuted} />
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Text style={[styles.truckOptionName, isSelected && { color: Colors.text }, isBlocked && { color: Colors.textMuted }]}>
+                            {truckLabel || 'Unnamed Truck'}
+                          </Text>
+                          {v.truck_number && (
+                            <View style={{ backgroundColor: 'rgba(255,153,0,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                              <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 10, color: Colors.primary }}>#{v.truck_number}</Text>
+                            </View>
+                          )}
+                          {isWrongType && (
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>WRONG TYPE</Text>
+                            </View>
+                          )}
+                          {isBlocked && !isWrongType && (
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>BOOKED</Text>
+                            </View>
+                          )}
+                        </View>
+                        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                          {truckTypeLabel ? <Text style={styles.truckOptionMeta}>{truckTypeLabel}</Text> : null}
+                          {v.license_plate ? <Text style={styles.truckOptionMeta}>Plate: {v.license_plate}</Text> : null}
+                          {v.max_capacity_tons ? <Text style={styles.truckOptionMeta}>{v.max_capacity_tons}T</Text> : null}
+                        </View>
+                        {assignedDriverName && (
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.info, marginTop: 2 }}>
+                            Assigned to: {assignedDriverName}
+                          </Text>
+                        )}
+                        {isBlocked && !isWrongType && conflict?.conflictDates?.length > 0 && (
+                          <Text style={styles.truckConflictInfo}>
+                            {conflict.conflictJobs?.[0] ? `${conflict.conflictJobs[0]} job` : 'Another job'} · {conflict.conflictDates.slice(0, 2).map((d: string) => {
+                              const dt = new Date(d + 'T12:00:00Z');
+                              return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                            }).join(', ')}{conflict.conflictDates.length > 2 ? ` +${conflict.conflictDates.length - 2} more` : ''}
+                          </Text>
+                        )}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <Pressable
+                style={[styles.confirmAcceptBtn, { flex: 1, backgroundColor: 'transparent', borderWidth: 1.5, borderColor: Colors.border }]}
+                onPress={closeFleetPicker}
+              >
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.textSecondary }}>CANCEL</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.confirmAcceptBtn,
+                  { flex: 2, backgroundColor: Colors.success },
+                  approvingAssignment && { opacity: 0.6 },
+                ]}
+                onPress={handleFleetApprove}
+                disabled={approvingAssignment}
+              >
+                {approvingAssignment ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                    <Text style={[styles.confirmAcceptText, { color: '#fff' }]}>
+                      {selectedFleetVehicleId ? 'APPROVE WITH TRUCK' : 'APPROVE'}
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>

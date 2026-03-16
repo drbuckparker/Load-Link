@@ -720,6 +720,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/assignments/:assignmentId/approve", requireAuth, async (req: Request, res: Response) => {
     invalidateCache('/api/jobs');
     invalidateCache('/api/dashboard');
+    invalidateCache('/api/vehicles');
+    invalidateCache('/api/calendar');
+    invalidateCache('/api/contractor/calendar-capacity');
     return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`);
   });
 
