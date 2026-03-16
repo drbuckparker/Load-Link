@@ -1936,12 +1936,16 @@ function initMap(){
   });
 
   startPeriodicSync(() => {
+    const seen = new Set<string>();
     const auths: { jwt: string; userId: string; user: any }[] = [];
     for (const [, auth] of tokenToJwt) {
-      auths.push(auth);
+      if (!seen.has(auth.userId)) {
+        seen.add(auth.userId);
+        auths.push(auth);
+      }
     }
     return auths;
-  }, 60000);
+  }, 120000);
 
   const httpServer = createServer(app);
   return httpServer;

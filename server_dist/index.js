@@ -548,59 +548,29 @@ async function updateSyncTime(entityType, userId) {
     [entityType, userId]
   );
 }
-async function syncJobs(auth) {
-  try {
-    const allJobs = await websiteFetchSync("/api/jobs", { jwt: auth.jwt });
-    if (!Array.isArray(allJobs)) return 0;
-    const jobs2 = allJobs.filter((j) => j.id && !hiddenJobIds.has(j.id));
-    const count = await upsertMany("jobs", jobs2);
-    const projectMap = /* @__PURE__ */ new Map();
-    for (const j of jobs2) {
-      const pId = j.projectId || j.project_id;
-      const pName = j.projectName || j.project_name;
-      const cId = j.contractorId || j.contractor_id;
-      if (pId && pName) {
-        projectMap.set(pId, {
-          id: pId,
-          name: pName,
-          contractor_id: cId,
-          status: "active"
-        });
-      }
-    }
-    await updateSyncTime("jobs", auth.userId);
-    return count;
-  } catch (e) {
-    console.error("syncJobs error:", e.message);
-    return 0;
-  }
-}
-async function syncProjects(auth) {
+async function syncProjects(auth, cachedJobs) {
   try {
     let projects = [];
     const websiteProjects = await websiteFetchSync("/api/projects", { jwt: auth.jwt });
     if (Array.isArray(websiteProjects) && websiteProjects.length > 0) {
       projects = websiteProjects;
     }
-    if (projects.length === 0) {
-      const allJobs = await websiteFetchSync("/api/jobs", { jwt: auth.jwt });
-      if (Array.isArray(allJobs)) {
-        const projectMap = /* @__PURE__ */ new Map();
-        for (const j of allJobs.filter((j2) => !hiddenJobIds.has(j2.id))) {
-          const pId = j.projectId || j.project_id;
-          const pName = j.projectName || j.project_name;
-          const cId = j.contractorId || j.contractor_id;
-          if (pId && pName) {
-            projectMap.set(pId, {
-              id: pId,
-              name: pName,
-              contractor_id: cId || auth.userId,
-              status: "active"
-            });
-          }
+    if (projects.length === 0 && cachedJobs) {
+      const projectMap = /* @__PURE__ */ new Map();
+      for (const j of cachedJobs.filter((j2) => !hiddenJobIds.has(j2.id))) {
+        const pId = j.projectId || j.project_id;
+        const pName = j.projectName || j.project_name;
+        const cId = j.contractorId || j.contractor_id;
+        if (pId && pName) {
+          projectMap.set(pId, {
+            id: pId,
+            name: pName,
+            contractor_id: cId || auth.userId,
+            status: "active"
+          });
         }
-        projects = [...projectMap.values()];
       }
+      projects = [...projectMap.values()];
     }
     const count = await upsertMany("contractor_projects", projects);
     await updateSyncTime("projects", auth.userId);
@@ -683,30 +653,42 @@ async function syncUser(auth) {
     console.error("syncUser error:", e.message);
   }
 }
+var _syncInProgress = /* @__PURE__ */ new Map();
 async function fullSync(auth) {
+  if (_syncInProgress.get(auth.userId)) {
+    return { jobs: 0, projects: 0, assignments: 0, vehicles: 0 };
+  }
+  _syncInProgress.set(auth.userId, true);
   const t0 = Date.now();
   console.log(`[Sync] Starting full sync for user ${auth.userId}...`);
-  await syncUser(auth);
-  const [jobs2, projects, assignments, vehicles] = await Promise.allSettled([
-    syncJobs(auth),
-    syncProjects(auth),
-    syncJobAssignments(auth),
-    syncVehicles(auth)
-  ]);
-  Promise.allSettled([
-    syncAvailability(auth),
-    syncInvoices(auth),
-    syncNotifications(auth)
-  ]).catch(() => {
-  });
-  const result = {
-    jobs: jobs2.status === "fulfilled" ? jobs2.value : 0,
-    projects: projects.status === "fulfilled" ? projects.value : 0,
-    assignments: assignments.status === "fulfilled" ? assignments.value : 0,
-    vehicles: vehicles.status === "fulfilled" ? vehicles.value : 0
-  };
-  console.log(`[Sync] Full sync complete in ${Date.now() - t0}ms: ${JSON.stringify(result)}`);
-  return result;
+  try {
+    await syncUser(auth);
+    const allJobs = await websiteFetchSync("/api/jobs", { jwt: auth.jwt });
+    const jobsList = Array.isArray(allJobs) ? allJobs.filter((j) => j.id && !hiddenJobIds.has(j.id)) : [];
+    const jobCount = await upsertMany("jobs", jobsList);
+    await updateSyncTime("jobs", auth.userId);
+    const [projects, assignments, vehicles] = await Promise.allSettled([
+      syncProjects(auth, jobsList),
+      syncJobAssignments(auth),
+      syncVehicles(auth)
+    ]);
+    Promise.allSettled([
+      syncAvailability(auth),
+      syncInvoices(auth),
+      syncNotifications(auth)
+    ]).catch(() => {
+    });
+    const result = {
+      jobs: jobCount,
+      projects: projects.status === "fulfilled" ? projects.value : 0,
+      assignments: assignments.status === "fulfilled" ? assignments.value : 0,
+      vehicles: vehicles.status === "fulfilled" ? vehicles.value : 0
+    };
+    console.log(`[Sync] Full sync complete in ${Date.now() - t0}ms: ${JSON.stringify(result)}`);
+    return result;
+  } finally {
+    _syncInProgress.set(auth.userId, false);
+  }
 }
 async function pushToWebsite(path2, auth, options = {}) {
   try {
@@ -726,7 +708,7 @@ var _lastUserActivity = /* @__PURE__ */ new Map();
 function recordUserActivity(userId) {
   _lastUserActivity.set(userId, Date.now());
 }
-function startPeriodicSync(getActiveAuths, intervalMs = 6e4) {
+function startPeriodicSync(getActiveAuths, intervalMs = 12e4) {
   if (_syncTimers.has("periodic")) {
     clearInterval(_syncTimers.get("periodic"));
   }
@@ -2565,12 +2547,16 @@ function initMap(){
     }
   });
   startPeriodicSync(() => {
+    const seen = /* @__PURE__ */ new Set();
     const auths = [];
     for (const [, auth] of tokenToJwt) {
-      auths.push(auth);
+      if (!seen.has(auth.userId)) {
+        seen.add(auth.userId);
+        auths.push(auth);
+      }
     }
     return auths;
-  }, 6e4);
+  }, 12e4);
   const httpServer = createServer(app2);
   return httpServer;
 }
