@@ -17,7 +17,7 @@ function isContractorRole(role: string): boolean {
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-function getStatusInfo(status: string): { label: string; color: string; bg: string } {
+function getStatusInfo(status?: string | null): { label: string; color: string; bg: string } {
   switch (status) {
     case 'open': return { label: 'OPEN', color: Colors.warning, bg: Colors.warningBg };
     case 'issued': return { label: 'ISSUED', color: Colors.info, bg: Colors.infoBg };
@@ -25,17 +25,17 @@ function getStatusInfo(status: string): { label: string; color: string; bg: stri
     case 'payment_received': return { label: 'PAID', color: Colors.success, bg: Colors.successBg };
     case 'paid': return { label: 'PAID', color: Colors.success, bg: Colors.successBg };
     case 'void': return { label: 'VOID', color: Colors.destructive, bg: Colors.destructiveBg };
-    default: return { label: status.toUpperCase(), color: Colors.textMuted, bg: 'rgba(107,112,128,0.2)' };
+    default: return { label: (status || 'UNKNOWN').toUpperCase(), color: Colors.textMuted, bg: 'rgba(107,112,128,0.2)' };
   }
 }
 
-function getJobStatusInfo(status: string): { label: string; color: string; bg: string } {
+function getJobStatusInfo(status?: string | null): { label: string; color: string; bg: string } {
   switch (status) {
     case 'completed': return { label: 'COMPLETED', color: Colors.success, bg: Colors.successBg };
     case 'in_progress': return { label: 'IN PROGRESS', color: Colors.warning, bg: Colors.warningBg };
     case 'open': return { label: 'OPEN', color: Colors.info, bg: Colors.infoBg };
     case 'cancelled': return { label: 'CANCELLED', color: Colors.destructive, bg: Colors.destructiveBg };
-    default: return { label: status.toUpperCase(), color: Colors.textMuted, bg: 'rgba(107,112,128,0.2)' };
+    default: return { label: (status || 'UNKNOWN').toUpperCase(), color: Colors.textMuted, bg: 'rgba(107,112,128,0.2)' };
   }
 }
 
