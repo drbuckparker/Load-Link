@@ -57,6 +57,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Local DB writes + async push**: job actions (accept/withdraw/clock-in/clock-out), messages, vehicles, availability, reviews, favorites, push registration
     - **Handled locally**: Google Maps/Places autocomplete/details/geocode/directions/polyline/embed
 - **Response format**: All JSON responses include both camelCase and snake_case keys via `addDualKeys()` utility, ensuring backward compatibility with frontend code that uses either format.
+- **Database enums**: The local PostgreSQL DB uses custom enums: `job_status` (open, accepted, pending, in_progress, completed, cancelled), `invoice_status` (open, issued, payment_sent, payment_received, void), `job_assignment_status` (pending, approved, rejected, withdrawn). SQL queries must use valid enum values — e.g., use `status::text IN ('open', 'issued')` for unpaid invoices (NOT 'pending'), and `status::text = 'payment_received'` for paid invoices (NOT 'paid').
 - **Environment variables**:
     - `WEBSITE_API_KEY` — API key for authenticating with the LoadLink website API
     - `WEBSITE_API_URL` — Base URL of the LoadLink website (default: `https://loadlink.replit.app`)

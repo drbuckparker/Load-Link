@@ -250,6 +250,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Email is required" });
       }
 
+      for (const [existingToken, session] of tokenToJwt.entries()) {
+        if (session.user?.email?.toLowerCase() === email.toLowerCase()) {
+          const localToken = require("crypto").randomBytes(32).toString("hex");
+          tokenToJwt.set(localToken, session);
+          saveJsonMap("sessions.json", tokenToJwt);
+          recordUserActivity(session.userId);
+          res.json({ token: localToken, user: addDualKeys(session.user) });
+
+          websiteFetch("/api/companion/auth/login", {
+            method: "POST",
+            body: { email },
+          }).then(async (r) => {
+            if (r.ok) {
+              const d = await r.json();
+              if (d.token && d.user) {
+                const updated = { jwt: d.token, userId: d.user.id, user: d.user };
+                tokenToJwt.set(localToken, updated);
+                saveJsonMap("sessions.json", tokenToJwt);
+                fullSync(updated).catch(() => {});
+              }
+            }
+          }).catch(() => {});
+          return;
+        }
+      }
+
       const websiteRes = await websiteFetch("/api/companion/auth/login", {
         method: "POST",
         body: { email },
@@ -386,10 +412,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const startDate = req.query.start_date as string | undefined;
       const endDate = req.query.end_date as string | undefined;
       const status = req.query.status as string | undefined;
+      const search = req.query.search as string | undefined;
+      const driverId = req.query.driver_id as string | undefined;
 
-      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.id NOT IN (${[...hiddenJobIds].map((_, i) => `$${i + 1}`).join(',')})`;
-      const params: any[] = [...hiddenJobIds];
-      let paramIdx = params.length + 1;
+      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE 1=1`;
+      const params: any[] = [];
+      let paramIdx = 1;
+
+      if (hiddenJobIds.size > 0) {
+        query += ` AND j.id NOT IN (${[...hiddenJobIds].map((_, i) => `$${paramIdx + i}`).join(',')})`;
+        params.push(...hiddenJobIds);
+        paramIdx += hiddenJobIds.size;
+      }
 
       if (startDate) {
         query += ` AND (j.scheduled_date >= $${paramIdx} OR j.created_at >= $${paramIdx})`;
@@ -402,16 +436,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paramIdx++;
       }
       if (status) {
-        query += ` AND LOWER(j.status::text) = LOWER($${paramIdx})`;
-        params.push(status);
+        const statusLower = status.toLowerCase();
+        if (statusLower === 'in_progress' || statusLower === 'active') {
+          query += ` AND LOWER(j.status::text) IN ('in_progress', 'accepted', 'assigned')`;
+        } else {
+          query += ` AND LOWER(j.status::text) = LOWER($${paramIdx})`;
+          params.push(status);
+          paramIdx++;
+        }
+      }
+      if (driverId) {
+        query += ` AND (j.driver_id = $${paramIdx} OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $${paramIdx}))`;
+        params.push(driverId);
+        paramIdx++;
+      }
+      if (search) {
+        query += ` AND (j.material_type ILIKE $${paramIdx} OR j.pickup_location ILIKE $${paramIdx} OR j.dropoff_location ILIKE $${paramIdx})`;
+        params.push(`%${search}%`);
         paramIdx++;
       }
       query += ` ORDER BY j.created_at DESC`;
 
       const result = await pool.query(query, params);
-      let jobs = result.rows;
-
-      return res.json(jobs.map(addDualKeys));
+      return res.json(result.rows.map(addDualKeys));
     } catch (e: any) {
       console.error("GET /api/jobs local error:", e.message);
       return res.json([]);
@@ -1078,17 +1125,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = auth.userId;
       const role = (auth.user?.role || '').toLowerCase();
       const isContractor = role.includes('contractor') || role === 'trucking_company';
-
       const jobsResult = await pool.query(
         isContractor
-          ? `SELECT * FROM jobs WHERE contractor_id = $1 AND status NOT IN ('cancelled') ORDER BY created_at DESC`
-          : `SELECT * FROM jobs WHERE (driver_id = $1 OR id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1)) AND status NOT IN ('cancelled') ORDER BY created_at DESC`,
+          ? `SELECT * FROM jobs WHERE contractor_id = $1 AND status::text != 'cancelled' ORDER BY created_at DESC`
+          : `SELECT * FROM jobs WHERE (driver_id = $1 OR id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1)) AND status::text != 'cancelled' ORDER BY created_at DESC`,
         [userId]
       );
       const jobs = jobsResult.rows;
 
       const openJobs = jobs.filter((j: any) => j.status === 'open').length;
-      const activeJobs = jobs.filter((j: any) => ['assigned', 'in_progress'].includes(j.status)).length;
+      const activeJobs = jobs.filter((j: any) => ['assigned', 'accepted', 'in_progress'].includes(j.status)).length;
       const completedJobs = jobs.filter((j: any) => j.status === 'completed').length;
 
       const assignResult = await pool.query(
@@ -1101,7 +1147,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = userResult.rows[0];
 
       const invoicesResult = await pool.query(
-        `SELECT COALESCE(SUM(total_amount), 0)::float as total, COALESCE(SUM(CASE WHEN status = 'pending' THEN total_amount ELSE 0 END), 0)::float as awaiting FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`,
+        `SELECT COALESCE(SUM(total_amount), 0)::float as total, COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued') THEN total_amount ELSE 0 END), 0)::float as awaiting FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`,
         [userId]
       );
 
@@ -1133,8 +1179,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
         `SELECT COALESCE(SUM(total_amount), 0)::float as total,
-                COALESCE(SUM(CASE WHEN status = 'paid' THEN total_amount ELSE 0 END), 0)::float as paid,
-                COALESCE(SUM(CASE WHEN status = 'pending' THEN total_amount ELSE 0 END), 0)::float as pending
+                COALESCE(SUM(CASE WHEN status::text = 'payment_received' THEN total_amount ELSE 0 END), 0)::float as paid,
+                COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued') THEN total_amount ELSE 0 END), 0)::float as pending
          FROM monthly_invoices WHERE driver_id = $1`,
         [auth.userId]
       );
@@ -1149,6 +1195,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const contractorId = auth.userId;
       const projectFilter = req.query.project_id as string | undefined;
+      const status = req.query.status as string | undefined;
+      const search = req.query.search as string | undefined;
 
       let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1`;
       const params: any[] = [contractorId];
@@ -1159,13 +1207,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         params.push(projectFilter);
         paramIdx++;
       }
+      if (status) {
+        const statusLower = status.toLowerCase();
+        if (statusLower === 'in_progress' || statusLower === 'active') {
+          query += ` AND LOWER(j.status::text) IN ('in_progress', 'accepted', 'assigned')`;
+        } else {
+          query += ` AND LOWER(j.status::text) = LOWER($${paramIdx})`;
+          params.push(status);
+          paramIdx++;
+        }
+      }
+      if (search) {
+        query += ` AND (j.material_type ILIKE $${paramIdx} OR j.pickup_location ILIKE $${paramIdx} OR j.dropoff_location ILIKE $${paramIdx})`;
+        params.push(`%${search}%`);
+        paramIdx++;
+      }
       query += ` ORDER BY j.created_at DESC`;
 
       const result = await pool.query(query, params);
-      let jobs = result.rows;
-
-      return res.json(jobs.map(addDualKeys));
-    } catch {
+      return res.json(result.rows.map(addDualKeys));
+    } catch (e: any) {
+      console.error("GET /api/contractor/jobs error:", e.message);
       return res.json([]);
     }
   });
