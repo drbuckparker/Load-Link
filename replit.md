@@ -29,15 +29,15 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 
 ### Backend (Local DB + Website Sync)
 - **Technology**: Express.js with local PostgreSQL database and background sync to the LoadLink website API.
-- **Architecture**: The Express backend uses a **local PostgreSQL database as the primary data source** for fast reads. Data is synced from the website API on login (full sync) and periodically every 60 seconds. Writes go to the local DB first (instant response), then are pushed to the website API asynchronously. For endpoints not yet migrated to local DB, the backend still acts as a proxy to the website API.
+- **Architecture**: The Express backend uses a **local PostgreSQL database as the sole data source** for all reads and writes. NO API calls are made to the website for data — all reads come from the local DB and all writes go to the local DB first with async push to the website. The only website API calls are for authentication (login/register/password reset).
 - **Sync Engine** (`server/sync.ts`):
-    - `fullSync(auth)` — Called on login; syncs jobs, projects, assignments, vehicles, availability, invoices, notifications
-    - `startPeriodicSync()` — Runs every 60s for active sessions
+    - `fullSync(auth)` — Called on login; syncs jobs, projects, assignments, vehicles, availability, invoices, notifications from website → local DB
+    - `startPeriodicSync()` — Runs every 60s for recently active users (active in last 5 min)
     - `pushToWebsite()` — Async write-through to website API after local DB writes
-    - Falls back to website proxy if local DB has no data (first login before sync completes)
+    - `recordUserActivity()` — Tracks last activity time per user for smart periodic sync
 - **Key files**:
-    - `server/routes.ts` — Route handlers with local DB reads + website API fallback
-    - `server/sync.ts` — Sync engine for pulling/pushing data between local DB and website
+    - `server/routes.ts` — Route handlers reading/writing exclusively to local PostgreSQL DB
+    - `server/sync.ts` — Background sync engine for pulling data from website → local DB and pushing writes back
     - `server/db.ts` — PostgreSQL connection pool (drizzle ORM)
     - `server/index.ts` — Express app setup (CORS, body parsing, landing page)
     - `shared/schema.ts` — Drizzle schema definitions for all tables
@@ -52,11 +52,11 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     8. On 401/403 from website, Express automatically refreshes the JWT via re-login
 - **Silent re-login**: If a stored session token becomes invalid (e.g., after a deploy/restart), the mobile app automatically re-authenticates using stored credentials (email/password in AsyncStorage) without showing a login screen.
 - **Endpoint categories**:
-    - **Proxied to website**: jobs, job actions (accept/withdraw/clock-in/clock-out), conversations, messages, notifications, invoices, vehicles, reviews, favorites
-    - **Built locally from website data**: dashboard, profile, calendar/jobs, contractor/jobs, driver/jobs, earnings, projects, materials, saved-locations, availability, messages/unread-count
+    - **Auth (website API calls)**: login, register, forgot-password, reset-password, set-password — these are the ONLY endpoints that call the website API directly
+    - **Local DB reads**: ALL data endpoints — jobs, dashboard, conversations, messages, notifications, invoices, vehicles, reviews, favorites, earnings, projects, materials, availability, calendar
+    - **Local DB writes + async push**: job actions (accept/withdraw/clock-in/clock-out), messages, vehicles, availability, reviews, favorites, push registration
     - **Handled locally**: Google Maps/Places autocomplete/details/geocode/directions/polyline/embed
 - **Response format**: All JSON responses include both camelCase and snake_case keys via `addDualKeys()` utility, ensuring backward compatibility with frontend code that uses either format.
-- **Server-side response caching**: In-memory `responseCache` Map with per-endpoint TTLs (unread-count: 15s, dashboard: 30s, jobs: 20s, vehicles: 60s). Cache is keyed by `userId:path` and automatically invalidated on mutations. All job-fetching endpoints (`/api/jobs`, `/api/contractor/jobs`, `/api/driver/jobs`, `/api/calendar/jobs`) share a single `_raw_jobs` cache entry via `fetchAllJobsCached()`, with client-side filtering for role/project.
 - **Environment variables**:
     - `WEBSITE_API_KEY` — API key for authenticating with the LoadLink website API
     - `WEBSITE_API_URL` — Base URL of the LoadLink website (default: `https://loadlink.replit.app`)

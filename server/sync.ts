@@ -239,7 +239,11 @@ export async function syncVehicles(auth: SyncAuth): Promise<number> {
   try {
     const data = await websiteFetchSync("/api/vehicles", { jwt: auth.jwt });
     if (!Array.isArray(data)) return 0;
-    const count = await upsertMany("driver_vehicles", data);
+    const mapped = data.map((v: any) => ({
+      ...v,
+      trucking_company_id: v.trucking_company_id || v.truckingCompanyId || v.driver_id || v.driverId || auth.userId,
+    }));
+    const count = await upsertMany("trucks", mapped);
     await updateSyncTime("vehicles", auth.userId);
     return count;
   } catch (e: any) {

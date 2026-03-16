@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pool } from "./db";
-import { fullSync, syncJobs, syncProjects, pushToWebsite, startPeriodicSync, recordUserActivity } from "./sync";
+import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity } from "./sync";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -80,66 +80,6 @@ function addDualKeys(obj: any): any {
   return result;
 }
 
-interface CacheEntry {
-  data: any;
-  status: number;
-  timestamp: number;
-}
-const responseCache = new Map<string, CacheEntry>();
-
-function getCached(key: string, ttlMs: number): CacheEntry | null {
-  const entry = responseCache.get(key);
-  if (entry && Date.now() - entry.timestamp < ttlMs) return entry;
-  if (entry) responseCache.delete(key);
-  return null;
-}
-
-function setCache(key: string, data: any, status: number) {
-  responseCache.set(key, { data, status, timestamp: Date.now() });
-  if (responseCache.size > 500) {
-    const oldest = responseCache.keys().next().value;
-    if (oldest) responseCache.delete(oldest);
-  }
-}
-
-function invalidateCache(pattern: string) {
-  for (const key of responseCache.keys()) {
-    if (key.includes(pattern)) responseCache.delete(key);
-  }
-  if (pattern.includes('/api/jobs') || pattern.includes('/api/contractor/jobs') || pattern.includes('/api/driver/jobs')) {
-    for (const key of responseCache.keys()) {
-      if (key.includes('_raw_jobs')) responseCache.delete(key);
-    }
-  }
-}
-
-const CACHE_TTLS: Record<string, number> = {
-  '/api/messages/unread-count': 15_000,
-  '/api/dashboard': 30_000,
-  '/api/notifications': 30_000,
-  '/api/conversations': 30_000,
-  '/api/conversations/archived': 60_000,
-  '/api/reviews/pending': 60_000,
-  '/api/invoices': 60_000,
-  '/api/contractor/jobs': 20_000,
-  '/api/jobs': 20_000,
-  '/api/driver/jobs': 20_000,
-  '/api/calendar/jobs': 30_000,
-  '/api/vehicles': 60_000,
-  '/api/availability': 60_000,
-  '/api/saved-locations': 60_000,
-  '/api/materials': 120_000,
-  '/api/truck-calendar': 60_000,
-};
-
-function getCacheTtl(path: string): number {
-  for (const [pattern, ttl] of Object.entries(CACHE_TTLS)) {
-    if (path === pattern || path.startsWith(pattern + '/') || path.startsWith(pattern + '?')) return ttl;
-  }
-  if (path.match(/^\/api\/jobs\/[^/]+$/)) return 15_000;
-  return 0;
-}
-
 function getWebsiteAuth(req: Request): { jwt: string; userId: string; user: any } | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
@@ -188,121 +128,6 @@ async function websiteFetch(
   return fetch(url.toString(), fetchOpts);
 }
 
-const _jwtRefreshInProgress = new Map<string, Promise<string | null>>();
-
-async function refreshWebsiteJwt(localToken: string, auth: { jwt: string; userId: string; user: any }): Promise<string | null> {
-  const existing = _jwtRefreshInProgress.get(localToken);
-  if (existing) return existing;
-
-  const promise = (async () => {
-    try {
-      const email = auth.user?.email;
-      if (!email) return null;
-      const refreshRes = await websiteFetch("/api/companion/auth/login", {
-        method: "POST",
-        body: { email },
-      });
-      if (!refreshRes.ok) return null;
-      const data = await refreshRes.json();
-      if (data.token) {
-        const updated = { ...auth, jwt: data.token, user: data.user || auth.user };
-        tokenToJwt.set(localToken, updated);
-        saveJsonMap("sessions.json", tokenToJwt);
-        console.log("Refreshed website JWT for", email);
-        return data.token;
-      }
-    } catch (e: any) {
-      console.error("JWT refresh failed:", e.message);
-    }
-    return null;
-  })();
-
-  _jwtRefreshInProgress.set(localToken, promise);
-  promise.finally(() => _jwtRefreshInProgress.delete(localToken));
-  return promise;
-}
-
-async function proxyToWebsite(
-  req: Request,
-  res: Response,
-  overridePath?: string,
-  overrideOptions?: { method?: string; body?: any } | ((data: any) => any),
-) {
-  const transform = typeof overrideOptions === 'function' ? overrideOptions : undefined;
-  const opts = typeof overrideOptions === 'function' ? undefined : overrideOptions;
-  const auth = getWebsiteAuth(req);
-  if (!auth) {
-    return res.status(401).json({ message: "Not authenticated" });
-  }
-
-  const localToken = req.headers.authorization?.slice(7) || "";
-  const targetPath = overridePath || req.path;
-  const method = opts?.method || req.method;
-  const body = opts?.body || (method !== "GET" ? req.body : undefined);
-
-  const query: Record<string, string> = {};
-  for (const [k, v] of Object.entries(req.query)) {
-    if (typeof v === "string") query[k] = v;
-  }
-
-  const queryStr = Object.keys(query).length ? '?' + new URLSearchParams(query).toString() : '';
-  const cacheKey = `${auth.userId}:${targetPath}${queryStr}`;
-  const ttl = method === 'GET' ? getCacheTtl(targetPath) : 0;
-
-  if (ttl > 0) {
-    const cached = getCached(cacheKey, ttl);
-    if (cached) {
-      return res.status(cached.status).json(cached.data);
-    }
-  }
-
-  async function doFetch(jwt: string) {
-    return websiteFetch(targetPath, { method, body, jwt, query });
-  }
-
-  try {
-    let websiteRes = await doFetch(auth.jwt);
-
-    if (websiteRes.status === 401 && localToken) {
-      const newJwt = await refreshWebsiteJwt(localToken, auth);
-      if (newJwt) {
-        websiteRes = await doFetch(newJwt);
-      }
-    }
-
-    const contentType = websiteRes.headers.get("content-type") || "";
-
-    if (contentType.includes("text/html") || !contentType.includes("application/json")) {
-      const text = await websiteRes.text();
-      const status = websiteRes.status >= 400 ? websiteRes.status : 502;
-      console.error(`Proxy ${method} ${targetPath} returned non-JSON (${contentType}): ${text.slice(0, 200)}`);
-      return res.status(status).json({ message: "The LoadLink service is temporarily unavailable. Please try again." });
-    }
-
-    let data = await websiteRes.json();
-    if (websiteRes.status >= 400) {
-      console.error(`Proxy ${method} ${targetPath} → ${websiteRes.status}:`, JSON.stringify(data));
-    }
-    if (transform && websiteRes.status < 400) {
-      data = await transform(data);
-    }
-    const enriched = addDualKeys(data);
-
-    if (ttl > 0 && websiteRes.status < 500) {
-      setCache(cacheKey, enriched, websiteRes.status);
-    }
-
-    return res.status(websiteRes.status).json(enriched);
-  } catch (err: any) {
-    console.error(`Proxy error ${method} ${targetPath}:`, err.message);
-    if (ttl > 0) {
-      const stale = responseCache.get(cacheKey);
-      if (stale) return res.status(stale.status).json(stale.data);
-    }
-    return res.status(502).json({ message: "Failed to reach website API" });
-  }
-}
-
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.round((totalSeconds % 3600) / 60);
@@ -311,61 +136,6 @@ function formatDuration(totalSeconds: number): string {
   return `${minutes} min`;
 }
 
-let _prewarmFetchAllJobs: ((auth: { jwt: string; userId: string; user: any }) => Promise<any[]>) | null = null;
-const _prewarmInFlight = new Map<string, Promise<any>>();
-
-function getOrFetchEndpoint(cacheKey: string, ep: string, jwt: string): Promise<any> {
-  const ttl = getCacheTtl(ep) || 30_000;
-  const cached = getCached(cacheKey, ttl);
-  if (cached) return Promise.resolve(cached.data);
-
-  const existing = _prewarmInFlight.get(cacheKey);
-  if (existing) return existing;
-
-  const promise = (async () => {
-    try {
-      const r = await websiteFetch(ep, { jwt });
-      if (r.ok) {
-        const data = addDualKeys(await r.json());
-        setCache(cacheKey, data, r.status);
-        return data;
-      }
-    } catch {}
-    return null;
-  })();
-
-  _prewarmInFlight.set(cacheKey, promise);
-  promise.finally(() => _prewarmInFlight.delete(cacheKey));
-  return promise;
-}
-
-async function prewarmCache(auth: { jwt: string; userId: string; user: any }) {
-  const t0 = Date.now();
-  const endpoints = ['/api/dashboard', '/api/notifications', '/api/conversations'];
-  const tasks: Promise<void>[] = endpoints.map(async (ep) => {
-    const cacheKey = `${auth.userId}:${ep}`;
-    await getOrFetchEndpoint(cacheKey, ep, auth.jwt);
-  });
-  if (_prewarmFetchAllJobs) {
-    tasks.push(_prewarmFetchAllJobs(auth).then(() => {}));
-  } else {
-    tasks.push((async () => {
-      const rawKey = `${auth.userId}:/api/_raw_jobs`;
-      if (getCached(rawKey, 20_000)) return;
-      try {
-        const r = await websiteFetch("/api/jobs", { jwt: auth.jwt });
-        if (r.ok) {
-          const allJobs = await r.json();
-          const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
-          const result = jobs.map(addDualKeys);
-          setCache(rawKey, result, 200);
-        }
-      } catch {}
-    })());
-  }
-  await Promise.allSettled(tasks);
-  console.log(`Prewarm completed in ${Date.now() - t0}ms (${tasks.length} endpoints)`);
-}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   function requireAuth(req: Request, res: Response, next: Function) {
@@ -588,11 +358,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/auth/set-password", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, "/api/auth/set-password");
+    try {
+      const websiteRes = await websiteFetch("/api/auth/set-password", { method: "POST", body: req.body, jwt: getWebsiteAuth(req)?.jwt });
+      const data = await websiteRes.json();
+      return res.status(websiteRes.status).json(data);
+    } catch {
+      return res.status(500).json({ message: "Service unavailable" });
+    }
   });
 
   app.post("/api/push/register", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, "/api/push/subscribe");
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const { token, expoPushToken, expo_push_token } = req.body;
+      const pushToken = token || expoPushToken || expo_push_token;
+      if (pushToken) {
+        await pool.query(`UPDATE users SET expo_push_token = $1 WHERE id = $2`, [pushToken, auth.userId]);
+      }
+      pushToWebsite("/api/push/subscribe", auth, { method: "POST", body: req.body }).catch(() => {});
+    } catch {}
+    return res.json({ ok: true });
   });
 
   app.get("/api/jobs", requireAuth, async (req: Request, res: Response) => {
@@ -626,247 +411,450 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(query, params);
       let jobs = result.rows;
 
-      if (jobs.length === 0) {
-        const allJobs = await fetchAllJobsCached(auth);
-        return res.json(allJobs);
-      }
-
       return res.json(jobs.map(addDualKeys));
     } catch (e: any) {
       console.error("GET /api/jobs local error:", e.message);
-      try {
-        const auth = getWebsiteAuth(req)!;
-        const allJobs = await fetchAllJobsCached(auth);
-        return res.json(allJobs);
-      } catch {
-        return res.json([]);
-      }
+      return res.json([]);
     }
   });
 
   app.get("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}`);
+    try {
+      const result = await pool.query(
+        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.id = $1`,
+        [req.params.id]
+      );
+      if (result.rows.length > 0) {
+        const job = result.rows[0];
+        const assignResult = await pool.query(`SELECT * FROM job_assignments WHERE job_id = $1`, [req.params.id]);
+        const runsResult = await pool.query(`SELECT * FROM job_runs WHERE job_id = $1 ORDER BY created_at DESC`, [req.params.id]);
+        const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
+        job.assignments = assignResult.rows.map(addDualKeys);
+        job.jobRuns = runsResult.rows.map(addDualKeys);
+        job.job_runs = job.jobRuns;
+        job.weightTickets = weightResult.rows.map(addDualKeys);
+        job.weight_tickets = job.weightTickets;
+        return res.json(addDualKeys(job));
+      }
+      return res.status(404).json({ message: "Job not found" });
+    } catch (e: any) {
+      console.error("GET /api/jobs/:id error:", e.message);
+      return res.status(500).json({ message: "Failed to load job" });
+    }
   });
 
   app.post("/api/jobs", requireAuth, async (req: Request, res: Response) => {
-    const body = { ...req.body };
-    if (body.projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.projectId)) {
-      console.log("Stripping local projectId:", body.projectId);
-      delete body.projectId;
-    }
-    if (body.estimatedCost) {
-      body.estimatedCost = String(parseFloat(parseFloat(body.estimatedCost).toFixed(2)));
-    }
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/contractor/jobs');
-    invalidateCache('/api/dashboard');
-    invalidateCache('/api/calendar');
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const id = require("crypto").randomUUID();
+      const body = { ...req.body, id, contractor_id: auth.userId, status: 'open', created_at: new Date().toISOString() };
 
-    const auth = getWebsiteAuth(req);
-    const userRole = auth?.user?.role || '';
-    if (userRole && !userRole.includes('driver') && !userRole.includes('contractor')) {
-      try {
-        await websiteFetch("/api/users/" + auth!.userId, {
-          method: "PUT",
-          body: { role: "contractor" },
-          jwt: auth!.jwt,
-        });
-        auth!.user.role = "contractor";
-        const localToken = req.headers.authorization?.slice(7) || "";
-        if (localToken) {
-          tokenToJwt.set(localToken, auth!);
-          saveJsonMap("sessions.json", tokenToJwt);
-        }
-        const newJwt = await refreshWebsiteJwt(localToken, auth!);
-        if (newJwt) {
-          auth!.jwt = newJwt;
-        }
-      } catch (e: any) {
-        console.log("Role update attempt:", e.message);
+      const columns = ['id', 'contractor_id', 'material', 'origin_address', 'destination_address', 'rate', 'rate_type',
+        'truck_type', 'status', 'scheduled_date', 'project_id', 'trucks_needed', 'estimated_days', 'includes_weekends',
+        'estimated_cost', 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng', 'job_type',
+        'requires_weight_tickets', 'requires_tarp', 'urgent', 'created_at', 'updated_at'];
+
+      const snakeBody: Record<string, any> = {};
+      for (const [k, v] of Object.entries(body)) {
+        snakeBody[camelToSnake(k)] = v;
       }
-    }
+      snakeBody.id = id;
+      snakeBody.contractor_id = auth.userId;
+      snakeBody.status = snakeBody.status || 'open';
+      snakeBody.created_at = snakeBody.created_at || new Date().toISOString();
+      snakeBody.updated_at = new Date().toISOString();
 
-    return proxyToWebsite(req, res, undefined, { method: 'POST', body });
+      const validCols = columns.filter(c => snakeBody[c] !== undefined);
+      const vals = validCols.map(c => snakeBody[c]);
+      const placeholders = vals.map((_, i) => `$${i + 1}`);
+
+      await pool.query(`INSERT INTO jobs (${validCols.join(', ')}) VALUES (${placeholders.join(', ')})`, vals);
+
+      const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [id]);
+      const job = result.rows[0] || { id, ...snakeBody };
+
+      pushToWebsite("/api/jobs", auth, { method: "POST", body: req.body }).catch(() => {});
+
+      return res.status(201).json(addDualKeys(job));
+    } catch (e: any) {
+      console.error("POST /api/jobs error:", e.message);
+      return res.status(500).json({ message: "Failed to create job" });
+    }
   });
 
   app.put("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/contractor/jobs');
-    invalidateCache('/api/dashboard');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      for (const [k, v] of Object.entries(req.body)) {
+        if (v !== undefined) {
+          const col = camelToSnake(k);
+          updates.push(`${col} = $${idx}`);
+          values.push(v);
+          idx++;
+        }
+      }
+      if (updates.length > 0) {
+        updates.push(`updated_at = NOW()`);
+        values.push(req.params.id);
+        await pool.query(`UPDATE jobs SET ${updates.join(', ')} WHERE id = $${idx}`, values);
+      }
+      const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
+      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      return res.json(addDualKeys(result.rows[0] || { id: req.params.id }));
+    } catch (e: any) {
+      console.error("PUT /api/jobs error:", e.message);
+      return res.status(500).json({ message: "Failed to update job" });
+    }
   });
 
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
-    hiddenJobIds.add(req.params.id);
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/contractor/jobs');
-    invalidateCache('/api/dashboard');
-    await proxyToWebsite(req, res, `/api/jobs/${req.params.id}`);
+    try {
+      hiddenJobIds.add(req.params.id);
+      await pool.query(`UPDATE jobs SET status = 'cancelled', cancelled_at = NOW() WHERE id = $1`, [req.params.id]);
+      const auth = getWebsiteAuth(req)!;
+      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
+    }
   });
 
   app.post("/api/jobs/:id/accept", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/contractor/jobs');
-    invalidateCache('/api/driver/jobs');
-    invalidateCache('/api/dashboard');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/accept`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`UPDATE jobs SET status = 'assigned', driver_id = $1, updated_at = NOW() WHERE id = $2`, [auth.userId, req.params.id]);
+      const id = require("crypto").randomUUID();
+      await pool.query(
+        `INSERT INTO job_assignments (id, job_id, driver_id, status, created_at) VALUES ($1, $2, $3, 'accepted', NOW()) ON CONFLICT DO NOTHING`,
+        [id, req.params.id, auth.userId]
+      );
+      pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
+      return res.json(addDualKeys(result.rows[0] || { id: req.params.id, status: 'assigned' }));
+    } catch (e: any) {
+      console.error("Accept job error:", e.message);
+      return res.status(500).json({ message: "Failed to accept job" });
+    }
   });
 
   app.get("/api/jobs/:id/vehicle-conflicts", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/vehicle-conflicts`);
+    try {
+      const result = await pool.query(
+        `SELECT ja.*, j.scheduled_date, j.estimated_days FROM job_assignments ja
+         JOIN jobs j ON ja.job_id = j.id
+         WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
+         AND j.status IN ('open', 'in_progress', 'assigned', 'pending')`,
+        [req.params.id]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/jobs/:id/counter-bid", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/counter-bid`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const { rate, note } = req.body;
+      const id = require("crypto").randomUUID();
+      await pool.query(
+        `INSERT INTO job_assignments (id, job_id, driver_id, status, counter_bid_rate, counter_bid_note, created_at)
+         VALUES ($1, $2, $3, 'counter_bid', $4, $5, NOW()) ON CONFLICT DO NOTHING`,
+        [id, req.params.id, auth.userId, rate, note]
+      );
+      pushToWebsite(`/api/jobs/${req.params.id}/counter-bid`, auth, { method: "POST", body: req.body }).catch(() => {});
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Counter bid error:", e.message);
+      return res.status(500).json({ message: "Failed to submit counter bid" });
+    }
   });
 
   app.post("/api/jobs/:id/withdraw", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/dashboard');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/withdraw`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`DELETE FROM job_assignments WHERE job_id = $1 AND driver_id = $2`, [req.params.id, auth.userId]);
+      pushToWebsite(`/api/jobs/${req.params.id}/withdraw`, auth, { method: "POST" }).catch(() => {});
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
+    }
   });
 
   app.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}`);
+    try {
+      await pool.query(`DELETE FROM job_assignments WHERE id = $1`, [req.params.assignmentId]);
+      const auth = getWebsiteAuth(req)!;
+      pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}`, auth, { method: "DELETE" }).catch(() => {});
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
+    }
   });
 
   app.post("/api/cleanup-duplicate-assignments", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    return proxyToWebsite(req, res);
+    try {
+      await pool.query(`DELETE FROM job_assignments WHERE id NOT IN (SELECT MIN(id) FROM job_assignments GROUP BY job_id, driver_id)`);
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
+    }
   });
 
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments`);
+    try {
+      const result = await pool.query(
+        `SELECT ja.*, u.full_name as driver_name, u.phone as driver_phone, u.truck_type as driver_truck_type, u.rating as driver_rating
+         FROM job_assignments ja LEFT JOIN users u ON ja.driver_id = u.id WHERE ja.job_id = $1`,
+        [req.params.id]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/jobs/:id/assignments/:assignmentId/approve", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/dashboard');
-    invalidateCache('/api/vehicles');
-    invalidateCache('/api/calendar');
-    invalidateCache('/api/contractor/calendar-capacity');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1`, [req.params.assignmentId]);
+      await pool.query(`UPDATE jobs SET status = 'assigned', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {});
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Approve assignment error:", e.message);
+      return res.status(500).json({ message: "Failed to approve" });
+    }
   });
 
   app.post("/api/jobs/:id/assignments/:assignmentId/reject", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/dashboard');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/reject`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`UPDATE job_assignments SET status = 'rejected' WHERE id = $1`, [req.params.assignmentId]);
+      pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/reject`, auth, { method: "POST" }).catch(() => {});
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
+    }
   });
 
   app.put("/api/assignments/:assignmentId/vehicle", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/vehicles');
-    return proxyToWebsite(req, res, `/api/assignments/${req.params.assignmentId}/vehicle`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const { vehicleId, vehicle_id } = req.body;
+      const vid = vehicleId || vehicle_id;
+      await pool.query(`UPDATE job_assignments SET vehicle_id = $1 WHERE id = $2`, [vid, req.params.assignmentId]);
+      pushToWebsite(`/api/assignments/${req.params.assignmentId}/vehicle`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      return res.json({ ok: true });
+    } catch {
+      return res.status(500).json({ message: "Failed to assign vehicle" });
+    }
   });
 
   app.post("/api/jobs/:id/clock-in", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/dashboard');
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.id}/clock-in`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const runId = require("crypto").randomUUID();
+      await pool.query(
+        `INSERT INTO job_runs (id, job_id, driver_id, status, started_at, created_at) VALUES ($1, $2, $3, 'in_progress', NOW(), NOW())`,
+        [runId, req.params.id, auth.userId]
+      );
+      await pool.query(`UPDATE jobs SET status = 'in_progress', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      pushToWebsite(`/api/jobs/${req.params.id}/clock-in`, auth, { method: "POST", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [runId]);
+      return res.json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("Clock-in error:", e.message);
+      return res.status(500).json({ message: "Failed to clock in" });
+    }
   });
 
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/dashboard');
-    invalidateCache('/api/invoices');
-    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}/clock-out`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`UPDATE job_runs SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE id = $1`, [req.params.runId]);
+      pushToWebsite(`/api/job-runs/${req.params.runId}/clock-out`, auth, { method: "POST", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [req.params.runId]);
+      return res.json(addDualKeys(result.rows[0] || { id: req.params.runId }));
+    } catch (e: any) {
+      console.error("Clock-out error:", e.message);
+      return res.status(500).json({ message: "Failed to clock out" });
+    }
   });
 
   app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/dashboard');
-    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      for (const [k, v] of Object.entries(req.body)) {
+        if (v !== undefined) {
+          updates.push(`${camelToSnake(k)} = $${idx}`);
+          values.push(v);
+          idx++;
+        }
+      }
+      if (updates.length > 0) {
+        updates.push(`updated_at = NOW()`);
+        values.push(req.params.runId);
+        await pool.query(`UPDATE job_runs SET ${updates.join(', ')} WHERE id = $${idx}`, values);
+      }
+      pushToWebsite(`/api/job-runs/${req.params.runId}`, auth, { method: "PATCH", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [req.params.runId]);
+      return res.json(addDualKeys(result.rows[0] || { id: req.params.runId }));
+    } catch {
+      return res.status(500).json({ message: "Failed to update job run" });
+    }
   });
 
   app.delete("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    invalidateCache('/api/dashboard');
-    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`DELETE FROM job_runs WHERE id = $1`, [req.params.runId]);
+      pushToWebsite(`/api/job-runs/${req.params.runId}`, auth, { method: "DELETE" }).catch(() => {});
+      return res.json({ ok: true });
+    } catch {
+      return res.json({ ok: true });
+    }
   });
 
   app.post("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/jobs');
-    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}/weight-tickets`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const id = require("crypto").randomUUID();
+      const runResult = await pool.query(`SELECT job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      const jobId = runResult.rows[0]?.job_id || null;
+      await pool.query(
+        `INSERT INTO weight_tickets (id, job_run_id, job_id, driver_id, weight_value, notes, image_data, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [id, req.params.runId, jobId, auth.userId, req.body.weightValue || req.body.weight_value, req.body.notes, req.body.imageData || req.body.image_data]
+      );
+      pushToWebsite(`/api/job-runs/${req.params.runId}/weight-tickets`, auth, { method: "POST", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM weight_tickets WHERE id = $1`, [id]);
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("Weight ticket error:", e.message);
+      return res.status(500).json({ message: "Failed to add weight ticket" });
+    }
   });
 
   app.get("/api/jobs/:jobId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/jobs/${req.params.jobId}/weight-tickets`);
+    try {
+      const result = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1 ORDER BY created_at`, [req.params.jobId]);
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/job-runs/${req.params.runId}/weight-tickets`);
+    try {
+      const result = await pool.query(`SELECT * FROM weight_tickets WHERE job_run_id = $1 ORDER BY created_at`, [req.params.runId]);
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/conversations", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, undefined, (data: any) => {
-      if (Array.isArray(data)) return data.filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId));
-      return data;
-    });
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT jm.job_id, j.material, j.origin_address, j.destination_address, j.status as job_status,
+                j.contractor_id, j.driver_id,
+                MAX(jm.created_at) as last_message_at,
+                COUNT(CASE WHEN jm.read = false AND jm.sender_id != $1 THEN 1 END)::int as unread_count,
+                (SELECT body FROM job_messages WHERE job_id = jm.job_id ORDER BY created_at DESC LIMIT 1) as last_message
+         FROM job_messages jm
+         JOIN jobs j ON jm.job_id = j.id
+         WHERE (j.contractor_id = $1 OR j.driver_id = $1)
+         GROUP BY jm.job_id, j.material, j.origin_address, j.destination_address, j.status, j.contractor_id, j.driver_id
+         ORDER BY MAX(jm.created_at) DESC`,
+        [auth.userId]
+      );
+      const convs = result.rows.filter((c: any) => !hiddenJobIds.has(c.job_id));
+      return res.json(convs.map(addDualKeys));
+    } catch (e: any) {
+      console.error("GET /api/conversations error:", e.message);
+      return res.json([]);
+    }
   });
 
   app.get("/api/conversations/archived", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, undefined, (data: any) => {
-      if (Array.isArray(data)) return data.filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId));
-      return data;
-    });
+    return res.json([]);
   });
 
   app.post("/api/conversations/:jobId/archive", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/conversations');
-    invalidateCache('/api/messages');
-    return proxyToWebsite(req, res, `/api/conversations/${req.params.jobId}/archive`);
+    const auth = getWebsiteAuth(req)!;
+    pushToWebsite(`/api/conversations/${req.params.jobId}/archive`, auth, { method: "POST" }).catch(() => {});
+    return res.json({ ok: true });
   });
 
   app.post("/api/conversations/:jobId/unarchive", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/conversations');
-    invalidateCache('/api/messages');
-    return proxyToWebsite(req, res, `/api/conversations/${req.params.jobId}/unarchive`);
+    const auth = getWebsiteAuth(req)!;
+    pushToWebsite(`/api/conversations/${req.params.jobId}/unarchive`, auth, { method: "POST" }).catch(() => {});
+    return res.json({ ok: true });
   });
 
   app.post("/api/conversations/:jobId/delete", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/conversations');
-    invalidateCache('/api/messages');
-    return proxyToWebsite(req, res, `/api/conversations/${req.params.jobId}/delete`);
+    try {
+      await pool.query(`DELETE FROM job_messages WHERE job_id = $1`, [req.params.jobId]);
+      const auth = getWebsiteAuth(req)!;
+      pushToWebsite(`/api/conversations/${req.params.jobId}/delete`, auth, { method: "POST" }).catch(() => {});
+    } catch {}
+    return res.json({ ok: true });
   });
 
   app.get("/api/messages/unread-count", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getWebsiteAuth(req);
-      if (!auth) return res.status(401).json({ message: "Not authenticated" });
-
-      const cacheKey = `${auth.userId}:/api/messages/unread-count`;
-      const cached = getCached(cacheKey, 15_000);
-      if (cached) return res.status(cached.status).json(cached.data);
-
-      const convsRes = await websiteFetch("/api/conversations", { method: "GET", jwt: auth.jwt });
-      if (!convsRes.ok) {
-        return proxyToWebsite(req, res, "/api/notifications/unread-count");
-      }
-      const convs = await convsRes.json();
-      if (!Array.isArray(convs)) {
-        return proxyToWebsite(req, res, "/api/notifications/unread-count");
-      }
-      const count = convs
-        .filter((c: any) => !hiddenJobIds.has(c.job_id || c.jobId))
-        .reduce((sum: number, c: any) => sum + (c.unread_count || 0), 0);
-      const result = { count };
-      setCache(cacheKey, result, 200);
-      return res.json(result);
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT COUNT(*)::int as count FROM job_messages jm
+         JOIN jobs j ON jm.job_id = j.id
+         WHERE jm.read = false AND jm.sender_id != $1
+         AND (j.contractor_id = $1 OR j.driver_id = $1)`,
+        [auth.userId]
+      );
+      return res.json({ count: result.rows[0]?.count || 0 });
     } catch {
-      return proxyToWebsite(req, res, "/api/notifications/unread-count");
+      return res.json({ count: 0 });
     }
   });
 
   app.get("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/messages/${req.params.jobId}`);
+    try {
+      const result = await pool.query(
+        `SELECT jm.*, u.full_name as sender_name FROM job_messages jm
+         LEFT JOIN users u ON jm.sender_id = u.id
+         WHERE jm.job_id = $1 ORDER BY jm.created_at ASC`,
+        [req.params.jobId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/messages');
-    invalidateCache('/api/conversations');
-    return proxyToWebsite(req, res, `/api/messages/${req.params.jobId}`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const id = require("crypto").randomUUID();
+      const body = req.body.body || req.body.message || req.body.content || '';
+      await pool.query(
+        `INSERT INTO job_messages (id, job_id, sender_id, body, read, created_at) VALUES ($1, $2, $3, $4, false, NOW())`,
+        [id, req.params.jobId, auth.userId, body]
+      );
+      pushToWebsite(`/api/messages/${req.params.jobId}`, auth, { method: "POST", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM job_messages WHERE id = $1`, [id]);
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("POST message error:", e.message);
+      return res.status(500).json({ message: "Failed to send message" });
+    }
   });
 
   app.get("/api/profile", requireAuth, async (req: Request, res: Response) => {
@@ -880,14 +868,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     Object.assign(auth.user, req.body);
     try {
-      await websiteFetch("/api/users/" + auth.userId, {
-        method: "PUT",
-        body: req.body,
-        jwt: auth.jwt,
-      });
+      const updates: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      for (const [k, v] of Object.entries(req.body)) {
+        if (v !== undefined) {
+          updates.push(`${camelToSnake(k)} = $${idx}`);
+          values.push(v);
+          idx++;
+        }
+      }
+      if (updates.length > 0) {
+        updates.push(`updated_at = NOW()`);
+        values.push(auth.userId);
+        await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${idx}`, values);
+      }
     } catch (e: any) {
-      console.log("Profile update forward failed:", e?.message);
+      console.log("Profile update DB error:", e?.message);
     }
+    pushToWebsite("/api/users/" + auth.userId, auth, { method: "PUT", body: req.body }).catch(() => {});
+    const localToken = req.headers.authorization?.slice(7) || "";
+    if (localToken) { tokenToJwt.set(localToken, auth); saveJsonMap("sessions.json", tokenToJwt); }
     return res.json(addDualKeys(auth.user));
   });
 
@@ -899,14 +900,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     auth.user.isConnected = newStatus;
     auth.user.is_connected = newStatus;
     try {
-      await websiteFetch("/api/users/" + auth.userId, {
-        method: "PUT",
-        body: { is_connected: newStatus },
-        jwt: auth.jwt,
-      });
-    } catch (e: any) {
-      console.log("Status update forward failed:", e?.message);
-    }
+      await pool.query(`UPDATE users SET is_connected = $1, updated_at = NOW() WHERE id = $2`, [newStatus, auth.userId]);
+    } catch {}
+    pushToWebsite("/api/users/" + auth.userId, auth, { method: "PUT", body: { is_connected: newStatus } }).catch(() => {});
     return res.json(addDualKeys(auth.user));
   });
 
@@ -917,17 +913,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (role) {
       auth.user.role = role;
       try {
-        const roleRes = await websiteFetch("/api/users/" + auth.userId, {
-          method: "PUT",
-          body: { role },
-          jwt: auth.jwt,
-        });
-        if (!roleRes.ok) {
-          console.log("Role switch website error:", roleRes.status);
-        }
-      } catch (e: any) {
-        console.log("Role switch forward failed:", e?.message);
-      }
+        await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
+      } catch {}
+      pushToWebsite("/api/users/" + auth.userId, auth, { method: "PUT", body: { role } }).catch(() => {});
     }
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) {
@@ -938,67 +926,222 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res);
+    try {
+      const search = (req.query.q || req.query.search || '') as string;
+      let query = `SELECT id, full_name, email, phone, truck_type, rating, total_jobs, profile_image_url, is_connected FROM users WHERE role LIKE '%driver%'`;
+      const params: any[] = [];
+      if (search) {
+        query += ` AND (full_name ILIKE $1 OR email ILIKE $1)`;
+        params.push(`%${search}%`);
+      }
+      query += ` ORDER BY rating DESC LIMIT 50`;
+      const result = await pool.query(query, params);
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT * FROM trucks WHERE trucking_company_id = $1 OR assigned_driver_id = $1 ORDER BY sort_order, created_at`,
+        [auth.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/vehicles');
-    return proxyToWebsite(req, res);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const id = require("crypto").randomUUID();
+      const b = req.body;
+      await pool.query(
+        `INSERT INTO trucks (id, trucking_company_id, truck_type, make, model, year, license_plate, is_active, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW(), NOW())`,
+        [id, auth.userId, b.truckType || b.truck_type, b.make, b.model, b.year, b.licensePlate || b.license_plate]
+      );
+      pushToWebsite("/api/vehicles", auth, { method: "POST", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [id]);
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("POST vehicle error:", e.message);
+      return res.status(500).json({ message: "Failed to add vehicle" });
+    }
   });
 
   app.put("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/vehicles');
-    return proxyToWebsite(req, res, `/api/vehicles/${req.params.id}`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const updates: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      for (const [k, v] of Object.entries(req.body)) {
+        if (v !== undefined) {
+          updates.push(`${camelToSnake(k)} = $${idx}`);
+          values.push(v);
+          idx++;
+        }
+      }
+      if (updates.length > 0) {
+        updates.push(`updated_at = NOW()`);
+        values.push(req.params.id);
+        await pool.query(`UPDATE trucks SET ${updates.join(', ')} WHERE id = $${idx}`, values);
+      }
+      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [req.params.id]);
+      return res.json(addDualKeys(result.rows[0] || {}));
+    } catch {
+      return res.status(500).json({ message: "Failed to update vehicle" });
+    }
   });
 
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/vehicles');
-    return proxyToWebsite(req, res, `/api/vehicles/${req.params.id}`);
+    try {
+      await pool.query(`DELETE FROM trucks WHERE id = $1`, [req.params.id]);
+      const auth = getWebsiteAuth(req)!;
+      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
+    } catch {}
+    return res.json({ ok: true });
   });
 
   app.get("/api/vehicles/:vehicleId/jobs", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/vehicles/${req.params.vehicleId}/jobs`);
+    try {
+      const result = await pool.query(
+        `SELECT j.* FROM jobs j JOIN job_assignments ja ON j.id = ja.job_id WHERE ja.vehicle_id = $1 ORDER BY j.scheduled_date DESC`,
+        [req.params.vehicleId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, "/api/me/availability");
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(`SELECT * FROM driver_availability WHERE driver_id = $1 ORDER BY date`, [auth.userId]);
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/availability", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, "/api/me/availability");
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const id = require("crypto").randomUUID();
+      const b = req.body;
+      await pool.query(
+        `INSERT INTO driver_availability (id, driver_id, date, start_time, end_time, is_available, notes, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
+        [id, auth.userId, b.date, b.startTime || b.start_time, b.endTime || b.end_time, b.isAvailable ?? b.is_available ?? true, b.notes]
+      );
+      pushToWebsite("/api/me/availability", auth, { method: "POST", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM driver_availability WHERE id = $1`, [id]);
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("POST availability error:", e.message);
+      return res.status(500).json({ message: "Failed to set availability" });
+    }
   });
 
   app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
-    const auth = getWebsiteAuth(req)!;
-    const cacheKey = `${auth.userId}:/api/notifications`;
     try {
-      const data = await getOrFetchEndpoint(cacheKey, '/api/notifications', auth.jwt);
-      if (data) return res.json(data);
-    } catch {}
-    return proxyToWebsite(req, res);
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+        [auth.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/notifications/mark-read", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/notifications');
-    return proxyToWebsite(req, res);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`UPDATE notifications SET is_read = true WHERE user_id = $1`, [auth.userId]);
+      pushToWebsite("/api/notifications/mark-read", auth, { method: "POST" }).catch(() => {});
+    } catch {}
+    return res.json({ ok: true });
   });
 
   app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
-    const auth = getWebsiteAuth(req)!;
-    const cacheKey = `${auth.userId}:/api/dashboard`;
     try {
-      const data = await getOrFetchEndpoint(cacheKey, '/api/dashboard', auth.jwt);
-      if (data) return res.json(data);
-    } catch {}
-    return proxyToWebsite(req, res);
+      const auth = getWebsiteAuth(req)!;
+      const userId = auth.userId;
+      const role = (auth.user?.role || '').toLowerCase();
+      const isContractor = role.includes('contractor') || role === 'trucking_company';
+
+      const jobsResult = await pool.query(
+        isContractor
+          ? `SELECT * FROM jobs WHERE contractor_id = $1 AND status NOT IN ('cancelled') ORDER BY created_at DESC`
+          : `SELECT * FROM jobs WHERE (driver_id = $1 OR id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1)) AND status NOT IN ('cancelled') ORDER BY created_at DESC`,
+        [userId]
+      );
+      const jobs = jobsResult.rows;
+
+      const openJobs = jobs.filter((j: any) => j.status === 'open').length;
+      const activeJobs = jobs.filter((j: any) => ['assigned', 'in_progress'].includes(j.status)).length;
+      const completedJobs = jobs.filter((j: any) => j.status === 'completed').length;
+
+      const assignResult = await pool.query(
+        `SELECT COUNT(*)::int as count FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id WHERE j.contractor_id = $1 AND ja.status = 'pending'`,
+        [userId]
+      );
+      const pendingApplications = assignResult.rows[0]?.count || 0;
+
+      const userResult = await pool.query(`SELECT * FROM users WHERE id = $1`, [userId]);
+      const user = userResult.rows[0];
+
+      const invoicesResult = await pool.query(
+        `SELECT COALESCE(SUM(total_amount), 0)::float as total, COALESCE(SUM(CASE WHEN status = 'pending' THEN total_amount ELSE 0 END), 0)::float as awaiting FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`,
+        [userId]
+      );
+
+      const dashboard = {
+        openJobs, activeJobs, completedJobs, pendingApplications,
+        totalJobs: jobs.length,
+        earnings: {
+          total: invoicesResult.rows[0]?.total || 0,
+          awaiting: invoicesResult.rows[0]?.awaiting || 0,
+          thisMonth: 0, thisWeek: 0,
+        },
+        location: {
+          lat: user?.primary_location_lat || user?.last_known_lat,
+          lng: user?.primary_location_lng || user?.last_known_lng,
+          address: user?.primary_location_address || user?.address,
+        },
+        status: user?.is_connected ? 'online' : 'offline',
+      };
+
+      return res.json(addDualKeys(dashboard));
+    } catch (e: any) {
+      console.error("Dashboard error:", e.message);
+      return res.json({ openJobs: 0, activeJobs: 0, completedJobs: 0, pendingApplications: 0, totalJobs: 0, earnings: { total: 0, awaiting: 0, thisMonth: 0, thisWeek: 0 } });
+    }
   });
 
   app.get("/api/earnings", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, "/api/driver/earnings");
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT COALESCE(SUM(total_amount), 0)::float as total,
+                COALESCE(SUM(CASE WHEN status = 'paid' THEN total_amount ELSE 0 END), 0)::float as paid,
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN total_amount ELSE 0 END), 0)::float as pending
+         FROM monthly_invoices WHERE driver_id = $1`,
+        [auth.userId]
+      );
+      return res.json(addDualKeys(result.rows[0] || { total: 0, paid: 0, pending: 0 }));
+    } catch {
+      return res.json({ total: 0, paid: 0, pending: 0 });
+    }
   });
 
   app.get("/api/contractor/jobs", requireAuth, async (req: Request, res: Response) => {
@@ -1021,83 +1164,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(query, params);
       let jobs = result.rows;
 
-      if (jobs.length === 0) {
-        jobs = await fetchAllJobsCached(auth);
-        jobs = jobs.filter((j: any) => {
-          const cId = j.contractorId || j.contractor_id;
-          return cId === contractorId;
-        });
-        if (projectFilter) {
-          jobs = jobs.filter((j: any) => {
-            const pId = j.projectId || j.project_id;
-            return pId === projectFilter;
-          });
-        }
-        return res.json(jobs);
-      }
-
       return res.json(jobs.map(addDualKeys));
     } catch {
       return res.json([]);
     }
   });
 
-  const _jobsFetchInProgress = new Map<string, Promise<any[]>>();
-
-  async function fetchAllJobsCached(auth: { jwt: string; userId: string; user: any }): Promise<any[]> {
-    const cacheKey = `${auth.userId}:/api/_raw_jobs`;
-    const cached = getCached(cacheKey, 20_000);
-    if (cached) return cached.data;
-
-    const existing = _jobsFetchInProgress.get(cacheKey);
-    if (existing) return existing;
-
-    const promise = (async () => {
-      try {
-        const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
-        if (!jobsRes.ok) return [];
-        const allJobs = await jobsRes.json();
-        const jobs = (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id));
-        const result = jobs.map(addDualKeys);
-        setCache(cacheKey, result, 200);
-        return result;
-      } catch {
-        return [];
-      }
-    })();
-
-    _jobsFetchInProgress.set(cacheKey, promise);
-    promise.finally(() => _jobsFetchInProgress.delete(cacheKey));
-    return promise;
-  }
-
-  _prewarmFetchAllJobs = fetchAllJobsCached;
-
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-
       const result = await pool.query(
         `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
          WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
          ORDER BY j.created_at DESC`,
         [auth.userId]
       );
-
-      if (result.rows.length > 0) {
-        return res.json(result.rows.map(addDualKeys));
-      }
-
-      const jobs = await fetchAllJobsCached(auth);
-      return res.json(jobs);
+      return res.json(result.rows.map(addDualKeys));
     } catch {
-      try {
-        const auth = getWebsiteAuth(req)!;
-        const jobs = await fetchAllJobsCached(auth);
-        return res.json(jobs);
-      } catch {
-        return res.json([]);
-      }
+      return res.json([]);
     }
   });
 
@@ -1136,9 +1220,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           [auth.userId]
         );
       }
-      if (result.rows.length > 0) return result.rows.map(addDualKeys);
+      return result.rows.map(addDualKeys);
     } catch {}
-    return fetchAllJobsCached(auth);
+    return [];
   }
 
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
@@ -1236,15 +1320,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const status = req.query.status as string | undefined;
+      let query = `SELECT * FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`;
+      const params: any[] = [auth.userId];
+      if (status) {
+        query += ` AND LOWER(status) = LOWER($2)`;
+        params.push(status);
+      }
+      query += ` ORDER BY created_at DESC`;
+      const result = await pool.query(query, params);
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/invoices/:id", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/invoices/${req.params.id}`);
+    try {
+      const result = await pool.query(`SELECT * FROM monthly_invoices WHERE id = $1`, [req.params.id]);
+      if (result.rows.length > 0) {
+        const invoice = result.rows[0];
+        const jobsResult = await pool.query(
+          `SELECT * FROM jobs WHERE invoice_id = $1 OR (contractor_id = $2 AND status = 'completed')`,
+          [req.params.id, invoice.contractor_id]
+        );
+        invoice.jobs = jobsResult.rows.map(addDualKeys);
+        return res.json(addDualKeys(invoice));
+      }
+      return res.status(404).json({ message: "Invoice not found" });
+    } catch {
+      return res.status(500).json({ message: "Failed to load invoice" });
+    }
   });
 
   app.put("/api/invoices/:id/status", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/invoices/${req.params.id}/status`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const { status } = req.body;
+      await pool.query(`UPDATE monthly_invoices SET status = $1, updated_at = NOW() WHERE id = $2`, [status, req.params.id]);
+      pushToWebsite(`/api/invoices/${req.params.id}/status`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      const result = await pool.query(`SELECT * FROM monthly_invoices WHERE id = $1`, [req.params.id]);
+      return res.json(addDualKeys(result.rows[0] || {}));
+    } catch {
+      return res.status(500).json({ message: "Failed to update invoice status" });
+    }
   });
 
   app.get("/api/projects", requireAuth, async (req: Request, res: Response) => {
@@ -1277,16 +1398,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      if (projects.length === 0) {
-        const syncAuth = getWebsiteAuth(req)!;
-        syncProjects(syncAuth).catch(() => {});
-        return proxyToWebsite(req, res);
-      }
-
       return res.json(projects.map(addDualKeys));
     } catch (e: any) {
       console.error("GET /api/projects error:", e.message);
-      return proxyToWebsite(req, res);
+      return res.json([]);
     }
   });
 
@@ -1315,7 +1430,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(201).json(addDualKeys(project));
     } catch (e: any) {
       console.error("POST /api/projects error:", e.message);
-      return proxyToWebsite(req, res);
+      return res.status(500).json({ message: "Failed to create project" });
     }
   });
 
@@ -1360,7 +1475,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json(addDualKeys(project));
     } catch (e: any) {
       console.error("PUT /api/projects error:", e.message);
-      return proxyToWebsite(req, res, `/api/projects/${req.params.id}`);
+      return res.status(500).json({ message: "Failed to update project" });
     }
   });
 
@@ -1391,57 +1506,113 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/materials", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, "/api/contractor-materials");
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT * FROM contractor_materials WHERE contractor_id = $1 ORDER BY usage_count DESC, last_used_at DESC`,
+        [auth.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/saved-locations", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, undefined, async (data: any) => {
-      if (!Array.isArray(data)) return data;
-      const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-      if (!apiKey) return data;
-
-      const enriched = await Promise.all(data.map(async (loc: any) => {
-        const addr = loc.address || '';
-        if (!/^Dropped Pin/i.test(addr) || loc.label) return loc;
-        const coordMatch = addr.match(/\(([^,]+),?\s*([^)]+)\)/);
-        if (!coordMatch) return loc;
-        const lat = coordMatch[1].trim();
-        const lng = coordMatch[2].trim();
-        try {
-          const geoUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}&result_type=street_address|route|locality`;
-          const geoRes = await fetch(geoUrl);
-          const geoData = await geoRes.json() as any;
-          if (geoData.status === 'OK' && geoData.results?.[0]) {
-            return { ...loc, nearbyAddress: geoData.results[0].formatted_address };
-          }
-        } catch {}
-        return loc;
-      }));
-      return enriched;
-    });
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const user = await pool.query(`SELECT * FROM users WHERE id = $1`, [auth.userId]);
+      const u = user.rows[0];
+      if (!u) return res.json([]);
+      const locations: any[] = [];
+      if (u.primary_location_address) locations.push({ address: u.primary_location_address, lat: u.primary_location_lat, lng: u.primary_location_lng, label: 'Primary' });
+      if (u.secondary_location_address) locations.push({ address: u.secondary_location_address, lat: u.secondary_location_lat, lng: u.secondary_location_lng, label: 'Secondary' });
+      if (u.tertiary_location_address) locations.push({ address: u.tertiary_location_address, lat: u.tertiary_location_lat, lng: u.tertiary_location_lng, label: 'Tertiary' });
+      return res.json(locations.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/reviews/pending');
-    invalidateCache('/api/notifications');
-    return proxyToWebsite(req, res);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const id = require("crypto").randomUUID();
+      const b = req.body;
+      await pool.query(
+        `INSERT INTO reviews (id, job_id, reviewer_id, reviewee_id, rating, comment, reviewer_role, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [id, b.jobId || b.job_id, auth.userId, b.revieweeId || b.reviewee_id, b.rating, b.comment, b.reviewerRole || b.reviewer_role || auth.user?.role]
+      );
+      pushToWebsite("/api/reviews", auth, { method: "POST", body: req.body }).catch(() => {});
+      return res.status(201).json({ ok: true, id });
+    } catch (e: any) {
+      console.error("POST review error:", e.message);
+      return res.status(500).json({ message: "Failed to submit review" });
+    }
   });
 
   app.get("/api/reviews/pending", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT j.id as job_id, j.material, j.origin_address, j.destination_address, j.contractor_id, j.driver_id
+         FROM jobs j WHERE j.status = 'completed'
+         AND (j.contractor_id = $1 OR j.driver_id = $1)
+         AND j.id NOT IN (SELECT job_id FROM reviews WHERE reviewer_id = $1)
+         ORDER BY j.completed_date DESC LIMIT 10`,
+        [auth.userId]
+      );
+      return res.json({ reviews: result.rows.map(addDualKeys), count: result.rows.length });
+    } catch {
+      return res.json({ reviews: [], count: 0 });
+    }
   });
 
   app.get("/api/reviews/:userId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/reviews/${req.params.userId}`);
+    try {
+      const result = await pool.query(
+        `SELECT r.*, u.full_name as reviewer_name FROM reviews r LEFT JOIN users u ON r.reviewer_id = u.id WHERE r.reviewee_id = $1 ORDER BY r.created_at DESC`,
+        [req.params.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
   });
 
   app.get("/api/favorites/:driverId", requireAuth, async (req: Request, res: Response) => {
-    return proxyToWebsite(req, res, `/api/favorites/${req.params.driverId}`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT * FROM driver_favorites WHERE contractor_id = $1 AND driver_id = $2`,
+        [auth.userId, req.params.driverId]
+      );
+      return res.json({ isFavorite: result.rows.length > 0 });
+    } catch {
+      return res.json({ isFavorite: false });
+    }
   });
 
   app.post("/api/favorites/:driverId", requireAuth, async (req: Request, res: Response) => {
-    invalidateCache('/api/favorites');
-    return proxyToWebsite(req, res, `/api/favorites/${req.params.driverId}`);
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const existing = await pool.query(
+        `SELECT * FROM driver_favorites WHERE contractor_id = $1 AND driver_id = $2`,
+        [auth.userId, req.params.driverId]
+      );
+      if (existing.rows.length > 0) {
+        await pool.query(`DELETE FROM driver_favorites WHERE contractor_id = $1 AND driver_id = $2`, [auth.userId, req.params.driverId]);
+        return res.json({ isFavorite: false });
+      } else {
+        const id = require("crypto").randomUUID();
+        await pool.query(`INSERT INTO driver_favorites (id, contractor_id, driver_id, created_at) VALUES ($1, $2, $3, NOW())`, [id, auth.userId, req.params.driverId]);
+        pushToWebsite(`/api/favorites/${req.params.driverId}`, auth, { method: "POST" }).catch(() => {});
+        return res.json({ isFavorite: true });
+      }
+    } catch {
+      return res.json({ isFavorite: false });
+    }
   });
 
   app.get("/api/places/autocomplete", requireAuth, async (req: Request, res: Response) => {
