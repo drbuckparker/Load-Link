@@ -95,5 +95,5 @@ Endpoint mappings (mobile app path → website path):
 - `/api/materials` → `/api/contractor-materials`
 - `/api/push/register` → `/api/push/subscribe`
 - `/api/messages/unread-count` → `/api/notifications/unread-count`
-- `/api/calendar/jobs` → built locally from `fetchAllJobsCached()` (filtered by driver, month/year, active status)
-- `/api/contractor/calendar-capacity` → built locally from `fetchAllJobsCached()` (filtered by contractor, month/year, active status; computes dailyCapacity/dailyJobs/fleetSize)
+- `/api/calendar/jobs` → built locally from `fetchAllJobsCached()` (filtered by driver, month/year, active status; multi-day expansion uses `getJobDateRange()` which skips weekends unless `includesWeekends` is true)
+- `/api/contractor/calendar-capacity` → built locally from `fetchAllJobsCached()` (filtered by contractor, month/year, active status; computes dailyCapacity/dailyJobs/fleetSize; multi-day expansion uses same weekend-aware `getJobDateRange()`)

@@ -1008,6 +1008,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  function getJobDateRange(scheduledDate: string, estimatedDays: number, includesWeekends: boolean): string[] {
+    const startDate = new Date(scheduledDate);
+    if (isNaN(startDate.getTime())) return [];
+    const days = Math.max(1, Math.ceil(estimatedDays || 1));
+    const dates: string[] = [];
+    const current = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate()));
+    let added = 0;
+    while (added < days) {
+      const dow = current.getUTCDay();
+      if (includesWeekends || (dow !== 0 && dow !== 6)) {
+        const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
+        dates.push(key);
+        added++;
+      }
+      current.setUTCDate(current.getUTCDate() + 1);
+    }
+    return dates;
+  }
+
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
@@ -1026,28 +1045,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       const dailyJobs: Record<string, any[]> = {};
       const jobDateSet = new Set<string>();
+      const addToDay = (dateKey: string, entry: any) => {
+        const [y, m] = dateKey.split('-').map(Number);
+        if (y !== year || m !== month) return;
+        if (!dailyJobs[dateKey]) dailyJobs[dateKey] = [];
+        dailyJobs[dateKey].push(entry);
+        jobDateSet.add(dateKey);
+      };
       for (const job of myJobs) {
         const sd = job.scheduledDate || job.scheduled_date || job.startDate || job.start_date;
         if (!sd) continue;
-        const d = new Date(sd);
-        const addToDay = (dateKey: string, entry: any) => {
-          const [y, m] = dateKey.split('-').map(Number);
-          if (y !== year || m !== month) return;
-          if (!dailyJobs[dateKey]) dailyJobs[dateKey] = [];
-          dailyJobs[dateKey].push(entry);
-          jobDateSet.add(dateKey);
-        };
-        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        addToDay(key, job);
         const estDays = job.estimatedDays || job.estimated_days || 1;
-        if (estDays > 1) {
-          for (let i = 1; i < Math.ceil(estDays); i++) {
-            const nd = new Date(d);
-            nd.setUTCDate(nd.getUTCDate() + i);
-            const nk = `${nd.getUTCFullYear()}-${String(nd.getUTCMonth() + 1).padStart(2, '0')}-${String(nd.getUTCDate()).padStart(2, '0')}`;
-            addToDay(nk, { ...job, isMultiDay: true, dayNumber: i + 1, totalDays: Math.ceil(estDays) });
+        const includesWeekends = job.includesWeekends ?? job.includes_weekends ?? false;
+        const jobDates = getJobDateRange(sd, estDays, includesWeekends);
+        jobDates.forEach((dateKey, idx) => {
+          if (idx === 0) {
+            addToDay(dateKey, job);
+          } else {
+            addToDay(dateKey, { ...job, isMultiDay: true, dayNumber: idx + 1, totalDays: jobDates.length });
           }
-        }
+        });
       }
       return res.json({ dailyJobs, jobDates: Array.from(jobDateSet).sort() });
     } catch {
@@ -1086,18 +1103,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       for (const job of myJobs) {
         const sd = job.scheduledDate || job.scheduled_date || job.startDate || job.start_date;
         if (!sd) continue;
-        const d = new Date(sd);
-        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        addToDay(key, job);
         const estDays = job.estimatedDays || job.estimated_days || 1;
-        if (estDays > 1) {
-          for (let i = 1; i < Math.ceil(estDays); i++) {
-            const nd = new Date(d);
-            nd.setUTCDate(nd.getUTCDate() + i);
-            const nk = `${nd.getUTCFullYear()}-${String(nd.getUTCMonth() + 1).padStart(2, '0')}-${String(nd.getUTCDate()).padStart(2, '0')}`;
-            addToDay(nk, { ...job, isMultiDay: true, dayNumber: i + 1, totalDays: Math.ceil(estDays) });
+        const includesWeekends = job.includesWeekends ?? job.includes_weekends ?? false;
+        const jobDates = getJobDateRange(sd, estDays, includesWeekends);
+        jobDates.forEach((dateKey, idx) => {
+          if (idx === 0) {
+            addToDay(dateKey, job);
+          } else {
+            addToDay(dateKey, { ...job, isMultiDay: true, dayNumber: idx + 1, totalDays: jobDates.length });
           }
-        }
+        });
       }
       const fleetSize = Object.values(dailyCapacity).reduce((max, cap) => Math.max(max, cap.needed), 0);
       return res.json({ fleetSize, dailyCapacity, dailyJobs });
