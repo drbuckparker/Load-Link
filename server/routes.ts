@@ -1292,16 +1292,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/calendar/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const allJobs = await getJobsForCalendar(auth, 'driver');
-      const driverId = auth.userId;
+      const userId = auth.userId;
+      const userRole = (auth.user?.role || '').toLowerCase();
+      const isContractorRole = userRole.includes('contractor') || userRole === 'trucking_company';
+      const allJobs = await getJobsForCalendar(auth, isContractorRole ? 'contractor' : 'driver');
       const month = parseInt(req.query.month as string) || (new Date().getMonth() + 1);
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
       const activeStatuses = new Set(['open', 'in_progress', 'accepted', 'pending']);
       const myJobs = allJobs.filter((j: any) => {
-        const dId = j.driverId || j.driver_id;
-        const assignments = j.assignments || [];
-        const isMyJob = dId === driverId || assignments.some((a: any) => a.driverId === driverId || a.driver_id === driverId);
-        if (!isMyJob) return false;
+        if (isContractorRole) {
+          const cId = j.contractorId || j.contractor_id;
+          if (String(cId) !== String(userId)) return false;
+        } else {
+          const dId = j.driverId || j.driver_id;
+          const assignments = j.assignments || [];
+          const isMyJob = dId === userId || assignments.some((a: any) => a.driverId === userId || a.driver_id === userId);
+          if (!isMyJob) return false;
+        }
         const status = (j.status || '').toLowerCase();
         return activeStatuses.has(status);
       });
@@ -1314,17 +1321,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
         dailyJobs[dateKey].push(entry);
         jobDateSet.add(dateKey);
       };
+      const jobIds = myJobs.map((j: any) => j.id).filter(Boolean);
+      let assignmentsByJob: Record<string, any[]> = {};
+      if (jobIds.length > 0) {
+        try {
+          const assResult = await pool.query(
+            `SELECT ja.job_id, ja.vehicle_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type
+             FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id
+             WHERE ja.job_id = ANY($1)`,
+            [jobIds]
+          );
+          for (const row of assResult.rows) {
+            if (!assignmentsByJob[row.job_id]) assignmentsByJob[row.job_id] = [];
+            assignmentsByJob[row.job_id].push({
+              vehicleId: row.vehicle_id,
+              status: row.status,
+              make: row.make,
+              model: row.model,
+              year: row.year,
+              truckNumber: row.truck_number,
+              licensePlate: row.license_plate,
+              truckType: row.truck_type,
+            });
+          }
+        } catch {}
+      }
+
       for (const job of myJobs) {
         const sd = job.scheduledDate || job.scheduled_date || job.startDate || job.start_date;
         if (!sd) continue;
         const estDays = job.estimatedDays || job.estimated_days || 1;
         const includesWeekends = job.includesWeekends ?? job.includes_weekends ?? false;
         const jobDates = getJobDateRange(sd, estDays, includesWeekends);
+        const vehicleAssignments = assignmentsByJob[job.id] || [];
+        const enrichedJob = { ...job, vehicleAssignments };
+        if (vehicleAssignments.length > 0) {
+          const approved = vehicleAssignments.filter((a: any) => a.status === 'approved');
+          if (approved.length > 0) {
+            enrichedJob.vehicle = { id: approved[0].vehicleId, make: approved[0].make, model: approved[0].model, year: approved[0].year, licensePlate: approved[0].licensePlate, truckType: approved[0].truckType };
+          }
+        }
         jobDates.forEach((dateKey, idx) => {
           if (idx === 0) {
-            addToDay(dateKey, job);
+            addToDay(dateKey, enrichedJob);
           } else {
-            addToDay(dateKey, { ...job, isMultiDay: true, dayNumber: idx + 1, totalDays: jobDates.length });
+            addToDay(dateKey, { ...enrichedJob, isMultiDay: true, dayNumber: idx + 1, totalDays: jobDates.length });
           }
         });
       }
