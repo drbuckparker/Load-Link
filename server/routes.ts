@@ -1177,22 +1177,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const includeDeleted = req.query.include_deleted === "true";
-      const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
-      const allJobs = jobsRes.ok ? await jobsRes.json() : [];
       const projectMap = new Map<string, any>();
-      for (const j of (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id))) {
-        const cId = j.contractorId || j.contractor_id;
-        if (j.projectId && j.projectName && cId === auth.userId) {
-          if (!projectMap.has(j.projectId)) {
-            projectMap.set(j.projectId, {
-              id: j.projectId,
-              name: j.projectName,
-              contractorId: cId,
-              status: "active",
-            });
+
+      const websiteProjectsRes = await websiteFetch("/api/projects", { jwt: auth.jwt });
+      if (websiteProjectsRes.ok) {
+        const websiteProjects = await websiteProjectsRes.json();
+        for (const p of (Array.isArray(websiteProjects) ? websiteProjects : [])) {
+          if (p.id) {
+            projectMap.set(p.id, { ...p, status: p.status || 'active' });
           }
         }
       }
+
+      if (projectMap.size === 0) {
+        const jobsRes = await websiteFetch("/api/jobs", { jwt: auth.jwt });
+        const allJobs = jobsRes.ok ? await jobsRes.json() : [];
+        for (const j of (Array.isArray(allJobs) ? allJobs : []).filter((j: any) => !hiddenJobIds.has(j.id))) {
+          const cId = j.contractorId || j.contractor_id;
+          const pId = j.projectId || j.project_id;
+          const pName = j.projectName || j.project_name;
+          if (pId && pName) {
+            if (!projectMap.has(pId)) {
+              projectMap.set(pId, {
+                id: pId,
+                name: pName,
+                contractorId: cId || auth.userId,
+                status: "active",
+              });
+            }
+          }
+        }
+      }
+
       for (const [id, proj] of localProjects) {
         if (proj.contractorId === auth.userId) {
           projectMap.set(id, proj);
