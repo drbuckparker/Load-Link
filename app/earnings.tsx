@@ -21,7 +21,7 @@ function mapEarning(e: any): Earning & { sessions?: number; totalLoads?: number 
     rate: Number(e.rate) || 0,
     rateType: e.rate_type ?? e.rateType ?? '',
     amount: Number(e.amount) || 0,
-    status: e.status ?? e.payment_status ?? e.paymentStatus ?? 'pending',
+    status: e.status ?? e.payment_status ?? e.paymentStatus ?? 'open',
     sessions: e.sessions ?? 1,
     totalLoads: e.totalLoads ?? e.total_loads ?? 0,
   };
@@ -45,8 +45,8 @@ export default function EarningsScreen() {
 
   const stats = earningsData?.stats;
   const totalEarnings = stats?.totalEarnings ?? stats?.total_earnings ?? earnings.reduce((sum: number, e: Earning) => sum + e.amount, 0);
-  const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? earnings.filter((e: any) => e.status !== 'paid').reduce((sum: number, e: any) => sum + e.amount, 0);
-  const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? earnings.filter((e: any) => e.status === 'paid').reduce((sum: number, e: any) => sum + e.amount, 0);
+  const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? earnings.filter((e: any) => ['open', 'issued', 'payment_sent'].includes(e.status)).reduce((sum: number, e: any) => sum + e.amount, 0);
+  const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? earnings.filter((e: any) => e.status === 'payment_received').reduce((sum: number, e: any) => sum + e.amount, 0);
   const totalHours = earnings.reduce((sum: number, e: Earning) => sum + e.billedHours, 0);
 
   function renderHeader() {
@@ -105,9 +105,10 @@ export default function EarningsScreen() {
   }
 
   function renderEarning({ item }: { item: any }) {
-    const statusColor = item.status === 'paid' ? Colors.success : item.status === 'in_progress' ? '#3b82f6' : Colors.warning;
-    const statusBg = item.status === 'paid' ? Colors.successBg : item.status === 'in_progress' ? 'rgba(59,130,246,0.15)' : Colors.warningBg;
-    const statusLabel = item.status === 'in_progress' ? 'IN PROGRESS' : item.status.toUpperCase();
+    const statusColor = item.status === 'payment_received' ? Colors.success : item.status === 'in_progress' ? '#3b82f6' : Colors.warning;
+    const statusBg = item.status === 'payment_received' ? Colors.successBg : item.status === 'in_progress' ? 'rgba(59,130,246,0.15)' : Colors.warningBg;
+    const rawLabel = (item.status || '').replace(/_/g, ' ').toUpperCase();
+    const statusLabel = rawLabel || 'OPEN';
     const sessions = item.sessions || 1;
     const dateStr = item.date ? new Date(item.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
     return (

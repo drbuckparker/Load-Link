@@ -14,7 +14,7 @@ interface Invoice {
   periodMonth: number;
   periodYear: number;
   totalAmount: number;
-  status: 'draft' | 'pending' | 'approved' | 'paid' | 'disputed';
+  status: 'open' | 'issued' | 'payment_sent' | 'payment_received' | 'void';
   contractorName: string;
   driverName: string;
   createdAt: string;
@@ -35,26 +35,30 @@ function mapInvoice(inv: any): Invoice {
     periodMonth: month,
     periodYear: year,
     totalAmount: Number(inv.total_amount ?? inv.totalAmount) || 0,
-    status: inv.status ?? 'draft',
+    status: inv.status ?? 'open',
     contractorName: inv.contractor_name ?? inv.contractorName ?? '',
     driverName: inv.driver_name ?? inv.driverName ?? '',
     createdAt: inv.created_at ?? inv.createdAt ?? '',
   };
 }
 
-const STATUS_FILTERS = ['All', 'Draft', 'Pending', 'Paid'] as const;
+const STATUS_FILTERS = ['All', 'Open', 'Issued', 'Payment Sent', 'Payment Received', 'Void'] as const;
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function getInvoiceStatusColor(status: string): { bg: string; text: string } {
   switch (status) {
-    case 'paid': return { bg: Colors.successBg, text: Colors.success };
-    case 'approved': return { bg: Colors.successBg, text: Colors.success };
-    case 'pending': return { bg: Colors.warningBg, text: Colors.warning };
-    case 'disputed': return { bg: Colors.destructiveBg, text: Colors.destructive };
-    case 'draft': return { bg: 'rgba(107, 112, 128, 0.2)', text: Colors.textMuted };
+    case 'payment_received': return { bg: Colors.successBg, text: Colors.success };
+    case 'payment_sent': return { bg: Colors.warningBg, text: Colors.warning };
+    case 'issued': return { bg: 'rgba(59, 130, 246, 0.2)', text: '#3B82F6' };
+    case 'void': return { bg: Colors.destructiveBg, text: Colors.destructive };
+    case 'open': return { bg: 'rgba(107, 112, 128, 0.2)', text: Colors.textMuted };
     default: return { bg: 'rgba(107, 112, 128, 0.2)', text: Colors.textMuted };
   }
+}
+
+function formatStatusLabel(status: string): string {
+  return status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
 export default function InvoicesScreen() {
@@ -62,7 +66,11 @@ export default function InvoicesScreen() {
   const [filter, setFilter] = useState<string>('All');
   const [refreshing, setRefreshing] = useState(false);
 
-  const queryParam = filter === 'All' ? '' : `?status=${filter.toLowerCase()}`;
+  const filterToDbStatus: Record<string, string> = {
+    'Open': 'open', 'Issued': 'issued', 'Payment Sent': 'payment_sent',
+    'Payment Received': 'payment_received', 'Void': 'void',
+  };
+  const queryParam = filter === 'All' ? '' : `?status=${filterToDbStatus[filter] || filter.toLowerCase()}`;
 
   const { data: invoicesData, isLoading } = useQuery<any>({
     queryKey: [`/api/invoices${queryParam}`],
@@ -77,10 +85,10 @@ export default function InvoicesScreen() {
 
   const stats = useMemo(() => {
     const totalOutstanding = invoices
-      .filter((inv: Invoice) => inv.status === 'pending' || inv.status === 'approved')
+      .filter((inv: Invoice) => ['open', 'issued', 'payment_sent'].includes(inv.status))
       .reduce((sum: number, inv: Invoice) => sum + inv.totalAmount, 0);
     const totalPaid = invoices
-      .filter((inv: Invoice) => inv.status === 'paid')
+      .filter((inv: Invoice) => inv.status === 'payment_received')
       .reduce((sum: number, inv: Invoice) => sum + inv.totalAmount, 0);
     return {
       totalOutstanding,
@@ -162,7 +170,7 @@ export default function InvoicesScreen() {
           <Text style={styles.invoiceAmount}>${item.totalAmount.toLocaleString()}</Text>
           <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
             <Text style={[styles.statusBadgeText, { color: statusColor.text }]}>
-              {item.status.toUpperCase()}
+              {formatStatusLabel(item.status).toUpperCase()}
             </Text>
           </View>
         </View>

@@ -23,7 +23,6 @@ function getStatusInfo(status?: string | null): { label: string; color: string; 
     case 'issued': return { label: 'ISSUED', color: Colors.info, bg: Colors.infoBg };
     case 'payment_sent': return { label: 'PAYMENT SENT', color: Colors.info, bg: Colors.infoBg };
     case 'payment_received': return { label: 'PAID', color: Colors.success, bg: Colors.successBg };
-    case 'paid': return { label: 'PAID', color: Colors.success, bg: Colors.successBg };
     case 'void': return { label: 'VOID', color: Colors.destructive, bg: Colors.destructiveBg };
     default: return { label: (status || 'UNKNOWN').toUpperCase(), color: Colors.textMuted, bg: 'rgba(107,112,128,0.2)' };
   }

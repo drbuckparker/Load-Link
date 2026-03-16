@@ -436,8 +436,8 @@ export default function ProfileScreen() {
     const items = Array.isArray(earningsList) ? earningsList : [];
     const stats = earningsData?.stats;
     const totalEarnings = stats?.totalEarnings ?? stats?.total_earnings ?? items.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
-    const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? items.filter((e: any) => e.status === 'pending').reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
-    const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? items.filter((e: any) => e.status === 'paid').reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+    const pendingAmount = stats?.pendingAmount ?? stats?.pending_amount ?? items.filter((e: any) => ['open', 'issued', 'payment_sent'].includes(e.status)).reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+    const paidAmount = stats?.paidAmount ?? stats?.paid_amount ?? items.filter((e: any) => e.status === 'payment_received').reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
     const totalHours = items.reduce((sum: number, e: any) => sum + (Number(e.billed_hours ?? e.billedHours) || 0), 0);
 
     return (
@@ -503,10 +503,10 @@ export default function ProfileScreen() {
         ) : (
           <View style={{ gap: 10 }}>
             {items.map((item: any) => {
-              const rawStatus = item.status || item.payment_status || 'pending';
-              const statusColor = rawStatus === 'paid' ? Colors.success : rawStatus === 'in_progress' ? '#3b82f6' : Colors.warning;
-              const statusBg = rawStatus === 'paid' ? Colors.successBg : rawStatus === 'in_progress' ? 'rgba(59,130,246,0.15)' : Colors.warningBg;
-              const statusLabel = rawStatus === 'in_progress' ? 'IN PROGRESS' : rawStatus.toUpperCase();
+              const rawStatus = item.status || item.payment_status || 'open';
+              const statusColor = rawStatus === 'payment_received' ? Colors.success : rawStatus === 'in_progress' ? '#3b82f6' : Colors.warning;
+              const statusBg = rawStatus === 'payment_received' ? Colors.successBg : rawStatus === 'in_progress' ? 'rgba(59,130,246,0.15)' : Colors.warningBg;
+              const statusLabel = (rawStatus || '').replace(/_/g, ' ').toUpperCase();
               const sessions = item.sessions || 1;
               return (
               <Pressable key={item.id} style={styles.earningCard} onPress={() => router.push(`/job/${item.jobId || item.id}`)}>

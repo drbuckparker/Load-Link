@@ -811,7 +811,7 @@ function camelToSnake2(str) {
 }
 function addDualKeys(obj) {
   if (Array.isArray(obj)) return obj.map(addDualKeys);
-  if (obj === null || typeof obj !== "object") return obj;
+  if (obj === null || typeof obj !== "object" || obj instanceof Date) return obj;
   const result = {};
   for (const key of Object.keys(obj)) {
     const val = addDualKeys(obj[key]);
@@ -1132,10 +1132,10 @@ async function registerRoutes(app2) {
       if (status) {
         const statusLower = status.toLowerCase();
         if (statusLower === "in_progress" || statusLower === "active") {
-          query += ` AND LOWER(j.status::text) IN ('in_progress', 'accepted', 'assigned')`;
+          query += ` AND j.status::text IN ('in_progress', 'accepted', 'pending')`;
         } else {
-          query += ` AND LOWER(j.status::text) = LOWER($${paramIdx})`;
-          params.push(status);
+          query += ` AND j.status::text = $${paramIdx}`;
+          params.push(statusLower);
           paramIdx++;
         }
       }
@@ -1279,7 +1279,7 @@ async function registerRoutes(app2) {
   app2.post("/api/jobs/:id/accept", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
-      await pool.query(`UPDATE jobs SET status = 'assigned', driver_id = $1, updated_at = NOW() WHERE id = $2`, [auth.userId, req.params.id]);
+      await pool.query(`UPDATE jobs SET status = 'accepted', driver_id = $1, updated_at = NOW() WHERE id = $2`, [auth.userId, req.params.id]);
       const id = __require("crypto").randomUUID();
       await pool.query(
         `INSERT INTO job_assignments (id, job_id, driver_id, status, created_at) VALUES ($1, $2, $3, 'accepted', NOW()) ON CONFLICT DO NOTHING`,
@@ -1288,7 +1288,7 @@ async function registerRoutes(app2) {
       pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {
       });
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
-      return res.json(addDualKeys(result.rows[0] || { id: req.params.id, status: "assigned" }));
+      return res.json(addDualKeys(result.rows[0] || { id: req.params.id, status: "accepted" }));
     } catch (e) {
       console.error("Accept job error:", e.message);
       return res.status(500).json({ message: "Failed to accept job" });
@@ -1300,7 +1300,7 @@ async function registerRoutes(app2) {
         `SELECT ja.*, j.scheduled_date, j.estimated_days FROM job_assignments ja
          JOIN jobs j ON ja.job_id = j.id
          WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
-         AND j.status IN ('open', 'in_progress', 'assigned', 'pending')`,
+         AND j.status::text IN ('open', 'in_progress', 'accepted', 'pending')`,
         [req.params.id]
       );
       return res.json(result.rows.map(addDualKeys));
@@ -1372,7 +1372,7 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1`, [req.params.assignmentId]);
-      await pool.query(`UPDATE jobs SET status = 'assigned', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {
       });
       return res.json({ ok: true });
@@ -1831,7 +1831,7 @@ async function registerRoutes(app2) {
       );
       const jobs2 = jobsResult.rows;
       const openJobs = jobs2.filter((j) => j.status === "open").length;
-      const activeJobs = jobs2.filter((j) => ["assigned", "accepted", "in_progress"].includes(j.status)).length;
+      const activeJobs = jobs2.filter((j) => ["accepted", "in_progress", "pending"].includes(j.status)).length;
       const completedJobs = jobs2.filter((j) => j.status === "completed").length;
       const assignResult = await pool.query(
         `SELECT COUNT(*)::int as count FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id WHERE j.contractor_id = $1 AND ja.status = 'pending'`,
@@ -1841,7 +1841,7 @@ async function registerRoutes(app2) {
       const userResult = await pool.query(`SELECT * FROM users WHERE id = $1`, [userId]);
       const user = userResult.rows[0];
       const invoicesResult = await pool.query(
-        `SELECT COALESCE(SUM(total_amount), 0)::float as total, COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued') THEN total_amount ELSE 0 END), 0)::float as awaiting FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`,
+        `SELECT COALESCE(SUM(total_amount), 0)::float as total, COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued', 'payment_sent') THEN total_amount ELSE 0 END), 0)::float as awaiting FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`,
         [userId]
       );
       const dashboard = {
@@ -1875,7 +1875,7 @@ async function registerRoutes(app2) {
       const result = await pool.query(
         `SELECT COALESCE(SUM(total_amount), 0)::float as total,
                 COALESCE(SUM(CASE WHEN status::text = 'payment_received' THEN total_amount ELSE 0 END), 0)::float as paid,
-                COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued') THEN total_amount ELSE 0 END), 0)::float as pending
+                COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued', 'payment_sent') THEN total_amount ELSE 0 END), 0)::float as pending
          FROM monthly_invoices WHERE driver_id = $1`,
         [auth.userId]
       );
@@ -1902,10 +1902,10 @@ async function registerRoutes(app2) {
       if (status) {
         const statusLower = status.toLowerCase();
         if (statusLower === "in_progress" || statusLower === "active") {
-          query += ` AND LOWER(j.status::text) IN ('in_progress', 'accepted', 'assigned')`;
+          query += ` AND j.status::text IN ('in_progress', 'accepted', 'pending')`;
         } else {
-          query += ` AND LOWER(j.status::text) = LOWER($${paramIdx})`;
-          params.push(status);
+          query += ` AND j.status::text = $${paramIdx}`;
+          params.push(statusLower);
           paramIdx++;
         }
       }
@@ -1971,7 +1971,8 @@ async function registerRoutes(app2) {
         );
       }
       return result.rows.map(addDualKeys);
-    } catch {
+    } catch (e) {
+      console.error("getJobsForCalendar error:", e.message);
     }
     return [];
   }
@@ -1982,7 +1983,7 @@ async function registerRoutes(app2) {
       const driverId = auth.userId;
       const month = parseInt(req.query.month) || (/* @__PURE__ */ new Date()).getMonth() + 1;
       const year = parseInt(req.query.year) || (/* @__PURE__ */ new Date()).getFullYear();
-      const activeStatuses = /* @__PURE__ */ new Set(["open", "in_progress", "pending", "assigned"]);
+      const activeStatuses = /* @__PURE__ */ new Set(["open", "in_progress", "accepted", "pending"]);
       const myJobs = allJobs.filter((j) => {
         const dId = j.driverId || j.driver_id;
         const assignments = j.assignments || [];
@@ -2026,11 +2027,11 @@ async function registerRoutes(app2) {
       const contractorId = auth.userId;
       const month = parseInt(req.query.month) || (/* @__PURE__ */ new Date()).getMonth() + 1;
       const year = parseInt(req.query.year) || (/* @__PURE__ */ new Date()).getFullYear();
-      const activeStatuses = /* @__PURE__ */ new Set(["open", "in_progress", "pending", "assigned"]);
+      const activeStatuses = /* @__PURE__ */ new Set(["open", "in_progress", "accepted", "pending"]);
       const myJobs = allJobs.filter((j) => {
         const cId = j.contractorId || j.contractor_id;
-        if (cId !== contractorId) return false;
         const status = (j.status || "").toLowerCase();
+        if (String(cId) !== String(contractorId)) return false;
         return activeStatuses.has(status);
       });
       const dailyJobs = {};
@@ -2063,7 +2064,8 @@ async function registerRoutes(app2) {
       }
       const fleetSize = Object.values(dailyCapacity).reduce((max, cap) => Math.max(max, cap.needed), 0);
       return res.json({ fleetSize, dailyCapacity, dailyJobs });
-    } catch {
+    } catch (e) {
+      console.error("Calendar capacity error:", e.message);
       return res.json({ fleetSize: 0, dailyCapacity: {}, dailyJobs: {} });
     }
   });
@@ -2074,13 +2076,14 @@ async function registerRoutes(app2) {
       let query = `SELECT * FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`;
       const params = [auth.userId];
       if (status) {
-        query += ` AND LOWER(status) = LOWER($2)`;
-        params.push(status);
+        query += ` AND status::text = $2`;
+        params.push(status.toLowerCase());
       }
       query += ` ORDER BY created_at DESC`;
       const result = await pool.query(query, params);
       return res.json(result.rows.map(addDualKeys));
-    } catch {
+    } catch (e) {
+      console.error("GET /api/invoices error:", e.message);
       return res.json([]);
     }
   });
@@ -2121,7 +2124,7 @@ async function registerRoutes(app2) {
       let query = `SELECT * FROM contractor_projects WHERE contractor_id = $1`;
       const params = [auth.userId];
       if (!includeDeleted) {
-        query += ` AND (status != 'deleted' OR status IS NULL) AND deleted_at IS NULL`;
+        query += ` AND deleted_at IS NULL`;
       }
       query += ` ORDER BY created_at DESC`;
       const result = await pool.query(query, params);
@@ -2142,7 +2145,7 @@ async function registerRoutes(app2) {
       }
       return res.json(projects.map(addDualKeys));
     } catch (e) {
-      console.error("GET /api/projects error:", e.message);
+      console.error("GET /api/projects error:", e.message, e.stack?.split("\n")[1]);
       return res.json([]);
     }
   });
@@ -2220,7 +2223,7 @@ async function registerRoutes(app2) {
   app2.delete("/api/projects/:id", requireAuth, async (req, res) => {
     try {
       await pool.query(
-        `UPDATE contractor_projects SET status = 'deleted', deleted_at = NOW() WHERE id = $1`,
+        `UPDATE contractor_projects SET deleted_at = NOW() WHERE id = $1`,
         [req.params.id]
       );
       const auth = getWebsiteAuth(req);
