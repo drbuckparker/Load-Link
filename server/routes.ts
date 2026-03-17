@@ -35,6 +35,20 @@ function saveJsonMap<T>(filename: string, map: Map<string, T>) {
 const tokenToJwt = loadJsonMap<{ jwt: string; userId: string; user: any }>("sessions.json");
 
 const hiddenJobIds = new Set([
+  "964f3e5b-6fa2-4aa2-9f2f-57a98bf5835d",
+  "415b98c6-6102-4170-93b1-65601200e267",
+  "a863fc31-8346-4577-af17-c90201b3cecf",
+  "78f95aef-24d3-4d14-acd3-e534dae5e124",
+  "35d2ec43-7a9e-42fd-8692-bc2753aaa33a",
+  "ca460caf-6b12-4328-bb92-1c75ab6056ff",
+  "0316e819-f18c-4403-878d-06986573e979",
+  "95f5512c-36df-4c84-afdc-c6fd81549839",
+  "9abdfb36-32f2-4077-8250-da5d0a6bfd01",
+  "024cdfbc-7e82-4420-b960-fe7e7b860283",
+  "122b233f-5d75-4bbe-a46e-8afe1686771a",
+  "8c128208-163f-4d7a-bbf9-0e9b9d06cc2b",
+  "ae14fedb-dd4d-4cf5-a07a-0b6aa23f232e",
+  "ba805c10-982e-4008-950a-7d9cc34f6830",
   "71a89320-160a-40c4-9967-1b2e8db25942",
   "37cdee04-1606-4bbb-88c2-b51dd5e7e6c2",
   "b0067804-b81d-4ef0-902b-a7ec32e170f7",

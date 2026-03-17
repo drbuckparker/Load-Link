@@ -1,6 +1,6 @@
 export const deletedVehicleIds = new Set<string>();
 
-export let jobSyncPaused = true;
+export let jobSyncPaused = false;
 
 export function pauseJobSync() {
   jobSyncPaused = true;
