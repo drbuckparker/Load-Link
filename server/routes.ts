@@ -1303,11 +1303,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (isContractorRole) {
           const cId = j.contractorId || j.contractor_id;
           if (String(cId) !== String(userId)) return false;
-        } else {
-          const dId = j.driverId || j.driver_id;
-          const assignments = j.assignments || [];
-          const isMyJob = dId === userId || assignments.some((a: any) => a.driverId === userId || a.driver_id === userId);
-          if (!isMyJob) return false;
         }
         const status = (j.status || '').toLowerCase();
         return activeStatuses.has(status);

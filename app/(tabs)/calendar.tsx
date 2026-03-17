@@ -209,7 +209,15 @@ export default function CalendarScreen() {
   const [showTruckPicker, setShowTruckPicker] = useState<'available' | 'unavailable' | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
 
-  const isContractor = user?.role ? isContractorRole(user.role) : false;
+  const isContractorRole_ = user?.role ? isContractorRole(user.role) : false;
+
+  const vehiclesQuery = useQuery<any[]>({
+    queryKey: ['/api/vehicles'],
+    enabled: !!user,
+  });
+  const totalVehicles = vehiclesQuery.data?.length || 0;
+  const hasFleet = totalVehicles > 0;
+  const isContractor = isContractorRole_ && !hasFleet;
 
   const availQuery = useQuery<any[]>({
     queryKey: ['/api/availability', `?month=${currentMonth + 1}&year=${currentYear}`],
@@ -222,12 +230,6 @@ export default function CalendarScreen() {
     staleTime: 30_000,
     refetchOnMount: 'always',
   });
-
-  const vehiclesQuery = useQuery<any[]>({
-    queryKey: ['/api/vehicles'],
-    enabled: !!user,
-  });
-  const totalVehicles = vehiclesQuery.data?.length || 0;
 
   const [cleanupDone, setCleanupDone] = useState(false);
 
@@ -922,87 +924,6 @@ export default function CalendarScreen() {
                   ))}
                 </View>
               )}
-
-              {(vehiclesQuery.data?.length || 0) > 0 && (() => {
-                const vehicles = vehiclesQuery.data || [];
-                const availData = availQuery.data || [];
-                const dayCalJobs = calendarJobsQuery.data?.dailyJobs?.[selectedDate] || [];
-                const dayCapJobs = dateJobs;
-
-                const vehicleStatuses = vehicles.map((v: any) => {
-                  const bookedJob = dayCalJobs.find((j: any) => j.vehicle?.id === v.id) || dayCapJobs.find((j: any) => j.assignedVehicles?.some((av: any) => av.vehicleId === v.id || av.vehicle_id === v.id));
-                  if (bookedJob) return { vehicle: v, status: 'booked' as const, jobName: bookedJob.material || bookedJob.projectName || 'Job' };
-
-                  let isUnavail = false;
-                  for (const item of availData) {
-                    if (!item.vehicle_id || item.vehicle_id !== v.id) continue;
-                    const d = new Date(item.date);
-                    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-                    if (key === selectedDate && !item.is_available && !item.job_id) { isUnavail = true; break; }
-                  }
-                  if (isUnavail) return { vehicle: v, status: 'unavailable' as const, jobName: '' };
-                  return { vehicle: v, status: 'available' as const, jobName: '' };
-                });
-
-                const availCount = vehicleStatuses.filter(s => s.status === 'available').length;
-                const unavailCount = vehicleStatuses.filter(s => s.status === 'unavailable').length;
-                const bookedCount = vehicleStatuses.filter(s => s.status === 'booked').length;
-
-                return (
-                  <View style={{ marginTop: 12 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                      <TruckIcon size={14} />
-                      <Text style={{ fontFamily: 'ChakraPetch_600SemiBold', fontSize: 11, color: Colors.textMuted, letterSpacing: 1 }}>
-                        FLEET STATUS
-                      </Text>
-                      <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
-                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: Colors.textSecondary }}>
-                        {availCount} avail · {unavailCount} off · {bookedCount} booked
-                      </Text>
-                    </View>
-                    {vehicleStatuses.map(({ vehicle: v, status, jobName }) => {
-                      const truckName = v.truck_number || v.truckNumber || `Truck ${v.id.slice(0, 6)}`;
-                      const truckDesc = [v.year, v.make, v.model].filter(Boolean).join(' ');
-                      const plate = v.license_plate || v.licensePlate;
-                      const statusColor = status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : '#3b82f6';
-                      const statusLabel = status === 'booked' ? `Booked – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
-                      return (
-                        <View key={v.id} style={{
-                          flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8,
-                          borderBottomWidth: 1, borderBottomColor: Colors.border,
-                        }}>
-                          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: statusColor }} />
-                          <View style={{ flex: 1 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                              <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.text }}>#{truckName}</Text>
-                            </View>
-                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted }}>
-                              {truckDesc}{plate ? `     ${plate}` : ''}
-                            </Text>
-                          </View>
-                          <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: statusColor }}>{statusLabel}</Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                );
-              })()}
-
-              <Pressable
-                style={[styles.detailJobsBtn, { marginTop: 12 }]}
-                onPress={() => {
-                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  router.push({ pathname: '/jobs-browse', params: { date: selectedDate || '' } } as any);
-                }}
-              >
-                <Ionicons name="search-outline" size={16} color={Colors.primary} />
-                <Text style={styles.detailJobsBtnText}>
-                  {dateJobsQuery.isLoading ? 'Checking jobs...' :
-                    dateJobsQuery.data?.length ? `${dateJobsQuery.data.length} open job${dateJobsQuery.data.length !== 1 ? 's' : ''} on this date` :
-                    'Browse jobs on this date'}
-                </Text>
-                <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
-              </Pressable>
 
             </View>
           );
