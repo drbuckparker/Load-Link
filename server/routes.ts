@@ -1257,6 +1257,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const params: any[] = [contractorId];
       let paramIdx = 2;
 
+      const singleDate = req.query.date as string | undefined;
+      if (singleDate) {
+        query += ` AND (
+          j.scheduled_date::date = $${paramIdx}::date
+          OR (
+            j.scheduled_date::date < $${paramIdx}::date
+            AND (j.scheduled_date::date + COALESCE(j.estimated_days, 1) * INTERVAL '1 day')::date > $${paramIdx}::date
+            AND j.status::text IN ('open', 'accepted', 'pending', 'in_progress')
+            AND (SELECT COUNT(*) FROM job_assignments ja2 WHERE ja2.job_id = j.id AND ja2.status::text = 'approved') < j.trucks_needed
+          )
+        )`;
+        params.push(singleDate);
+        paramIdx++;
+      }
       if (projectFilter) {
         query += ` AND j.project_id = $${paramIdx}`;
         params.push(projectFilter);

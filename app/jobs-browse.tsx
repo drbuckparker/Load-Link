@@ -165,7 +165,7 @@ export default function JobsBrowseScreen() {
     return p.toString();
   }, [statusParam, selectedTruckType, search, isContractor, user?.id, activeFilter, dateFilter, selectedProjectFilter, user?.secondaryLocationLat, user?.secondaryLocationLng, user?.primaryLocationLat, user?.primaryLocationLng]);
 
-  const endpoint = isContractor ? '/api/contractor/jobs' : '/api/jobs';
+  const endpoint = (isContractor && !dateFilter) ? '/api/contractor/jobs' : '/api/jobs';
   const queryUrl = queryParams ? `${endpoint}?${queryParams}` : endpoint;
 
   const { data: rawJobs, isLoading, refetch } = useQuery<any[]>({
