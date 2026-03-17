@@ -303,23 +303,6 @@ export default function CalendarScreen() {
     refetchOnMount: 'always',
   });
 
-  const dateJobsQueryParams = useMemo(() => {
-    const p = new URLSearchParams();
-    p.set('date', selectedDate || '');
-    p.set('status', 'open');
-    const lat = user?.secondaryLocationLat || user?.primaryLocationLat;
-    const lng = user?.secondaryLocationLng || user?.primaryLocationLng;
-    if (lat && lng) {
-      p.set('lat', String(lat));
-      p.set('lng', String(lng));
-    }
-    return p.toString();
-  }, [selectedDate, user?.secondaryLocationLat, user?.secondaryLocationLng, user?.primaryLocationLat, user?.primaryLocationLng]);
-
-  const dateJobsQuery = useQuery<any[]>({
-    queryKey: ['/api/jobs', `?${dateJobsQueryParams}`],
-    enabled: !!user && !!selectedDate,
-  });
 
   useEffect(() => {
     if (cleanupDone || isContractor || !calendarJobsQuery.data || !vehiclesQuery.data) return;
@@ -1145,11 +1128,7 @@ export default function CalendarScreen() {
                 }}
               >
                 <Ionicons name="search-outline" size={16} color={Colors.primary} />
-                <Text style={styles.detailJobsBtnText}>
-                  {dateJobsQuery.isLoading ? 'Checking jobs...' :
-                    dateJobsQuery.data?.length ? `${dateJobsQuery.data.length} open job${dateJobsQuery.data.length !== 1 ? 's' : ''} on this date` :
-                    'Browse jobs on this date'}
-                </Text>
+                <Text style={styles.detailJobsBtnText}>Search jobs for this date</Text>
                 <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
               </Pressable>
             </View>
@@ -1349,7 +1328,7 @@ export default function CalendarScreen() {
               }}
             >
               <Ionicons name="search-outline" size={18} color={Colors.primary} />
-              <Text style={styles.checkJobsBtnText}>Check for Jobs on This Date</Text>
+              <Text style={styles.checkJobsBtnText}>Search jobs for this date</Text>
               <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
             </Pressable>
 
