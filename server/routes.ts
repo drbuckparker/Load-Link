@@ -512,6 +512,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/unarchive", requireAuth, async (req: Request, res: Response) => {
     try {
       await pool.query(`UPDATE jobs SET archived_at = NULL, status = 'open', cancelled_at = NULL WHERE id = $1`, [req.params.id]);
+      const auth = getWebsiteAuth(req)!;
+      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: { archived_at: null, status: 'open', cancelled_at: null } }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Unarchive job error:", e.message);
@@ -613,9 +615,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      const now = new Date().toISOString();
       await pool.query(`UPDATE jobs SET status = 'cancelled', cancelled_at = NOW(), archived_at = NOW() WHERE id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
+      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: { archived_at: now, status: 'cancelled', cancelled_at: now } }).catch(() => {});
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -1140,14 +1143,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       deletedVehicleIds.add(req.params.id);
+      const now = new Date().toISOString();
       await pool.query(`UPDATE trucks SET archived_at = NOW(), is_active = false WHERE id = $1`, [req.params.id]);
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" })
-        .catch((err) => { console.error("pushToWebsite DELETE vehicle error:", err.message); });
+      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "PUT", body: { archived_at: now, is_active: false } })
+        .catch((err) => { console.error("pushToWebsite archive vehicle error:", err.message); });
     } catch (e: any) {
-      console.error("DELETE vehicle error:", e.message);
+      console.error("Archive vehicle error:", e.message);
     }
     return res.json({ ok: true });
   });
@@ -1169,6 +1173,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       deletedVehicleIds.delete(req.params.id);
       await pool.query(`UPDATE trucks SET archived_at = NULL, is_active = true WHERE id = $1`, [req.params.id]);
+      const auth = getWebsiteAuth(req)!;
+      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "PUT", body: { archived_at: null, is_active: true } }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Unarchive vehicle error:", e.message);
