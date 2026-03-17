@@ -14,7 +14,7 @@ import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
 import RouteMapView from '@/components/RouteMapView';
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor') || role === 'trucking_company';
+  return role.includes('contractor') && role !== 'trucking_company';
 }
 
 
