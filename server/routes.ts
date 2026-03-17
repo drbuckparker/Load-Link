@@ -1086,10 +1086,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
+      await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
       await pool.query(`DELETE FROM trucks WHERE id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
       pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
-    } catch {}
+    } catch (e: any) {
+      console.error("DELETE vehicle error:", e.message);
+    }
     return res.json({ ok: true });
   });
 

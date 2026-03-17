@@ -111,9 +111,11 @@ export default function VehiclesScreen() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => apiRequest('DELETE', `/api/vehicles/${id}`),
+    mutationFn: (id: string) => apiRequest('DELETE', `/api/vehicles/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
     },
   });
 
@@ -151,12 +153,14 @@ export default function VehiclesScreen() {
     setDriverResults([]);
   }
 
-  function handleDelete(id: number) {
+  function handleDelete(id: string) {
     if (Platform.OS === 'web') {
-      deleteMutation.mutate(id);
+      if (window.confirm('Are you sure you want to delete this vehicle? This will remove it from all jobs and availability.')) {
+        deleteMutation.mutate(id);
+      }
       return;
     }
-    Alert.alert('Delete Vehicle', 'Are you sure you want to delete this vehicle?', [
+    Alert.alert('Delete Vehicle', 'Are you sure you want to delete this vehicle? This will remove it from all jobs and availability.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => deleteMutation.mutate(id) },
     ]);
