@@ -219,6 +219,7 @@ export const jobs = pgTable("jobs", {
   original_rate: numeric("original_rate", { precision: 10, scale: 2 }),
   original_rate_type: text("original_rate_type"),
   requires_tarp: boolean("requires_tarp").default(false),
+  archived_at: timestamp("archived_at"),
 });
 
 export const jobRuns = pgTable("job_runs", {

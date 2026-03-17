@@ -556,18 +556,18 @@ export default function JobDetailScreen() {
         }});
         if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any);
       } catch (e: any) {
-        Alert.alert('Error', e.message || 'Failed to cancel job');
+        Alert.alert('Error', e.message || 'Failed to archive job');
       }
     };
     if (Platform.OS === 'web') {
-      if (window.confirm('Are you sure you want to cancel this job? This cannot be undone.')) {
+      if (window.confirm('Cancel and archive this job? You can restore it later from the archived section.')) {
         doCancel();
       }
       return;
     }
-    Alert.alert('Cancel Job', 'Are you sure you want to cancel this job? This cannot be undone.', [
+    Alert.alert('Archive Job', 'Cancel and archive this job? You can restore it later from the archived section.', [
       { text: 'Keep Job', style: 'cancel' },
-      { text: 'Cancel Job', style: 'destructive', onPress: doCancel },
+      { text: 'Archive', style: 'destructive', onPress: doCancel },
     ]);
   }
 
@@ -2147,7 +2147,7 @@ export default function JobDetailScreen() {
               onPress={handleCancelJob}
             >
               <Ionicons name="close-circle" size={20} color={Colors.destructive} />
-              <Text style={styles.cancelJobBtnText}>CANCEL JOB</Text>
+              <Text style={styles.cancelJobBtnText}>ARCHIVE JOB</Text>
             </Pressable>
           </View>
         )}

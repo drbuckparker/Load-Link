@@ -110,14 +110,31 @@ export default function VehiclesScreen() {
     },
   });
 
-  const deleteMutation = useMutation({
+  const [showArchived, setShowArchived] = useState(false);
+
+  const archiveMutation = useMutation({
     mutationFn: (id: string) => apiRequest('DELETE', `/api/vehicles/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/vehicles/archived'] });
       queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
     },
   });
+
+  const unarchiveMutation = useMutation({
+    mutationFn: (id: string) => apiRequest('POST', `/api/vehicles/${id}/unarchive`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/vehicles/archived'] });
+    },
+  });
+
+  const { data: _archivedVehicles } = useQuery<Vehicle[]>({
+    queryKey: ['/api/vehicles/archived'],
+    enabled: showArchived,
+  });
+  const archivedVehicles = _archivedVehicles || [];
 
   function openAdd() {
     setEditingId(null);
@@ -153,16 +170,29 @@ export default function VehiclesScreen() {
     setDriverResults([]);
   }
 
-  function handleDelete(id: string) {
+  function handleArchive(id: string) {
     if (Platform.OS === 'web') {
-      if (window.confirm('Are you sure you want to delete this vehicle? This will remove it from all jobs and availability.')) {
-        deleteMutation.mutate(id);
+      if (window.confirm('Archive this vehicle? It will be removed from active duty but you can restore it later.')) {
+        archiveMutation.mutate(id);
       }
       return;
     }
-    Alert.alert('Delete Vehicle', 'Are you sure you want to delete this vehicle? This will remove it from all jobs and availability.', [
+    Alert.alert('Archive Vehicle', 'Archive this vehicle? It will be removed from active duty but you can restore it later.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => deleteMutation.mutate(id) },
+      { text: 'Archive', style: 'destructive', onPress: () => archiveMutation.mutate(id) },
+    ]);
+  }
+
+  function handleUnarchive(id: string) {
+    if (Platform.OS === 'web') {
+      if (window.confirm('Restore this vehicle to active duty?')) {
+        unarchiveMutation.mutate(id);
+      }
+      return;
+    }
+    Alert.alert('Restore Vehicle', 'Restore this vehicle to active duty?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Restore', onPress: () => unarchiveMutation.mutate(id) },
     ]);
   }
 
@@ -373,8 +403,8 @@ export default function VehiclesScreen() {
             <Pressable onPress={() => openEdit(item)} hitSlop={8}>
               <Ionicons name="create-outline" size={20} color={Colors.textMuted} />
             </Pressable>
-            <Pressable onPress={() => handleDelete(item.id)} hitSlop={8}>
-              <Ionicons name="trash-outline" size={20} color={Colors.destructive} />
+            <Pressable onPress={() => handleArchive(item.id)} hitSlop={8}>
+              <Ionicons name="archive-outline" size={20} color={Colors.warning} />
             </Pressable>
           </View>
         </View>
@@ -420,7 +450,7 @@ export default function VehiclesScreen() {
         keyExtractor={item => String(item.id)}
         renderItem={renderVehicle}
         ListHeaderComponent={renderForm()}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] }); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles/archived'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           isLoading ? (
             <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 60 }} />
@@ -432,9 +462,55 @@ export default function VehiclesScreen() {
             </View>
           )
         }
+        ListFooterComponent={
+          <View>
+            <Pressable
+              style={[styles.archivedToggle, showArchived && styles.archivedToggleActive]}
+              onPress={() => setShowArchived(!showArchived)}
+            >
+              <Ionicons name="archive-outline" size={18} color={showArchived ? Colors.primary : Colors.textMuted} />
+              <Text style={[styles.archivedToggleText, showArchived && { color: Colors.primary }]}>
+                Archived Vehicles {archivedVehicles.length > 0 ? `(${archivedVehicles.length})` : ''}
+              </Text>
+              <Ionicons name={showArchived ? "chevron-up" : "chevron-down"} size={16} color={Colors.textMuted} />
+            </Pressable>
+            {showArchived && (
+              archivedVehicles.length === 0 ? (
+                <View style={styles.archivedEmpty}>
+                  <Text style={styles.archivedEmptyText}>No archived vehicles</Text>
+                </View>
+              ) : (
+                archivedVehicles.map((item) => (
+                  <View key={String(item.id)} style={[styles.vehicleCard, { opacity: 0.7 }]}>
+                    <View style={styles.vehicleHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.vehicleName}>{item.year} {item.make} {item.model}</Text>
+                        <Text style={styles.vehicleType}>{TRUCK_TYPE_LABELS[item.truck_type] || item.truck_type}</Text>
+                      </View>
+                      <Pressable
+                        onPress={() => handleUnarchive(String(item.id))}
+                        style={styles.restoreBtn}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="refresh-outline" size={16} color={Colors.success} />
+                        <Text style={styles.restoreBtnText}>Restore</Text>
+                      </Pressable>
+                    </View>
+                    <View style={styles.vehicleDetails}>
+                      <View style={styles.detailItem}>
+                        <Ionicons name="card-outline" size={14} color={Colors.textMuted} />
+                        <Text style={styles.detailText}>{item.license_plate || '—'}</Text>
+                      </View>
+                    </View>
+                  </View>
+                ))
+              )
+            )}
+          </View>
+        }
         contentContainerStyle={[styles.listContent, { paddingBottom: Platform.OS === 'web' ? 34 + 40 : 40 }]}
         showsVerticalScrollIndicator={false}
-        scrollEnabled={!!vehicles.length || showForm}
+        scrollEnabled={!!vehicles.length || showForm || showArchived}
       />
     </View>
   );
@@ -719,5 +795,46 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
     color: Colors.primary,
+  },
+  archivedToggle: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+  },
+  archivedToggleActive: {
+    borderTopColor: Colors.primary,
+  },
+  archivedToggleText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  archivedEmpty: {
+    alignItems: 'center' as const,
+    paddingVertical: 20,
+  },
+  archivedEmptyText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  restoreBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    backgroundColor: Colors.success + '15',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  restoreBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.success,
   },
 });

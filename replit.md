@@ -66,11 +66,11 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Google Maps API note**: The Google Geocoding API is not enabled on the project. The `/api/places/geocode` route uses Google's "Find Place from Text" API instead.
 
 ### Core Features
-- **Job Management**: Drivers can browse, accept, clock-in/out, and track earnings. Contractors can post, manage assignments (approve/reject drivers with conflict re-check and fleet truck assignment), and view invoices.
+- **Job Management**: Drivers can browse, accept, clock-in/out, and track earnings. Contractors can post, manage assignments (approve/reject drivers with conflict re-check and fleet truck assignment), and view invoices. Jobs and vehicles use soft-delete (archive) instead of hard delete — `archived_at` timestamp column on both `jobs` and `trucks` tables. Archived items can be restored.
 - **User Roles**: Supports `driver`, `contractor`, `trucking_company`, `trucking_company_contractor`, `driver_contractor`, `foreman`, `driver_trucking_company` with role-based feature access. All non-driver roles can post jobs.
 - **Messaging**: Real-time messaging between users related to specific jobs, including auto-messages for job events.
 - **Review System**: Allows users to submit and view reviews for completed jobs, impacting user ratings.
-- **Vehicle Management**: Users can add, update, and delete their vehicles.
+- **Vehicle Management**: Users can add, update, and archive/restore their vehicles. Archived vehicles are soft-deleted (archived_at timestamp) and can be restored.
 - **Project Management**: Contractors can create, update, and manage projects, linking jobs to specific projects.
 - **Weight Ticket System**: Supports uploading weight tickets for job runs, with reminders and viewing capabilities.
 - **Location Services**: GPS tracking for clock-in/out, location-based job filtering, and integration with Google Places/Maps.

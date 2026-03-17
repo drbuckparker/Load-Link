@@ -430,7 +430,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const search = req.query.search as string | undefined;
       const driverId = req.query.driver_id as string | undefined;
 
-      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE 1=1`;
+      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.archived_at IS NULL`;
       const params: any[] = [];
       let paramIdx = 1;
 
@@ -491,6 +491,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       console.error("GET /api/jobs local error:", e.message);
       return res.json([]);
+    }
+  });
+
+  app.get("/api/jobs/archived", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+         WHERE j.archived_at IS NOT NULL AND (j.contractor_id = $1 OR j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+         ORDER BY j.archived_at DESC`,
+        [auth.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
+  });
+
+  app.post("/api/jobs/:id/unarchive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      await pool.query(`UPDATE jobs SET archived_at = NULL, status = 'open', cancelled_at = NULL WHERE id = $1`, [req.params.id]);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Unarchive job error:", e.message);
+      return res.status(500).json({ message: "Failed to unarchive job" });
     }
   });
 
@@ -588,8 +613,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
-      hiddenJobIds.add(req.params.id);
-      await pool.query(`UPDATE jobs SET status = 'cancelled', cancelled_at = NOW() WHERE id = $1`, [req.params.id]);
+      await pool.query(`UPDATE jobs SET status = 'cancelled', cancelled_at = NOW(), archived_at = NOW() WHERE id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
       pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
       return res.json({ ok: true });
@@ -1022,7 +1046,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
-        `SELECT *, capacity AS max_capacity_tons FROM trucks WHERE trucking_company_id = $1 OR assigned_driver_id = $1 ORDER BY sort_order, created_at`,
+        `SELECT *, capacity AS max_capacity_tons FROM trucks WHERE (trucking_company_id = $1 OR assigned_driver_id = $1) AND archived_at IS NULL ORDER BY sort_order, created_at`,
         [auth.userId]
       );
       return res.json(result.rows.map(addDualKeys));
@@ -1116,9 +1140,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       deletedVehicleIds.add(req.params.id);
+      await pool.query(`UPDATE trucks SET archived_at = NOW(), is_active = false WHERE id = $1`, [req.params.id]);
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
-      await pool.query(`DELETE FROM trucks WHERE id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
       pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" })
         .catch((err) => { console.error("pushToWebsite DELETE vehicle error:", err.message); });
@@ -1126,6 +1150,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("DELETE vehicle error:", e.message);
     }
     return res.json({ ok: true });
+  });
+
+  app.get("/api/vehicles/archived", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT *, capacity AS max_capacity_tons FROM trucks WHERE (trucking_company_id = $1 OR assigned_driver_id = $1) AND archived_at IS NOT NULL ORDER BY archived_at DESC`,
+        [auth.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch {
+      return res.json([]);
+    }
+  });
+
+  app.post("/api/vehicles/:id/unarchive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      deletedVehicleIds.delete(req.params.id);
+      await pool.query(`UPDATE trucks SET archived_at = NULL, is_active = true WHERE id = $1`, [req.params.id]);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Unarchive vehicle error:", e.message);
+      return res.status(500).json({ message: "Failed to unarchive vehicle" });
+    }
   });
 
   app.get("/api/vehicles/:vehicleId/jobs", requireAuth, async (req: Request, res: Response) => {
@@ -1199,8 +1247,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const isContractor = role.includes('contractor') || role === 'trucking_company';
       const jobsResult = await pool.query(
         isContractor
-          ? `SELECT * FROM jobs WHERE contractor_id = $1 AND status::text != 'cancelled' ORDER BY created_at DESC`
-          : `SELECT * FROM jobs WHERE (driver_id = $1 OR id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1)) AND status::text != 'cancelled' ORDER BY created_at DESC`,
+          ? `SELECT * FROM jobs WHERE contractor_id = $1 AND status::text != 'cancelled' AND archived_at IS NULL ORDER BY created_at DESC`
+          : `SELECT * FROM jobs WHERE (driver_id = $1 OR id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1)) AND status::text != 'cancelled' AND archived_at IS NULL ORDER BY created_at DESC`,
         [userId]
       );
       const jobs = jobsResult.rows;
@@ -1270,7 +1318,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const status = req.query.status as string | undefined;
       const search = req.query.search as string | undefined;
 
-      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1`;
+      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
       const params: any[] = [contractorId];
       let paramIdx = 2;
 
@@ -1324,6 +1372,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(
         `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
          WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+         AND j.archived_at IS NULL
          ORDER BY j.created_at DESC`,
         [auth.userId]
       );
@@ -1357,13 +1406,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let result;
       if (role === 'contractor') {
         result = await pool.query(
-          `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 ORDER BY j.scheduled_date DESC`,
+          `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
           [auth.userId]
         );
       } else {
         result = await pool.query(
           `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
            WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+           AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
           [auth.userId]
         );
