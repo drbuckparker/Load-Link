@@ -80,7 +80,7 @@ interface ProjectItem {
   job_count: number;
 }
 
-const DRIVER_FILTERS = ['Open', 'My Jobs', 'Completed'] as const;
+const DRIVER_FILTERS = ['Open', 'My Jobs', 'Completed', 'All'] as const;
 const CONTRACTOR_FILTERS = ['Open', 'Active', 'Completed', 'All'] as const;
 const TRUCK_TYPES = ['end_dump', 'side_dump', 'belly_dump'] as const;
 
@@ -92,7 +92,7 @@ export default function JobsBrowseScreen() {
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<'jobs' | 'projects'>(params.tab === 'projects' ? 'projects' : 'jobs');
-  const [activeFilter, setActiveFilter] = useState<string>(params.filter || 'Open');
+  const [activeFilter, setActiveFilter] = useState<string>(params.filter || (params.date ? 'All' : 'Open'));
   const [dateFilter, setDateFilter] = useState<string | undefined>(params.date || undefined);
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(params.projectId || null);
 
