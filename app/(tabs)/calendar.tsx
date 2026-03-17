@@ -208,6 +208,8 @@ export default function CalendarScreen() {
   const [savingQuick, setSavingQuick] = useState<string | null>(null);
   const [showTruckPicker, setShowTruckPicker] = useState<'available' | 'unavailable' | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
+  const [truckDetailModal, setTruckDetailModal] = useState<{ vehicle: any; status: string; jobName: string } | null>(null);
+  const [togglingAvail, setTogglingAvail] = useState(false);
 
   const isContractor = user?.role ? (isContractorRole(user.role) && user.role !== 'trucking_company') : false;
   const isFleetManager = user?.role === 'trucking_company';
@@ -1120,10 +1122,14 @@ export default function CalendarScreen() {
                       const statusColor = status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : '#3b82f6';
                       const statusLabel = status === 'booked' ? `Booked – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
                       return (
-                        <View key={v.id} style={{
-                          flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8,
+                        <Pressable key={v.id} onPress={() => {
+                          if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setTruckDetailModal({ vehicle: v, status, jobName });
+                        }} style={({ pressed }) => ({
+                          flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 4,
                           borderBottomWidth: 1, borderBottomColor: Colors.border,
-                        }}>
+                          backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent', borderRadius: 8,
+                        })}>
                           <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: statusColor }} />
                           <View style={{ flex: 1 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -1134,7 +1140,8 @@ export default function CalendarScreen() {
                             </Text>
                           </View>
                           <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: statusColor }}>{statusLabel}</Text>
-                        </View>
+                          <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                        </Pressable>
                       );
                     })}
                   </View>
@@ -1377,6 +1384,145 @@ export default function CalendarScreen() {
           </Pressable>
         </Pressable>
       </Modal>}
+
+      <Modal
+        visible={!!truckDetailModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTruckDetailModal(null)}
+      >
+        <Pressable style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.85)' }} onPress={() => setTruckDetailModal(null)}>
+          <Pressable onPress={(e) => e.stopPropagation()} style={{
+            backgroundColor: Colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+            paddingTop: 12, paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 16, paddingHorizontal: 20,
+          }}>
+            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: Colors.border, alignSelf: 'center', marginBottom: 16 }} />
+            {truckDetailModal && (() => {
+              const v = truckDetailModal.vehicle;
+              const truckName = v.truck_number || `Truck ${v.id.slice(0, 6)}`;
+              const truckDesc = [v.year, v.make, v.model].filter(Boolean).join(' ');
+              const plate = v.license_plate;
+              const truckType = v.truck_type || v.truckType;
+              const capacity = v.capacity || v.max_capacity_tons;
+              const st = truckDetailModal.status;
+              const statusColor = st === 'available' ? Colors.success : st === 'unavailable' ? Colors.destructive : '#3b82f6';
+              const dateLabel = selectedDate ? new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+
+              return (
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                    <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: 'rgba(255,153,0,0.15)', alignItems: 'center', justifyContent: 'center' }}>
+                      <TruckIcon size={22} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 18, color: Colors.text }}>#{truckName}</Text>
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted }}>{truckDesc}</Text>
+                    </View>
+                    <Pressable onPress={() => setTruckDetailModal(null)} style={{ padding: 4 }}>
+                      <Ionicons name="close" size={22} color={Colors.textMuted} />
+                    </Pressable>
+                  </View>
+
+                  <View style={{ backgroundColor: Colors.background, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                    {plate ? (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Plate</Text>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.text }}>{plate}</Text>
+                      </View>
+                    ) : null}
+                    {truckType ? (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Type</Text>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.text }}>{String(truckType).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</Text>
+                      </View>
+                    ) : null}
+                    {capacity ? (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Capacity</Text>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.text }}>{capacity}T</Text>
+                      </View>
+                    ) : null}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Status on {dateLabel}</Text>
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: statusColor }}>
+                        {st === 'booked' ? `Booked – ${truckDetailModal.jobName}` : st === 'unavailable' ? 'Marked Unavailable' : 'Available'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {st === 'unavailable' && (
+                    <View style={{ backgroundColor: 'rgba(239,68,68,0.08)', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Ionicons name="information-circle" size={18} color={Colors.destructive} />
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, flex: 1 }}>
+                        This truck was manually marked unavailable for {dateLabel}. Tap below to make it available.
+                      </Text>
+                    </View>
+                  )}
+                  {st === 'booked' && (
+                    <View style={{ backgroundColor: 'rgba(59,130,246,0.08)', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Ionicons name="information-circle" size={18} color="#3b82f6" />
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, flex: 1 }}>
+                        This truck is booked for "{truckDetailModal.jobName}" on {dateLabel}.
+                      </Text>
+                    </View>
+                  )}
+                  {st === 'available' && (
+                    <View style={{ backgroundColor: 'rgba(34,197,94,0.08)', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, flex: 1 }}>
+                        This truck is available and can be assigned to jobs on {dateLabel}.
+                      </Text>
+                    </View>
+                  )}
+
+                  {st !== 'booked' && (
+                    <Pressable
+                      disabled={togglingAvail}
+                      onPress={async () => {
+                        if (!selectedDate) return;
+                        setTogglingAvail(true);
+                        try {
+                          const newAvailable = st === 'unavailable';
+                          await apiRequest('POST', '/api/availability', {
+                            date: selectedDate,
+                            isAvailable: newAvailable,
+                            vehicleId: v.id,
+                            status: newAvailable ? 'available' : 'unavailable',
+                          });
+                          if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                          await availQuery.refetch();
+                          setTruckDetailModal({ ...truckDetailModal, status: newAvailable ? 'available' : 'unavailable' });
+                        } catch (e) {
+                          console.error('Toggle avail error:', e);
+                        } finally {
+                          setTogglingAvail(false);
+                        }
+                      }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                        paddingVertical: 14, borderRadius: 12,
+                        backgroundColor: st === 'unavailable' ? (pressed ? '#16a34a' : Colors.success) : (pressed ? '#b91c1c' : Colors.destructive),
+                        opacity: togglingAvail ? 0.6 : 1,
+                      })}
+                    >
+                      {togglingAvail ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name={st === 'unavailable' ? 'checkmark-circle' : 'close-circle'} size={20} color="#fff" />
+                          <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 14, color: '#fff' }}>
+                            {st === 'unavailable' ? 'Mark Available' : 'Mark Unavailable'}
+                          </Text>
+                        </>
+                      )}
+                    </Pressable>
+                  )}
+                </View>
+              );
+            })()}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
