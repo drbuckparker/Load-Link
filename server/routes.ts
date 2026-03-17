@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity } from "./sync";
-import { deletedVehicleIds } from "./deleted-vehicles";
+import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";

@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { pool } from "./db";
-import { deletedVehicleIds } from "./deleted-vehicles";
+import { deletedVehicleIds, jobSyncPaused } from "./deleted-vehicles";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -154,6 +154,7 @@ async function getLastSyncTime(entityType: string): Promise<Date | null> {
 }
 
 export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<number> {
+  if (jobSyncPaused) return 0;
   try {
     let jobs: any[];
     if (prefetchedJobs) {
@@ -174,6 +175,7 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
 }
 
 export async function syncProjects(auth: SyncAuth, cachedJobs?: any[]): Promise<number> {
+  if (jobSyncPaused) return 0;
   try {
     let projects: any[] = [];
 
@@ -210,6 +212,7 @@ export async function syncProjects(auth: SyncAuth, cachedJobs?: any[]): Promise<
 }
 
 export async function syncJobAssignments(auth: SyncAuth): Promise<number> {
+  if (jobSyncPaused) return 0;
   try {
     const data = await websiteFetchSync("/api/assignments", { jwt: auth.jwt });
     if (!Array.isArray(data)) return 0;
@@ -304,10 +307,14 @@ export async function fullSync(auth: SyncAuth): Promise<{ jobs: number; projects
   try {
     await syncUser(auth);
 
-    const allJobs = await websiteFetchSync("/api/jobs", { jwt: auth.jwt });
-    const jobsList = Array.isArray(allJobs) ? allJobs.filter((j: any) => j.id && !hiddenJobIds.has(j.id)) : [];
-    const jobCount = await upsertMany("jobs", jobsList);
-    await updateSyncTime("jobs", auth.userId);
+    let jobCount = 0;
+    let jobsList: any[] = [];
+    if (!jobSyncPaused) {
+      const allJobs = await websiteFetchSync("/api/jobs", { jwt: auth.jwt });
+      jobsList = Array.isArray(allJobs) ? allJobs.filter((j: any) => j.id && !hiddenJobIds.has(j.id)) : [];
+      jobCount = await upsertMany("jobs", jobsList);
+      await updateSyncTime("jobs", auth.userId);
+    }
 
     const [projects, assignments, vehicles] = await Promise.allSettled([
       syncProjects(auth, jobsList),
