@@ -14,7 +14,7 @@ import { timeAgo } from '@/lib/mock-data';
 import MapSection from '@/components/MapSection';
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor') || role === 'trucking_company';
+  return role.includes('contractor');
 }
 
 function FleetRunTimer({ clockInTime }: { clockInTime: string }) {
@@ -590,6 +590,15 @@ export default function DashboardScreen() {
           >
             <Ionicons name="add-circle" size={20} color={Colors.primaryForeground} />
             <Text style={styles.createJobBtnText}>POST NEW JOB</Text>
+          </Pressable>
+        )}
+        {role === 'trucking_company' && (
+          <Pressable
+            style={styles.createJobBtn}
+            onPress={() => router.push('/jobs-browse' as any)}
+          >
+            <Ionicons name="search" size={20} color={Colors.primaryForeground} />
+            <Text style={styles.createJobBtnText}>FIND JOBS</Text>
           </Pressable>
         )}
       </ScrollView>
