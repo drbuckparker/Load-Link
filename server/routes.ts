@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity } from "./sync";
+import { deletedVehicleIds } from "./deleted-vehicles";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -1100,11 +1101,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      deletedVehicleIds.add(req.params.id);
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
       await pool.query(`DELETE FROM trucks WHERE id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
+      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" })
+        .catch((err) => { console.error("pushToWebsite DELETE vehicle error:", err.message); });
     } catch (e: any) {
       console.error("DELETE vehicle error:", e.message);
     }

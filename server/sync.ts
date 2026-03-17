@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { pool } from "./db";
+import { deletedVehicleIds } from "./deleted-vehicles";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -225,10 +226,12 @@ export async function syncVehicles(auth: SyncAuth): Promise<number> {
   try {
     const data = await websiteFetchSync("/api/vehicles", { jwt: auth.jwt });
     if (!Array.isArray(data)) return 0;
-    const mapped = data.map((v: any) => ({
-      ...v,
-      trucking_company_id: v.trucking_company_id || v.truckingCompanyId || v.driver_id || v.driverId || auth.userId,
-    }));
+    const mapped = data
+      .filter((v: any) => !deletedVehicleIds.has(String(v.id)))
+      .map((v: any) => ({
+        ...v,
+        trucking_company_id: v.trucking_company_id || v.truckingCompanyId || v.driver_id || v.driverId || auth.userId,
+      }));
     const count = await upsertMany("trucks", mapped);
     await updateSyncTime("vehicles", auth.userId);
     return count;
