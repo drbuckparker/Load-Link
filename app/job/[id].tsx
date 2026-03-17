@@ -129,7 +129,18 @@ function mapJob(j: any): Job {
     destinationAddress: j.destination_address ?? j.destinationAddress ?? '',
     destinationLat: j.destination_lat ?? j.destinationLat ?? 0,
     destinationLng: j.destination_lng ?? j.destinationLng ?? 0,
-    distance: j.distance ?? 0,
+    distance: j.distance || (() => {
+      const lat1 = Number(j.origin_lat ?? j.originLat ?? 0);
+      const lng1 = Number(j.origin_lng ?? j.originLng ?? 0);
+      const lat2 = Number(j.destination_lat ?? j.destinationLat ?? 0);
+      const lng2 = Number(j.destination_lng ?? j.destinationLng ?? 0);
+      if (!lat1 || !lng1 || !lat2 || !lng2) return 0;
+      const R = 3958.8;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+      return Math.round(2 * R * Math.asin(Math.sqrt(a)) * 10) / 10;
+    })(),
     rate: Number(j.rate) || 0,
     rateType: j.rate_type ?? j.rateType ?? 'per_hour',
     truckType: j.truck_type ?? j.truckType ?? 'end_dump',

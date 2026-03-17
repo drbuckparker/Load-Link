@@ -33,7 +33,18 @@ function mapDbJob(raw: any): Job {
     destinationAddress: raw.destination_address || raw.destinationAddress || '',
     destinationLat: Number(raw.destination_lat || raw.destinationLat || 0),
     destinationLng: Number(raw.destination_lng || raw.destinationLng || 0),
-    distance: Number(raw.distance || 0),
+    distance: Number(raw.distance) || (() => {
+      const lat1 = Number(raw.origin_lat || raw.originLat || 0);
+      const lng1 = Number(raw.origin_lng || raw.originLng || 0);
+      const lat2 = Number(raw.destination_lat || raw.destinationLat || 0);
+      const lng2 = Number(raw.destination_lng || raw.destinationLng || 0);
+      if (!lat1 || !lng1 || !lat2 || !lng2) return 0;
+      const R = 3958.8;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+      return Math.round(2 * R * Math.asin(Math.sqrt(a)) * 10) / 10;
+    })(),
     rate: Number(raw.rate || 0),
     rateType: raw.rate_type || raw.rateType || 'flat_rate',
     truckType: raw.truck_type || raw.truckType || 'end_dump',
