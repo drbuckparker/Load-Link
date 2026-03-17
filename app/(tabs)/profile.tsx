@@ -59,7 +59,7 @@ export default function ProfileScreen() {
 
   const { data: vehiclesList } = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
-    enabled: !isContractorRole(user?.role || ''),
+    enabled: !!user,
   });
 
   function openFieldEditor(label: string, key: string, currentValue: string, apiKey: string, keyboard?: string) {
@@ -214,44 +214,40 @@ export default function ProfileScreen() {
           </Pressable>
         </View>
 
-        {!isContractorRole(user.role) && (
-          <>
-            <Text style={styles.sectionTitle}>VEHICLE LIST</Text>
-            <View style={styles.infoCard}>
-              {vehiclesList && vehiclesList.length > 0 ? (
-                vehiclesList.map((v: any, idx: number) => (
-                  <Pressable
-                    key={v.id}
-                    style={styles.infoRow}
-                    onPress={() => router.push(`/vehicle-jobs/${v.id}` as any)}
-                  >
-                    <TruckIcon size={18} color={Colors.primary} />
-                    <Text style={styles.infoLabel}>{v.truck_number || `#${idx + 1}`}</Text>
-                    <Text style={styles.infoValue} numberOfLines={1}>
-                      {[v.make, formatTruckType(v.truck_type)].filter(Boolean).join(' ')}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-                  </Pressable>
-                ))
-              ) : (
-                <Pressable style={styles.infoRow} onPress={() => router.push('/vehicles')}>
-                  <TruckIcon size={18} color={Colors.textMuted} />
-                  <Text style={[styles.infoLabel, { flex: 1 }]}>No vehicles added</Text>
-                  <Ionicons name="add-circle-outline" size={18} color={Colors.primary} />
-                </Pressable>
-              )}
-            </View>
-            <Pressable style={styles.navCard} onPress={() => router.push('/vehicles')}>
-              <View style={styles.navCardLeft}>
-                <View style={[styles.navIconBox, { backgroundColor: Colors.primaryLight }]}>
-                  <TruckIcon size={18} />
-                </View>
-                <Text style={styles.navCardText}>Manage Vehicles</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+        <Text style={styles.sectionTitle}>MANAGE TRUCKS</Text>
+        <View style={styles.infoCard}>
+          {vehiclesList && vehiclesList.length > 0 ? (
+            vehiclesList.map((v: any, idx: number) => (
+              <Pressable
+                key={v.id}
+                style={styles.infoRow}
+                onPress={() => router.push(`/vehicle-jobs/${v.id}` as any)}
+              >
+                <TruckIcon size={18} color={Colors.primary} />
+                <Text style={styles.infoLabel}>{v.truck_number || `#${idx + 1}`}</Text>
+                <Text style={styles.infoValue} numberOfLines={1}>
+                  {[v.make, formatTruckType(v.truck_type)].filter(Boolean).join(' ')}
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+              </Pressable>
+            ))
+          ) : (
+            <Pressable style={styles.infoRow} onPress={() => router.push('/vehicles')}>
+              <TruckIcon size={18} color={Colors.textMuted} />
+              <Text style={[styles.infoLabel, { flex: 1 }]}>No vehicles added</Text>
+              <Ionicons name="add-circle-outline" size={18} color={Colors.primary} />
             </Pressable>
-          </>
-        )}
+          )}
+        </View>
+        <Pressable style={styles.navCard} onPress={() => router.push('/vehicles')}>
+          <View style={styles.navCardLeft}>
+            <View style={[styles.navIconBox, { backgroundColor: Colors.primaryLight }]}>
+              <TruckIcon size={18} />
+            </View>
+            <Text style={styles.navCardText}>Manage Trucks</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+        </Pressable>
 
         <Text style={styles.sectionTitle}>WORK LOCATIONS</Text>
         <View style={styles.infoCard}>
