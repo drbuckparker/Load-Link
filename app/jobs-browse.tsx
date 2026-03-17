@@ -15,7 +15,7 @@ import JobCard from '@/components/JobCard';
 import LocationPickerModal from '@/components/LocationPickerModal';
 
 function isContractorRole(role?: string): boolean {
-  return (role?.includes('contractor') || role === 'trucking_company') ?? false;
+  return (role?.includes('contractor') && role !== 'trucking_company') ?? false;
 }
 
 function mapDbJob(raw: any): Job {
@@ -616,7 +616,7 @@ export default function JobsBrowseScreen() {
         <Text style={styles.headerTitle}>
           {selectedProjectFilter && selectedProjectData
             ? selectedProjectData.name.toUpperCase()
-            : isContractor ? 'MY JOBS' : 'FIND LOADS'}
+            : isContractor ? 'MY JOBS' : (user?.role === 'trucking_company' ? 'FIND JOBS' : 'FIND LOADS')}
         </Text>
         <View style={{ width: 44 }} />
       </View>

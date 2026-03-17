@@ -285,7 +285,7 @@ export default function DashboardScreen() {
             style={styles.findLoadsBtn}
             onPress={() => router.push('/jobs-browse' as any)}
           >
-            <Text style={styles.findLoadsBtnText}>{contractor ? 'MY JOBS' : 'FIND LOADS'}</Text>
+            <Text style={styles.findLoadsBtnText}>{role === 'trucking_company' ? 'FIND JOBS' : contractor ? 'MY JOBS' : 'FIND LOADS'}</Text>
           </Pressable>
           <Pressable style={styles.notifBtn} onPress={() => router.push('/notifications')}>
             <Ionicons name="notifications-outline" size={22} color={Colors.text} />
