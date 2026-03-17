@@ -248,6 +248,7 @@ export default function CreateJobScreen() {
     const m = String(calendarMonth + 1).padStart(2, '0');
     const d = String(day).padStart(2, '0');
     setScheduledDate(`${calendarYear}-${m}-${d}`);
+    setValidationErrors(prev => { const n = new Set(prev); n.delete('date'); return n; });
     setShowCalendar(false);
   }
 
@@ -707,27 +708,29 @@ export default function CreateJobScreen() {
     return `~${Math.ceil(estimatedDaysCalc)} work day${Math.ceil(estimatedDaysCalc) > 1 ? 's' : ''}`;
   }
 
+  const [validationErrors, setValidationErrors] = useState<Set<string>>(new Set());
+  const scrollRef = useRef<ScrollView>(null);
+
   async function handleSubmit() {
-    if (!material.trim()) {
-      Alert.alert('Required', 'Please enter a material.');
+    const errors = new Set<string>();
+    if (!material.trim()) errors.add('material');
+    if (!originAddress.trim()) errors.add('origin');
+    if (!destinationAddress.trim()) errors.add('destination');
+    if (!rate.trim()) errors.add('rate');
+    if (!scheduledDate) errors.add('date');
+
+    if (errors.size > 0) {
+      setValidationErrors(errors);
+      const firstError = errors.has('material') ? 'Material' 
+        : errors.has('origin') ? 'Origin address'
+        : errors.has('destination') ? 'Destination address'
+        : errors.has('rate') ? 'Rate'
+        : 'Scheduled date';
+      Alert.alert('Missing Required Fields', `Please fill in: ${firstError}${errors.size > 1 ? ` and ${errors.size - 1} other field${errors.size > 2 ? 's' : ''}` : ''}.`);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
       return;
     }
-    if (!originAddress.trim()) {
-      Alert.alert('Required', 'Please enter an origin address.');
-      return;
-    }
-    if (!destinationAddress.trim()) {
-      Alert.alert('Required', 'Please enter a destination address.');
-      return;
-    }
-    if (!rate.trim()) {
-      Alert.alert('Required', 'Please enter a rate.');
-      return;
-    }
-    if (!scheduledDate) {
-      Alert.alert('Required', 'Please select a scheduled date.');
-      return;
-    }
+    setValidationErrors(new Set());
 
     setSubmitting(true);
     try {
@@ -918,6 +921,7 @@ export default function CreateJobScreen() {
       </View>
 
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -930,11 +934,11 @@ export default function CreateJobScreen() {
             <View style={{ zIndex: 5 }}>
               <View style={styles.addressRow}>
                 <TextInput
-                  style={[styles.input, { flex: 1 }]}
+                  style={[styles.input, { flex: 1 }, validationErrors.has('material') && styles.inputError]}
                   placeholder="e.g. Gravel, Sand, Topsoil"
-                  placeholderTextColor={Colors.textMuted}
+                  placeholderTextColor={validationErrors.has('material') ? '#ff6b6b' : Colors.textMuted}
                   value={material}
-                  onChangeText={(t) => { setMaterial(t); if (t.trim() && !showMaterialDropdown) setShowMaterialDropdown(true); }}
+                  onChangeText={(t) => { setMaterial(t); if (t.trim()) { setValidationErrors(prev => { const n = new Set(prev); n.delete('material'); return n; }); } if (t.trim() && !showMaterialDropdown) setShowMaterialDropdown(true); }}
                   onFocus={() => { if (pastMaterials.length > 0) setShowMaterialDropdown(true); }}
                 />
                 {pastMaterials.length > 0 && (
@@ -983,11 +987,11 @@ export default function CreateJobScreen() {
             <View style={{ zIndex: 10 }}>
               <View style={styles.addressRow}>
                 <TextInput
-                  style={[styles.input, { flex: 1 }]}
+                  style={[styles.input, { flex: 1 }, validationErrors.has('origin') && styles.inputError]}
                   placeholder="Search address, business, or project name"
-                  placeholderTextColor={Colors.textMuted}
+                  placeholderTextColor={validationErrors.has('origin') ? '#ff6b6b' : Colors.textMuted}
                   value={originAddress}
-                  onChangeText={handleOriginTextChange}
+                  onChangeText={(t) => { handleOriginTextChange(t); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('origin'); return n; }); }}
                   onFocus={() => { if (originSuggestions.length > 0) setShowOriginSuggestions(true); else loadSavedLocations('origin'); }}
                 />
                 {originAddress.length > 0 && (
@@ -1053,11 +1057,11 @@ export default function CreateJobScreen() {
             <View style={{ zIndex: 9 }}>
               <View style={styles.addressRow}>
                 <TextInput
-                  style={[styles.input, { flex: 1 }]}
+                  style={[styles.input, { flex: 1 }, validationErrors.has('destination') && styles.inputError]}
                   placeholder="Search address, business, or project name"
-                  placeholderTextColor={Colors.textMuted}
+                  placeholderTextColor={validationErrors.has('destination') ? '#ff6b6b' : Colors.textMuted}
                   value={destinationAddress}
-                  onChangeText={handleDestTextChange}
+                  onChangeText={(t) => { handleDestTextChange(t); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('destination'); return n; }); }}
                   onFocus={() => { if (destSuggestions.length > 0) setShowDestSuggestions(true); else loadSavedLocations('destination'); }}
                 />
                 {destinationAddress.length > 0 && (
@@ -1209,7 +1213,7 @@ export default function CreateJobScreen() {
           <View style={styles.sectionCard}>
             <Text style={styles.label}>Scheduled Date</Text>
             <Pressable
-              style={styles.input}
+              style={[styles.input, validationErrors.has('date') && styles.inputError]}
               onPress={() => {
                 setShowCalendar(!showCalendar);
                 setShowMaterialDropdown(false);
@@ -1217,7 +1221,7 @@ export default function CreateJobScreen() {
               }}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 15, color: scheduledDate ? Colors.text : Colors.textMuted }}>
+                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 15, color: validationErrors.has('date') ? '#ff6b6b' : (scheduledDate ? Colors.text : Colors.textMuted) }}>
                   {scheduledDate ? formatDisplayDate(scheduledDate) : 'Select a date'}
                 </Text>
                 <Ionicons name="calendar-outline" size={18} color={Colors.textSecondary} />
@@ -1325,11 +1329,11 @@ export default function CreateJobScreen() {
           <View style={styles.sectionCard}>
             <Text style={styles.label}>Rate</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, validationErrors.has('rate') && styles.inputError]}
               placeholder="0.00"
-              placeholderTextColor={Colors.textMuted}
+              placeholderTextColor={validationErrors.has('rate') ? '#ff6b6b' : Colors.textMuted}
               value={rate}
-              onChangeText={setRate}
+              onChangeText={(t) => { setRate(t); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('rate'); return n; }); }}
               keyboardType="numeric"
             />
 
@@ -1930,6 +1934,10 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
+  },
+  inputError: {
+    borderWidth: 1.5,
+    borderColor: '#ff6b6b',
   },
   inputWithSuffix: {
     flexDirection: 'row',
