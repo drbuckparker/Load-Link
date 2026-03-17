@@ -1527,13 +1527,11 @@ export default function JobDetailScreen() {
               <Text style={styles.detailLabel}>Trucks Needed</Text>
               <Text style={styles.detailValue}>{job.trucksNeeded}</Text>
             </View>
-            {job.capacityNeeded && (
-              <View style={styles.detailItem}>
-                <Ionicons name="scale" size={16} color={Colors.textMuted} />
-                <Text style={styles.detailLabel}>Capacity (tons)</Text>
-                <Text style={styles.detailValue}>{job.capacityNeeded}</Text>
-              </View>
-            )}
+            <View style={styles.detailItem}>
+              <Ionicons name="scale" size={16} color={Colors.textMuted} />
+              <Text style={styles.detailLabel}>Truck Capacity</Text>
+              <Text style={styles.detailValue}>{job.capacityNeeded || 'Not specified'}</Text>
+            </View>
             {job.totalTonsNeeded && (
               <View style={styles.detailItem}>
                 <Ionicons name="cube" size={16} color={Colors.textMuted} />
