@@ -1410,9 +1410,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   async function getJobsForCalendar(auth: { jwt: string; userId: string; user: any }, role: 'driver' | 'contractor'): Promise<any[]> {
     try {
       let result;
+      const userRole = (auth.user?.role || '').toLowerCase();
       if (role === 'contractor') {
         result = await pool.query(
           `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
+          [auth.userId]
+        );
+      } else if (userRole === 'trucking_company') {
+        result = await pool.query(
+          `SELECT DISTINCT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+           WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON ja.vehicle_id = t.id WHERE t.trucking_company_id = $1)
+           AND j.archived_at IS NULL
+           ORDER BY j.scheduled_date DESC`,
           [auth.userId]
         );
       } else {
@@ -1436,7 +1445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const userId = auth.userId;
       const userRole = (auth.user?.role || '').toLowerCase();
-      const isContractorRole = userRole.includes('contractor') || userRole === 'trucking_company';
+      const isContractorRole = userRole.includes('contractor') && userRole !== 'trucking_company';
       const allJobs = await getJobsForCalendar(auth, isContractorRole ? 'contractor' : 'driver');
       const month = parseInt(req.query.month as string) || (new Date().getMonth() + 1);
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
