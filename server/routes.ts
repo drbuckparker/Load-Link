@@ -628,15 +628,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/accept", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      await pool.query(`UPDATE jobs SET status = 'accepted', driver_id = $1, updated_at = NOW() WHERE id = $2`, [auth.userId, req.params.id]);
-      const id = require("crypto").randomUUID();
-      await pool.query(
-        `INSERT INTO job_assignments (id, job_id, driver_id, status, created_at) VALUES ($1, $2, $3, 'accepted', NOW()) ON CONFLICT DO NOTHING`,
-        [id, req.params.id, auth.userId]
-      );
+      const { vehicleIds } = req.body || {};
+      const crypto = require("crypto");
+
+      await pool.query(`UPDATE jobs SET status = 'pending', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+
+      if (vehicleIds && Array.isArray(vehicleIds) && vehicleIds.length > 0) {
+        for (const vehicleId of vehicleIds) {
+          const id = crypto.randomUUID();
+          await pool.query(
+            `INSERT INTO job_assignments (id, job_id, driver_id, vehicle_id, status, created_at)
+             VALUES ($1, $2, $3, $4, 'pending', NOW())
+             ON CONFLICT DO NOTHING`,
+            [id, req.params.id, auth.userId, vehicleId]
+          );
+        }
+      } else {
+        const id = crypto.randomUUID();
+        await pool.query(
+          `INSERT INTO job_assignments (id, job_id, driver_id, status, created_at)
+           VALUES ($1, $2, $3, 'pending', NOW())
+           ON CONFLICT DO NOTHING`,
+          [id, req.params.id, auth.userId]
+        );
+      }
+
       pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
-      return res.json(addDualKeys(result.rows[0] || { id: req.params.id, status: 'accepted' }));
+      return res.json(addDualKeys(result.rows[0] || { id: req.params.id, status: 'pending' }));
     } catch (e: any) {
       console.error("Accept job error:", e.message);
       return res.status(500).json({ message: "Failed to accept job" });
@@ -649,7 +668,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `SELECT ja.*, j.scheduled_date, j.estimated_days FROM job_assignments ja
          JOIN jobs j ON ja.job_id = j.id
          WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
-         AND j.status::text IN ('open', 'in_progress', 'accepted', 'pending')`,
+         AND j.status::text IN ('open', 'in_progress', 'pending')`,
         [req.params.id]
       );
       return res.json(result.rows.map(addDualKeys));
