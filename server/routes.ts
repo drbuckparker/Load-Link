@@ -468,6 +468,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const statusLower = status.toLowerCase();
         if (statusLower === 'in_progress' || statusLower === 'active') {
           query += ` AND j.status::text IN ('in_progress', 'accepted', 'pending')`;
+        } else if (statusLower === 'open') {
+          query += ` AND j.status::text IN ('open', 'accepted', 'pending')`;
         } else {
           query += ` AND j.status::text = $${paramIdx}`;
           params.push(statusLower);
@@ -1370,6 +1372,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const statusLower = status.toLowerCase();
         if (statusLower === 'in_progress' || statusLower === 'active') {
           query += ` AND j.status::text IN ('in_progress', 'accepted', 'pending')`;
+        } else if (statusLower === 'open') {
+          query += ` AND j.status::text IN ('open', 'accepted', 'pending')`;
         } else {
           query += ` AND j.status::text = $${paramIdx}`;
           params.push(statusLower);
