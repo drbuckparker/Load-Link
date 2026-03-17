@@ -1456,17 +1456,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (String(cId) !== String(contractorId)) return false;
         return activeStatuses.has(status);
       });
+
+      const assignmentCounts: Record<string, { approved: number; applied: number }> = {};
+      try {
+        const jobIds = myJobs.map((j: any) => j.id);
+        if (jobIds.length > 0) {
+          const placeholders = jobIds.map((_: any, i: number) => `$${i + 1}`).join(',');
+          const acResult = await pool.query(
+            `SELECT job_id, 
+              COUNT(*) FILTER (WHERE status::text = 'approved') as approved,
+              COUNT(*) as applied
+            FROM job_assignments WHERE job_id IN (${placeholders}) GROUP BY job_id`,
+            jobIds
+          );
+          for (const row of acResult.rows) {
+            assignmentCounts[row.job_id] = { approved: parseInt(row.approved) || 0, applied: parseInt(row.applied) || 0 };
+          }
+        }
+      } catch {}
+
       const dailyJobs: Record<string, any[]> = {};
       const dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> = {};
       const addToDay = (dateKey: string, jobEntry: any) => {
         const [y, m] = dateKey.split('-').map(Number);
         if (y !== year || m !== month) return;
         if (!dailyJobs[dateKey]) dailyJobs[dateKey] = [];
-        dailyJobs[dateKey].push(jobEntry);
+        const ac = assignmentCounts[jobEntry.id] || { approved: 0, applied: 0 };
+        dailyJobs[dateKey].push({ ...jobEntry, approved: ac.approved, applied: ac.applied });
         const trucksNeeded = jobEntry.trucksNeeded || jobEntry.trucks_needed || 0;
-        const booked = jobEntry.assignedTruckCount || jobEntry.assigned_truck_count || jobEntry.approvedCount || jobEntry.approved_count || 0;
         if (!dailyCapacity[dateKey]) dailyCapacity[dateKey] = { booked: 0, needed: 0, jobCount: 0 };
-        dailyCapacity[dateKey].booked += booked;
+        dailyCapacity[dateKey].booked += ac.approved;
         dailyCapacity[dateKey].needed += trucksNeeded;
         dailyCapacity[dateKey].jobCount += 1;
       };

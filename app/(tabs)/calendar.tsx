@@ -208,6 +208,7 @@ export default function CalendarScreen() {
   const [savingQuick, setSavingQuick] = useState<string | null>(null);
   const [showTruckPicker, setShowTruckPicker] = useState<'available' | 'unavailable' | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
+  const [calendarMode, setCalendarMode] = useState<'fleet' | 'construction'>('fleet');
 
   const isContractorRole_ = user?.role ? isContractorRole(user.role) : false;
 
@@ -217,7 +218,8 @@ export default function CalendarScreen() {
   });
   const totalVehicles = vehiclesQuery.data?.length || 0;
   const hasFleet = totalVehicles > 0;
-  const isContractor = isContractorRole_ && !hasFleet;
+  const isDualRole = isContractorRole_ && hasFleet;
+  const isContractor = isDualRole ? calendarMode === 'construction' : (isContractorRole_ && !hasFleet);
 
   const availQuery = useQuery<any[]>({
     queryKey: ['/api/availability', `?month=${currentMonth + 1}&year=${currentYear}`],
@@ -226,7 +228,7 @@ export default function CalendarScreen() {
 
   const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, any[]> }>({
     queryKey: ['/api/contractor/calendar-capacity', `?month=${currentMonth + 1}&year=${currentYear}`],
-    enabled: !!user && isContractor,
+    enabled: !!user && (isContractor || isDualRole),
     staleTime: 30_000,
     refetchOnMount: 'always',
   });
@@ -634,10 +636,37 @@ export default function CalendarScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
-        <Text style={styles.headerTitle}>{isContractor ? 'SCHEDULED JOBS' : 'AVAILABILITY'}</Text>
+        {isDualRole ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 10, padding: 3 }}>
+            <Pressable
+              style={{
+                flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+                backgroundColor: calendarMode === 'fleet' ? Colors.primary : 'transparent',
+              }}
+              onPress={() => { setCalendarMode('fleet'); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+            >
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, letterSpacing: 1, color: calendarMode === 'fleet' ? '#fff' : Colors.textMuted }}>
+                FLEET MANAGER
+              </Text>
+            </Pressable>
+            <Pressable
+              style={{
+                flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+                backgroundColor: calendarMode === 'construction' ? Colors.primary : 'transparent',
+              }}
+              onPress={() => { setCalendarMode('construction'); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+            >
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, letterSpacing: 1, color: calendarMode === 'construction' ? '#fff' : Colors.textMuted }}>
+                MY POSTED JOBS
+              </Text>
+            </Pressable>
+          </View>
+        ) : (
+          <Text style={styles.headerTitle}>{isContractor ? 'SCHEDULED JOBS' : 'AVAILABILITY'}</Text>
+        )}
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/availability'] }); await queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/availability'] }); await queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] }); await queryClient.invalidateQueries({ queryKey: ['/api/contractor/calendar-capacity'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}>
         <View style={styles.monthNav}>
           <Pressable onPress={() => navigateMonth(-1)} style={styles.navBtn}>
             <Ionicons name="chevron-back" size={20} color={Colors.text} />
@@ -1137,7 +1166,7 @@ export default function CalendarScreen() {
 
         <Text style={styles.helpText}>
           {isContractor
-            ? 'Tap a date to view scheduled jobs.'
+            ? 'Tap a date to view your posted jobs and truck requests.'
             : 'Tap a date to manage availability and view booked jobs.'}
         </Text>
       </ScrollView>
