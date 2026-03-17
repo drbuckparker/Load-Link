@@ -210,6 +210,7 @@ export default function CalendarScreen() {
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
 
   const isContractor = user?.role ? (isContractorRole(user.role) && user.role !== 'trucking_company') : false;
+  const isFleetManager = user?.role === 'trucking_company';
 
   const vehiclesQuery = useQuery<any[]>({
     queryKey: ['/api/vehicles'],
@@ -717,6 +718,7 @@ export default function CalendarScreen() {
 
               const dotColor = hasJobs
                 ? (allTrucksBooked ? '#fff' : allPending ? Colors.warning : Colors.info)
+                : isFleetManager ? null
                 : day.status === 'available' ? Colors.success
                 : day.status === 'unavailable' ? Colors.destructive
                 : day.status === 'committed' ? Colors.info
@@ -789,6 +791,21 @@ export default function CalendarScreen() {
             </View>
             <View style={styles.legendItem}>
               <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
+              <Text style={styles.legendText}>Full</Text>
+            </View>
+          </View>
+        ) : isFleetManager ? (
+          <View style={styles.legendRow}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.info }]} />
+              <Text style={styles.legendText}>Booked</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: Colors.warning }]} />
+              <Text style={styles.legendText}>Pending</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: 'rgba(59,130,246,0.25)', borderWidth: 1, borderColor: 'rgba(59,130,246,0.4)' }} />
               <Text style={styles.legendText}>Full</Text>
             </View>
           </View>
@@ -925,7 +942,7 @@ export default function CalendarScreen() {
                 <Text style={styles.detailDate}>
                   {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                 </Text>
-                {currentDayAvail && currentDayAvail.status !== 'committed' && (
+                {!isFleetManager && currentDayAvail && currentDayAvail.status !== 'committed' && (
                   <View style={[{
                     paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
                     backgroundColor: isCurrentlyAvailable ? Colors.successBg : Colors.destructiveBg
@@ -960,13 +977,17 @@ export default function CalendarScreen() {
                 />
               )}
 
-              {assignedJobs.length === 0 && !currentDayAvail && (
+              {assignedJobs.length === 0 && (isFleetManager ? (
+                <View style={{ paddingVertical: 8, alignItems: 'center' }}>
+                  <Text style={{ color: Colors.textMuted, fontSize: 13, fontFamily: 'Inter_400Regular' }}>No trucks booked or pending</Text>
+                </View>
+              ) : !currentDayAvail && (
                 <View style={{ paddingVertical: 8, alignItems: 'center' }}>
                   <Text style={{ color: Colors.textMuted, fontSize: 13, fontFamily: 'Inter_400Regular' }}>No jobs or availability set</Text>
                 </View>
-              )}
+              ))}
 
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+              {!isFleetManager && (<View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
                 <Pressable
                   style={[{
                     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -1007,8 +1028,9 @@ export default function CalendarScreen() {
                     </>
                   )}
                 </Pressable>
-              </View>
+              </View>)}
 
+              {!isFleetManager && (<>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 }}>
                 <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
                 <Text style={{ fontFamily: 'ChakraPetch_600SemiBold', fontSize: 10, color: Colors.textMuted, letterSpacing: 1 }}>BULK ACTIONS</Text>
@@ -1053,6 +1075,7 @@ export default function CalendarScreen() {
                   )}
                 </Pressable>
               </View>
+              </>)}
 
               {(vehiclesQuery.data?.length || 0) > 0 && (() => {
                 const vehicles = vehiclesQuery.data || [];
@@ -1136,6 +1159,8 @@ export default function CalendarScreen() {
         <Text style={styles.helpText}>
           {isContractor
             ? 'Tap a date to view your posted jobs and truck requests.'
+            : isFleetManager
+            ? 'Tap a date to view booked and pending trucks.'
             : 'Tap a date to manage availability and view booked jobs.'}
         </Text>
       </ScrollView>
@@ -1225,7 +1250,7 @@ export default function CalendarScreen() {
         </View>
       </Modal>
 
-      {!isContractor && <Modal
+      {!isContractor && !isFleetManager && <Modal
         visible={modalVisible}
         transparent
         animationType="fade"
