@@ -993,7 +993,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
-        `SELECT * FROM trucks WHERE trucking_company_id = $1 OR assigned_driver_id = $1 ORDER BY sort_order, created_at`,
+        `SELECT *, capacity AS max_capacity_tons FROM trucks WHERE trucking_company_id = $1 OR assigned_driver_id = $1 ORDER BY sort_order, created_at`,
         [auth.userId]
       );
       return res.json(result.rows.map(addDualKeys));
@@ -1007,10 +1007,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const id = require("crypto").randomUUID();
       const b = req.body;
+      const truckType = b.truckType || b.truck_type;
+      const licensePlate = b.licensePlate || b.license_plate || '';
+      const vinNumber = b.vinNumber || b.vin_number || null;
+      const truckNumber = b.truckNumber || b.truck_number || null;
+      const capacity = b.maxCapacityTons || b.max_capacity_tons || b.capacity || null;
+      const assignedDriverId = b.assignedDriverId || b.assigned_driver_id || null;
       await pool.query(
-        `INSERT INTO trucks (id, trucking_company_id, truck_type, make, model, year, license_plate, is_active, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW(), NOW())`,
-        [id, auth.userId, b.truckType || b.truck_type, b.make, b.model, b.year, b.licensePlate || b.license_plate]
+        `INSERT INTO trucks (id, trucking_company_id, truck_type, make, model, year, license_plate, vin_number, truck_number, capacity, assigned_driver_id, is_active, created_at, updated_at)
+         VALUES ($1, $2, $3::truck_type, $4, $5, $6, $7, $8, $9, $10, $11, true, NOW(), NOW())`,
+        [id, auth.userId, truckType, b.make, b.model, b.year, licensePlate, vinNumber, truckNumber, capacity, assignedDriverId]
       );
       pushToWebsite("/api/vehicles", auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [id]);
@@ -1024,12 +1030,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      const fieldMap: Record<string, string> = {
+        truck_type: 'truck_type',
+        truckType: 'truck_type',
+        make: 'make',
+        model: 'model',
+        year: 'year',
+        license_plate: 'license_plate',
+        licensePlate: 'license_plate',
+        vin_number: 'vin_number',
+        vinNumber: 'vin_number',
+        max_capacity_tons: 'capacity',
+        maxCapacityTons: 'capacity',
+        capacity: 'capacity',
+        truck_number: 'truck_number',
+        truckNumber: 'truck_number',
+        assigned_driver_id: 'assigned_driver_id',
+        assignedDriverId: 'assigned_driver_id',
+        is_active: 'is_active',
+        isActive: 'is_active',
+        has_tarp: 'has_tarp',
+        hasTarp: 'has_tarp',
+        color: 'color',
+        sort_order: 'sort_order',
+        sortOrder: 'sort_order',
+        issue_notes: 'issue_notes',
+        issueNotes: 'issue_notes',
+      };
+      const enumCols = new Set(['truck_type']);
       const updates: string[] = [];
       const values: any[] = [];
       let idx = 1;
       for (const [k, v] of Object.entries(req.body)) {
-        if (v !== undefined) {
-          updates.push(`${camelToSnake(k)} = $${idx}`);
+        const col = fieldMap[k];
+        if (col && v !== undefined) {
+          const cast = enumCols.has(col) ? `::truck_type` : '';
+          updates.push(`${col} = $${idx}${cast}`);
           values.push(v);
           idx++;
         }
@@ -1042,7 +1078,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [req.params.id]);
       return res.json(addDualKeys(result.rows[0] || {}));
-    } catch {
+    } catch (e: any) {
+      console.error("PUT vehicle error:", e.message, e.detail || '');
       return res.status(500).json({ message: "Failed to update vehicle" });
     }
   });
