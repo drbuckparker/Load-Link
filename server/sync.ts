@@ -112,6 +112,8 @@ async function getCachedColumns(tableName: string): Promise<Set<string>> {
   return _columnCache.get(tableName)!;
 }
 
+const ARCHIVE_PROTECTED_TABLES = new Set(["jobs", "trucks"]);
+
 async function upsertRow(tableName: string, data: Record<string, any>, idField = "id"): Promise<void> {
   const columns = await getCachedColumns(tableName);
   const normalized = normalizeToSnake(data);
@@ -130,11 +132,20 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
     .filter((k) => k !== idField)
     .map((k) => `${k} = EXCLUDED.${k}`);
 
+  const archiveGuard = ARCHIVE_PROTECTED_TABLES.has(tableName) && columns.has("archived_at");
+
   if (updateClauses.length === 0) {
     const sql = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO NOTHING`;
     await pool.query(sql, values);
   } else {
-    const sql = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO UPDATE SET ${updateClauses.join(", ")}`;
+    let whereClause = "";
+    if (archiveGuard) {
+      const incomingArchived = normalized["archived_at"];
+      if (!incomingArchived) {
+        whereClause = ` WHERE ${tableName}.archived_at IS NULL`;
+      }
+    }
+    const sql = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO UPDATE SET ${updateClauses.join(", ")}${whereClause}`;
     await pool.query(sql, values);
   }
 }
