@@ -49,6 +49,7 @@ const EMPTY_FORM = {
   max_capacity_tons: '',
   truck_number: '',
   is_primary: false,
+  has_tarp: false,
   assigned_driver_id: '' as string,
   assigned_driver_name: '' as string,
 };
@@ -97,6 +98,7 @@ export default function VehiclesScreen() {
         max_capacity_tons: parseFloat(form.max_capacity_tons) || 0,
         truck_number: form.truck_number,
         is_primary: form.is_primary,
+        has_tarp: form.has_tarp,
         assigned_driver_id: form.assigned_driver_id || null,
       };
       if (editingId) {
@@ -154,6 +156,7 @@ export default function VehiclesScreen() {
       max_capacity_tons: v.max_capacity_tons ? String(v.max_capacity_tons) : '',
       truck_number: v.truck_number || '',
       is_primary: !!v.is_primary,
+      has_tarp: !!v.has_tarp,
       assigned_driver_id: v.assigned_driver_id || '',
       assigned_driver_name: v.assigned_driver?.name || '',
     });
@@ -304,6 +307,16 @@ export default function VehiclesScreen() {
           />
         </View>
 
+        <View style={styles.switchRow}>
+          <Text style={styles.switchLabel}>Has Tarp</Text>
+          <Switch
+            value={form.has_tarp}
+            onValueChange={v => setForm(f => ({ ...f, has_tarp: v }))}
+            trackColor={{ false: Colors.border, true: Colors.success }}
+            thumbColor="#fff"
+          />
+        </View>
+
         <Text style={styles.fieldLabel}>Assigned Driver</Text>
         {form.assigned_driver_id ? (
           <View style={styles.assignedDriverRow}>
@@ -394,6 +407,11 @@ export default function VehiclesScreen() {
               {isPrimary && (
                 <View style={styles.primaryBadge}>
                   <Text style={styles.primaryBadgeText}>PRIMARY</Text>
+                </View>
+              )}
+              {!!item.has_tarp && (
+                <View style={[styles.primaryBadge, { backgroundColor: 'rgba(34,197,94,0.15)' }]}>
+                  <Text style={[styles.primaryBadgeText, { color: '#22c55e' }]}>TARP</Text>
                 </View>
               )}
             </View>

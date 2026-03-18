@@ -1189,10 +1189,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const truckNumber = b.truckNumber || b.truck_number || null;
       const capacity = b.maxCapacityTons || b.max_capacity_tons || b.capacity || null;
       const assignedDriverId = b.assignedDriverId || b.assigned_driver_id || null;
+      const hasTarp = b.has_tarp || b.hasTarp || false;
       await pool.query(
-        `INSERT INTO trucks (id, trucking_company_id, truck_type, make, model, year, license_plate, vin_number, truck_number, capacity, assigned_driver_id, is_active, created_at, updated_at)
-         VALUES ($1, $2, $3::truck_type, $4, $5, $6, $7, $8, $9, $10, $11, true, NOW(), NOW())`,
-        [id, auth.userId, truckType, b.make, b.model, b.year, licensePlate, vinNumber, truckNumber, capacity, assignedDriverId]
+        `INSERT INTO trucks (id, trucking_company_id, truck_type, make, model, year, license_plate, vin_number, truck_number, capacity, assigned_driver_id, has_tarp, is_active, created_at, updated_at)
+         VALUES ($1, $2, $3::truck_type, $4, $5, $6, $7, $8, $9, $10, $11, $12, true, NOW(), NOW())`,
+        [id, auth.userId, truckType, b.make, b.model, b.year, licensePlate, vinNumber, truckNumber, capacity, assignedDriverId, hasTarp]
       );
       pushToWebsite("/api/vehicles", auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [id]);
