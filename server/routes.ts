@@ -478,7 +478,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         params.push(`%${search}%`);
         paramIdx++;
       }
-      query += ` ORDER BY j.created_at DESC`;
+      query += ` ORDER BY j.scheduled_date ASC NULLS LAST, j.created_at DESC`;
 
       const result = await pool.query(query, params);
       return res.json(result.rows.map(addDualKeys));
@@ -1495,7 +1495,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         params.push(`%${search}%`);
         paramIdx++;
       }
-      query += ` ORDER BY j.created_at DESC`;
+      query += ` ORDER BY j.scheduled_date ASC NULLS LAST, j.created_at DESC`;
 
       const result = await pool.query(query, params);
       return res.json(result.rows.map(addDualKeys));
