@@ -1232,23 +1232,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const vehicleId = b.vehicleId || b.vehicle_id || null;
       const isAvailable = b.isAvailable ?? b.is_available ?? true;
 
-      if (vehicleId && isAvailable) {
-        await pool.query(
-          `DELETE FROM driver_availability WHERE driver_id = $1 AND date::date = $2::date AND vehicle_id = $3 AND is_available = false`,
-          [auth.userId, b.date, vehicleId]
-        );
-      } else if (vehicleId && !isAvailable) {
+      if (vehicleId) {
         await pool.query(
           `DELETE FROM driver_availability WHERE driver_id = $1 AND date::date = $2::date AND vehicle_id = $3`,
           [auth.userId, b.date, vehicleId]
         );
+
+        if (!isAvailable) {
+          const id = require("crypto").randomUUID();
+          await pool.query(
+            `INSERT INTO driver_availability (id, driver_id, date, start_time, end_time, is_available, vehicle_id, notes, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
+            [id, auth.userId, b.date, b.startTime || b.start_time || '06:00', b.endTime || b.end_time || '18:00', false, vehicleId, b.notes]
+          );
+        }
+
+        pushToWebsite("/api/me/availability", auth, { method: "POST", body: req.body }).catch(() => {});
+        const result = await pool.query(
+          `SELECT * FROM driver_availability WHERE driver_id = $1 AND date::date = $2::date AND vehicle_id = $3 ORDER BY created_at DESC LIMIT 1`,
+          [auth.userId, b.date, vehicleId]
+        );
+        return res.status(201).json(result.rows[0] ? addDualKeys(result.rows[0]) : { ok: true, status: 'available' });
       }
 
       const id = require("crypto").randomUUID();
       await pool.query(
         `INSERT INTO driver_availability (id, driver_id, date, start_time, end_time, is_available, vehicle_id, notes, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-        [id, auth.userId, b.date, b.startTime || b.start_time, b.endTime || b.end_time, isAvailable, vehicleId, b.notes]
+        [id, auth.userId, b.date, b.startTime || b.start_time || '06:00', b.endTime || b.end_time || '18:00', isAvailable, vehicleId, b.notes]
       );
       pushToWebsite("/api/me/availability", auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM driver_availability WHERE id = $1`, [id]);

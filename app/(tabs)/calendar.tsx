@@ -1491,7 +1491,7 @@ export default function CalendarScreen() {
                           });
                           if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                           await availQuery.refetch();
-                          setTruckDetailModal({ ...truckDetailModal, status: newAvailable ? 'available' : 'unavailable' });
+                          setTruckDetailModal(null);
                         } catch (e) {
                           console.error('Toggle avail error:', e);
                         } finally {
