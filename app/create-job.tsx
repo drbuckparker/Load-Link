@@ -774,6 +774,7 @@ export default function CreateJobScreen() {
       }
       if (calculatedTrips > 0) body.estimatedTrips = String(calculatedTrips);
       else if (estimatedTrips) body.estimatedTrips = String(parseInt(estimatedTrips, 10));
+      body.totalAmountUnit = totalUnit;
       if (totalUnit === 'hours' && parseFloat(totalTonsNeeded) > 0) {
         body.totalHours = String(parseFloat(totalTonsNeeded));
       } else if (totalInTons > 0) {
