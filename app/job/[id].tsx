@@ -2606,10 +2606,11 @@ export default function JobDetailScreen() {
                   const truckLabel = [v.year, v.make, v.model].filter(Boolean).join(' ');
                   const truckTypeLabel = v.truck_type ? formatTruckType(v.truck_type) : '';
                   const conflict = conflictsData?.vehicleConflicts?.[vId];
-                  const isBlocked = (conflict?.blocked === true) || isAlreadyOnJob;
                   const isWrongType = conflict?.wrongType === true;
                   const isLowCapacity = conflict?.lowCapacity === true;
                   const isUnavailable = conflict?.unavailable === true;
+                  const isNoTarp = conflict?.noTarp === true;
+                  const isBlocked = (conflict?.blocked === true) || isAlreadyOnJob;
                   return (
                     <Pressable
                       key={vId}
@@ -2622,6 +2623,17 @@ export default function JobDetailScreen() {
                       onPress={() => {
                         if (isAlreadyOnJob) {
                           showTruckWarning('This truck is already assigned to this job. Remove it from the truck list above first.');
+                          if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                          return;
+                        }
+                        if (isBlocked && !isAlreadyOnJob) {
+                          const reasons: string[] = [];
+                          if (isLowCapacity) reasons.push(`needs ${conflict.requiredTons}T capacity (truck has ${conflict.vehicleTons}T)`);
+                          if (isNoTarp) reasons.push('job requires a tarp');
+                          if (isWrongType) reasons.push('wrong truck type');
+                          if (isUnavailable) reasons.push('marked unavailable for this date');
+                          if (reasons.length === 0 && conflict?.conflictDates?.length > 0) reasons.push('already booked on conflicting dates');
+                          showTruckWarning(`This truck can't be assigned: ${reasons.join(', ')}.`);
                           if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
                           return;
                         }
@@ -2654,12 +2666,17 @@ export default function JobDetailScreen() {
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>LOW CAPACITY</Text>
                             </View>
                           )}
+                          {isNoTarp && !isAlreadyOnJob && (
+                            <View style={[styles.bookedBadge, { backgroundColor: 'rgba(239,68,68,0.15)' }]}>
+                              <Text style={[styles.bookedBadgeText, { color: '#ef4444' }]}>NO TARP</Text>
+                            </View>
+                          )}
                           {isUnavailable && !isAlreadyOnJob && (
                             <View style={[styles.bookedBadge, { backgroundColor: 'rgba(239,68,68,0.15)' }]}>
                               <Text style={[styles.bookedBadgeText, { color: '#ef4444' }]}>UNAVAILABLE</Text>
                             </View>
                           )}
-                          {conflict?.blocked && !isWrongType && !isLowCapacity && !isUnavailable && !isAlreadyOnJob && (
+                          {conflict?.blocked && !isWrongType && !isLowCapacity && !isNoTarp && !isUnavailable && !isAlreadyOnJob && (
                             <View style={[styles.bookedBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
                               <Text style={[styles.bookedBadgeText, { color: '#8b5cf6' }]}>ALREADY BOOKED</Text>
                             </View>

@@ -666,16 +666,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/jobs/:id/vehicle-conflicts", requireAuth, async (req: Request, res: Response) => {
     try {
-      const result = await pool.query(
-        `SELECT ja.*, j.scheduled_date, j.estimated_days FROM job_assignments ja
+      const auth = getWebsiteAuth(req)!;
+      const jobResult = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
+      const job = jobResult.rows[0];
+
+      const assignResult = await pool.query(
+        `SELECT ja.*, j.scheduled_date, j.estimated_days, j.material_type as job_material FROM job_assignments ja
          JOIN jobs j ON ja.job_id = j.id
          WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
-         AND j.status::text IN ('open', 'in_progress', 'pending')`,
+         AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
         [req.params.id]
       );
-      return res.json(result.rows.map(addDualKeys));
-    } catch {
-      return res.json([]);
+
+      const vehiclesResult = await pool.query(
+        `SELECT * FROM trucks WHERE trucking_company_id = $1 AND archived_at IS NULL`,
+        [auth.userId]
+      );
+
+      const availResult = await pool.query(
+        `SELECT * FROM driver_availability WHERE driver_id = $1 AND is_available = false AND vehicle_id IS NOT NULL`,
+        [auth.userId]
+      );
+
+      const requiredCapacity = (() => {
+        if (!job?.capacity_needed) return 0;
+        const match = String(job.capacity_needed).match(/([\d.]+)/);
+        return match ? parseFloat(match[1]) : 0;
+      })();
+      const requiresTarp = job?.requires_tarp || false;
+      const requiredType = job?.truck_type || null;
+
+      const jobStart = job?.scheduled_date ? new Date(job.scheduled_date) : null;
+      const jobDays = Math.ceil(Number(job?.estimated_days) || 1);
+      const jobDateKeys: string[] = [];
+      if (jobStart) {
+        for (let i = 0; i < jobDays; i++) {
+          const d = new Date(jobStart);
+          d.setDate(d.getDate() + i);
+          jobDateKeys.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`);
+        }
+      }
+
+      const vehicleConflicts: Record<string, any> = {};
+      for (const v of vehiclesResult.rows) {
+        const vId = v.id;
+        const vCapacity = parseFloat(v.capacity) || 0;
+        const vHasTarp = v.has_tarp || false;
+        const vType = v.truck_type || null;
+
+        let blocked = false;
+        let wrongType = false;
+        let lowCapacity = false;
+        let noTarp = false;
+        let unavailable = false;
+        const conflictDates: string[] = [];
+        const conflictJobs: string[] = [];
+
+        if (requiredType && vType && String(vType) !== String(requiredType)) {
+          wrongType = true;
+          blocked = true;
+        }
+        if (requiredCapacity > 0 && vCapacity > 0 && vCapacity < requiredCapacity) {
+          lowCapacity = true;
+          blocked = true;
+        }
+        if (requiresTarp && !vHasTarp) {
+          noTarp = true;
+          blocked = true;
+        }
+
+        for (const avail of availResult.rows) {
+          if (avail.vehicle_id !== vId) continue;
+          const aDate = new Date(avail.date);
+          const aKey = `${aDate.getUTCFullYear()}-${String(aDate.getUTCMonth() + 1).padStart(2, '0')}-${String(aDate.getUTCDate()).padStart(2, '0')}`;
+          if (jobDateKeys.includes(aKey)) {
+            unavailable = true;
+            blocked = true;
+            break;
+          }
+        }
+
+        for (const a of assignResult.rows) {
+          if (a.vehicle_id !== vId) continue;
+          const aStart = new Date(a.scheduled_date);
+          const aDays = Math.ceil(Number(a.estimated_days) || 1);
+          for (let i = 0; i < aDays; i++) {
+            const d = new Date(aStart);
+            d.setDate(d.getDate() + i);
+            const dKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+            if (jobDateKeys.includes(dKey)) {
+              conflictDates.push(dKey);
+              if (a.job_material && !conflictJobs.includes(a.job_material)) conflictJobs.push(a.job_material);
+              blocked = true;
+            }
+          }
+        }
+
+        vehicleConflicts[vId] = {
+          blocked, wrongType, lowCapacity, noTarp, unavailable,
+          conflictDates: [...new Set(conflictDates)],
+          conflictJobs,
+          requiredTons: requiredCapacity,
+          vehicleTons: vCapacity,
+        };
+      }
+
+      return res.json({ vehicleConflicts, requiredTruckType: requiredType });
+    } catch (e: any) {
+      console.error("vehicle-conflicts error:", e.message);
+      return res.json({ vehicleConflicts: {} });
     }
   });
 
