@@ -208,7 +208,7 @@ export default function CalendarScreen() {
   const [savingQuick, setSavingQuick] = useState<string | null>(null);
   const [showTruckPicker, setShowTruckPicker] = useState<'available' | 'unavailable' | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
-  const [truckDetailModal, setTruckDetailModal] = useState<{ vehicle: any; status: string; jobName: string } | null>(null);
+  const [truckDetailModal, setTruckDetailModal] = useState<{ vehicle: any; status: string; jobName: string; contractorName?: string; pickup?: string } | null>(null);
   const [togglingAvail, setTogglingAvail] = useState(false);
 
   const isContractor = user?.role ? (isContractorRole(user.role) && user.role !== 'trucking_company') : false;
@@ -1095,7 +1095,12 @@ export default function CalendarScreen() {
                     if (j.vehicleAssignments?.some((a: any) => a.vehicleId === v.id && a.status !== 'rejected' && a.status !== 'withdrawn')) return true;
                     return false;
                   });
-                  if (bookedJob) return { vehicle: v, status: 'booked' as const, jobName: bookedJob.material || bookedJob.projectName || 'Job' };
+                  if (bookedJob) return {
+                    vehicle: v, status: 'booked' as const,
+                    jobName: bookedJob.material || bookedJob.projectName || 'Job',
+                    contractorName: bookedJob.contractorName || bookedJob.contractor_name || '',
+                    pickup: bookedJob.pickup || bookedJob.originAddress || bookedJob.origin_address || '',
+                  };
 
                   let isUnavail = false;
                   for (const item of availData) {
@@ -1124,7 +1129,7 @@ export default function CalendarScreen() {
                         {availCount} avail · {unavailCount} off · {bookedCount} booked
                       </Text>
                     </View>
-                    {vehicleStatuses.map(({ vehicle: v, status, jobName }) => {
+                    {vehicleStatuses.map(({ vehicle: v, status, jobName, contractorName, pickup }: any) => {
                       const truckName = v.truck_number || `Truck ${v.id.slice(0, 6)}`;
                       const truckDesc = [v.year, v.make, v.model].filter(Boolean).join(' ');
                       const plate = v.license_plate;
@@ -1133,7 +1138,7 @@ export default function CalendarScreen() {
                       return (
                         <Pressable key={v.id} onPress={() => {
                           if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          setTruckDetailModal({ vehicle: v, status, jobName });
+                          setTruckDetailModal({ vehicle: v, status, jobName, contractorName, pickup });
                         }} style={({ pressed }) => ({
                           flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 4,
                           borderBottomWidth: 1, borderBottomColor: Colors.border,
@@ -1451,12 +1456,24 @@ export default function CalendarScreen() {
                         <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.text }}>{capacity}T</Text>
                       </View>
                     ) : null}
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: (st === 'booked' && (truckDetailModal.contractorName || truckDetailModal.pickup)) ? 6 : 0 }}>
                       <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Status on {dateLabel}</Text>
                       <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: statusColor }}>
                         {st === 'booked' ? `Booked – ${truckDetailModal.jobName}` : st === 'unavailable' ? 'Marked Unavailable' : 'Available'}
                       </Text>
                     </View>
+                    {st === 'booked' && truckDetailModal.contractorName ? (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: truckDetailModal.pickup ? 6 : 0 }}>
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Company</Text>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.text }}>{truckDetailModal.contractorName}</Text>
+                      </View>
+                    ) : null}
+                    {st === 'booked' && truckDetailModal.pickup ? (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Pickup</Text>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.text, flex: 1, textAlign: 'right', marginLeft: 12 }} numberOfLines={2}>{truckDetailModal.pickup}</Text>
+                      </View>
+                    ) : null}
                   </View>
 
                   {st === 'unavailable' && (
