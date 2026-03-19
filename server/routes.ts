@@ -1695,9 +1695,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const placeholders = jobIds.map((_: any, i: number) => `$${i + 1}`).join(',');
           const acResult = await pool.query(
             `SELECT job_id, 
-              COUNT(*) FILTER (WHERE status::text = 'approved') as approved,
-              COUNT(*) as applied
-            FROM job_assignments WHERE job_id IN (${placeholders}) GROUP BY job_id`,
+              COUNT(*) FILTER (WHERE status::text IN ('approved', 'pending')) as approved,
+              COUNT(*) FILTER (WHERE status::text NOT IN ('rejected', 'withdrawn')) as applied
+            FROM job_assignments WHERE job_id IN (${placeholders}) AND status::text NOT IN ('rejected', 'withdrawn') GROUP BY job_id`,
             jobIds
           );
           for (const row of acResult.rows) {
