@@ -518,7 +518,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name, u.company_name as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.id = $1`,
+        `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.id = $1`,
         [req.params.id]
       );
       if (result.rows.length > 0) {
@@ -1565,12 +1565,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userRole = (auth.user?.role || '').toLowerCase();
       if (role === 'contractor') {
         result = await pool.query(
-          `SELECT j.*, cp.name as project_name, u.company_name as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
+          `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
           [auth.userId]
         );
       } else if (userRole === 'trucking_company') {
         result = await pool.query(
-          `SELECT DISTINCT j.*, cp.name as project_name, u.company_name as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
+          `SELECT DISTINCT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
            WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON ja.vehicle_id = t.id WHERE t.trucking_company_id = $1)
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
@@ -1578,7 +1578,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       } else {
         result = await pool.query(
-          `SELECT j.*, cp.name as project_name, u.company_name as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
+          `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
            WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
