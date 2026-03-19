@@ -1636,9 +1636,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const vehicleAssignments = assignmentsByJob[job.id] || [];
         const enrichedJob = { ...job, vehicleAssignments };
         if (vehicleAssignments.length > 0) {
-          const approved = vehicleAssignments.filter((a: any) => a.status === 'approved');
-          if (approved.length > 0) {
-            enrichedJob.vehicle = { id: approved[0].vehicleId, make: approved[0].make, model: approved[0].model, year: approved[0].year, licensePlate: approved[0].licensePlate, truckType: approved[0].truckType };
+          const active = vehicleAssignments.filter((a: any) => a.status !== 'rejected' && a.status !== 'withdrawn');
+          if (active.length > 0) {
+            enrichedJob.vehicle = { id: active[0].vehicleId, make: active[0].make, model: active[0].model, year: active[0].year, truckNumber: active[0].truckNumber, licensePlate: active[0].licensePlate, truckType: active[0].truckType };
           }
         }
         jobDates.forEach((dateKey, idx) => {

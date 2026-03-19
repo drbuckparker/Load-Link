@@ -329,6 +329,11 @@ export default function CalendarScreen() {
       const vehicleIds = new Set<string>();
       for (const job of dayJobs) {
         if (job.vehicle?.id) vehicleIds.add(job.vehicle.id);
+        if (job.vehicleAssignments) {
+          for (const a of job.vehicleAssignments) {
+            if (a.vehicleId && a.status !== 'rejected' && a.status !== 'withdrawn') vehicleIds.add(a.vehicleId);
+          }
+        }
       }
       result[dateKey] = { count: dayJobs.length, vehicleIds };
     }
@@ -1085,7 +1090,11 @@ export default function CalendarScreen() {
                 const dayJobs = calendarJobsQuery.data?.dailyJobs?.[selectedDate] || [];
 
                 const vehicleStatuses = vehicles.map((v: any) => {
-                  const bookedJob = dayJobs.find((j: any) => j.vehicle?.id === v.id);
+                  const bookedJob = dayJobs.find((j: any) => {
+                    if (j.vehicle?.id === v.id) return true;
+                    if (j.vehicleAssignments?.some((a: any) => a.vehicleId === v.id && a.status !== 'rejected' && a.status !== 'withdrawn')) return true;
+                    return false;
+                  });
                   if (bookedJob) return { vehicle: v, status: 'booked' as const, jobName: bookedJob.material || bookedJob.projectName || 'Job' };
 
                   let isUnavail = false;
