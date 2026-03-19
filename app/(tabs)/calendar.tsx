@@ -326,26 +326,29 @@ export default function CalendarScreen() {
     const result: Record<string, { count: number; vehicleIds: Set<string>; approvedVehicleIds: Set<string>; pendingVehicleIds: Set<string> }> = {};
     const dailyJobs = calendarJobsQuery.data?.dailyJobs || {};
     for (const [dateKey, dayJobs] of Object.entries(dailyJobs)) {
-      const vehicleIds = new Set<string>();
-      const approvedVehicleIds = new Set<string>();
-      const pendingVehicleIds = new Set<string>();
+      const vehicleStatuses: Record<string, 'approved' | 'pending'> = {};
       for (const job of dayJobs) {
         if (job.vehicle?.id) {
-          vehicleIds.add(job.vehicle.id);
-          approvedVehicleIds.add(job.vehicle.id);
+          vehicleStatuses[job.vehicle.id] = 'approved';
         }
         if (job.vehicleAssignments) {
           for (const a of job.vehicleAssignments) {
             if (a.vehicleId && a.status !== 'rejected' && a.status !== 'withdrawn') {
-              vehicleIds.add(a.vehicleId);
               if (a.status === 'pending') {
-                pendingVehicleIds.add(a.vehicleId);
+                if (!vehicleStatuses[a.vehicleId]) vehicleStatuses[a.vehicleId] = 'pending';
               } else {
-                approvedVehicleIds.add(a.vehicleId);
+                vehicleStatuses[a.vehicleId] = 'approved';
               }
             }
           }
         }
+      }
+      const vehicleIds = new Set<string>(Object.keys(vehicleStatuses));
+      const approvedVehicleIds = new Set<string>();
+      const pendingVehicleIds = new Set<string>();
+      for (const [vid, status] of Object.entries(vehicleStatuses)) {
+        if (status === 'approved') approvedVehicleIds.add(vid);
+        else pendingVehicleIds.add(vid);
       }
       result[dateKey] = { count: vehicleIds.size, vehicleIds, approvedVehicleIds, pendingVehicleIds };
     }
