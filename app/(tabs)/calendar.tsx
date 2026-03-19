@@ -323,19 +323,31 @@ export default function CalendarScreen() {
   }, [calendarJobsQuery.data, vehiclesQuery.data, isContractor, cleanupDone]);
 
   const bookedVehiclesPerDay = useMemo(() => {
-    const result: Record<string, { count: number; vehicleIds: Set<string> }> = {};
+    const result: Record<string, { count: number; vehicleIds: Set<string>; approvedVehicleIds: Set<string>; pendingVehicleIds: Set<string> }> = {};
     const dailyJobs = calendarJobsQuery.data?.dailyJobs || {};
     for (const [dateKey, dayJobs] of Object.entries(dailyJobs)) {
       const vehicleIds = new Set<string>();
+      const approvedVehicleIds = new Set<string>();
+      const pendingVehicleIds = new Set<string>();
       for (const job of dayJobs) {
-        if (job.vehicle?.id) vehicleIds.add(job.vehicle.id);
+        if (job.vehicle?.id) {
+          vehicleIds.add(job.vehicle.id);
+          approvedVehicleIds.add(job.vehicle.id);
+        }
         if (job.vehicleAssignments) {
           for (const a of job.vehicleAssignments) {
-            if (a.vehicleId && a.status !== 'rejected' && a.status !== 'withdrawn') vehicleIds.add(a.vehicleId);
+            if (a.vehicleId && a.status !== 'rejected' && a.status !== 'withdrawn') {
+              vehicleIds.add(a.vehicleId);
+              if (a.status === 'pending') {
+                pendingVehicleIds.add(a.vehicleId);
+              } else {
+                approvedVehicleIds.add(a.vehicleId);
+              }
+            }
           }
         }
       }
-      result[dateKey] = { count: dayJobs.length, vehicleIds };
+      result[dateKey] = { count: vehicleIds.size, vehicleIds, approvedVehicleIds, pendingVehicleIds };
     }
     return result;
   }, [calendarJobsQuery.data]);
@@ -715,13 +727,13 @@ export default function CalendarScreen() {
 
               const assignedJobCount = calendarJobsQuery.data?.dailyJobs?.[key]?.length || 0;
               const dayBooked = bookedVehiclesPerDay[key];
-              const bookedCount = dayBooked?.vehicleIds?.size || assignedJobCount;
+              const bookedTruckCount = dayBooked?.vehicleIds?.size || 0;
+              const approvedTruckCount = dayBooked?.approvedVehicleIds?.size || 0;
+              const pendingTruckCount = dayBooked?.pendingVehicleIds?.size || 0;
               const hasJobs = assignedJobCount > 0;
-              const dayPending = pendingJobsPerDay[key];
-              const allPending = hasJobs && dayPending && dayPending.pending === dayPending.total;
-              const hasSomePending = hasJobs && dayPending && dayPending.pending > 0 && dayPending.pending < dayPending.total;
-              const approvedJobCount = assignedJobCount - (dayPending?.pending || 0);
-              const allTrucksBooked = totalVehicles > 0 && approvedJobCount >= totalVehicles && !allPending;
+              const allPending = hasJobs && bookedTruckCount > 0 && approvedTruckCount === 0;
+              const hasSomePending = hasJobs && pendingTruckCount > 0 && approvedTruckCount > 0;
+              const allTrucksBooked = totalVehicles > 0 && approvedTruckCount >= totalVehicles && !allPending;
 
               const dotColor = hasJobs
                 ? (allTrucksBooked ? '#fff' : allPending ? Colors.warning : Colors.info)
@@ -760,11 +772,11 @@ export default function CalendarScreen() {
                     <View style={styles.capacityDotsRow}>
                       <View style={{ alignItems: 'center' }}>
                         <View style={[styles.statusDot, { backgroundColor: allTrucksBooked ? '#fff' : Colors.info }]} />
-                        <Text style={[styles.truckCountBadge, { color: allTrucksBooked ? '#fff' : Colors.info }]}>{approvedJobCount}</Text>
+                        <Text style={[styles.truckCountBadge, { color: allTrucksBooked ? '#fff' : Colors.info }]}>{approvedTruckCount}</Text>
                       </View>
                       <View style={{ alignItems: 'center', marginLeft: 3 }}>
                         <View style={[styles.statusDot, { backgroundColor: Colors.warning }]} />
-                        <Text style={[styles.truckCountBadge, { color: Colors.warning }]}>{dayPending?.pending}</Text>
+                        <Text style={[styles.truckCountBadge, { color: Colors.warning }]}>{pendingTruckCount}</Text>
                       </View>
                     </View>
                   ) : (
@@ -775,7 +787,7 @@ export default function CalendarScreen() {
                         </View>
                       )}
                       {hasJobs && (
-                        <Text style={[styles.truckCountBadge, allPending && { color: Colors.warning }, allTrucksBooked && { color: '#fff' }]}>{assignedJobCount}</Text>
+                        <Text style={[styles.truckCountBadge, allPending && { color: Colors.warning }, allTrucksBooked && { color: '#fff' }]}>{bookedTruckCount}</Text>
                       )}
                     </>
                   )}
