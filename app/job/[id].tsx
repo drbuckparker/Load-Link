@@ -228,6 +228,7 @@ export default function JobDetailScreen() {
   const [backingOut, setBackingOut] = useState(false);
   const [confirmBackOut, setConfirmBackOut] = useState(false);
   const [removingAssignmentId, setRemovingAssignmentId] = useState<string | null>(null);
+  const [reassigningAssignmentId, setReassigningAssignmentId] = useState<string | null>(null);
   const [fleetTruckPickerVisible, setFleetTruckPickerVisible] = useState(false);
   const [pendingApproveAssignment, setPendingApproveAssignment] = useState<Assignment | null>(null);
   const [selectedFleetVehicleId, setSelectedFleetVehicleId] = useState<string | null>(null);
@@ -598,28 +599,39 @@ export default function JobDetailScreen() {
     }
     setAcceptingJob(true);
     try {
-      const res = await apiRequest('POST', `/api/jobs/${id}/accept`, {
-        vehicleIds: selectedVehicleIds,
-      });
-      const result = await res.json();
-      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setTruckSelectVisible(false);
-      if (result.isFavorite) {
-        setJobStatus('accepted');
+      if (reassigningAssignmentId) {
+        await apiRequest('PUT', `/api/assignments/${reassigningAssignmentId}/vehicle`, {
+          vehicleId: selectedVehicleIds[0],
+        });
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setTruckSelectVisible(false);
+        setReassigningAssignmentId(null);
+        queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+        queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      } else {
+        const res = await apiRequest('POST', `/api/jobs/${id}/accept`, {
+          vehicleIds: selectedVehicleIds,
+        });
+        const result = await res.json();
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setTruckSelectVisible(false);
+        if (result.isFavorite) {
+          setJobStatus('accepted');
+        }
+        setAcceptBannerData({
+          isFavorite: result.isFavorite ?? false,
+          message: result.message || (result.isFavorite
+            ? "You are assigned to this job!"
+            : "The company has been notified."),
+        });
+        setAcceptBannerVisible(true);
+        queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+        queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
       }
-      setAcceptBannerData({
-        isFavorite: result.isFavorite ?? false,
-        message: result.message || (result.isFavorite
-          ? "You are assigned to this job!"
-          : "The company has been notified."),
-      });
-      setAcceptBannerVisible(true);
-      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
-      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
     } catch (e: any) {
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showTruckWarning(e.message || 'Failed to accept job');
+      showTruckWarning(e.message || (reassigningAssignmentId ? 'Failed to reassign truck' : 'Failed to accept job'));
     }
     setAcceptingJob(false);
   }
@@ -834,7 +846,11 @@ export default function JobDetailScreen() {
         );
       }
     }
-    setSelectedVehicleIds(prev => [...prev, vehicleId]);
+    if (reassigningAssignmentId) {
+      setSelectedVehicleIds([vehicleId]);
+    } else {
+      setSelectedVehicleIds(prev => [...prev, vehicleId]);
+    }
   }
 
   async function handleCounterBid() {
@@ -2156,13 +2172,24 @@ export default function JobDetailScreen() {
                 : 'No truck assigned';
               const truckType = a.vehicle?.truck_type?.replace(/_/g, ' ') || '';
               return (
-                <View key={a.id} style={{
-                  flexDirection: 'row', alignItems: 'center', gap: 10,
-                  backgroundColor: isApproved ? 'rgba(34,197,94,0.08)' : 'rgba(255,153,0,0.08)',
-                  borderRadius: 12, padding: 12,
-                  borderWidth: 1,
-                  borderColor: isApproved ? 'rgba(34,197,94,0.25)' : 'rgba(255,153,0,0.25)',
-                }}>
+                <Pressable
+                  key={a.id}
+                  onPress={() => {
+                    if (jobStatus === 'completed' || jobStatus === 'cancelled' || isRunning) return;
+                    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setReassigningAssignmentId(a.id);
+                    setSelectedVehicleIds(a.vehicle_id ? [a.vehicle_id] : []);
+                    setTruckSelectVisible(true);
+                    refetchConflicts();
+                  }}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row', alignItems: 'center', gap: 10,
+                    backgroundColor: isApproved ? 'rgba(34,197,94,0.08)' : 'rgba(255,153,0,0.08)',
+                    borderRadius: 12, padding: 12,
+                    borderWidth: 1,
+                    borderColor: isApproved ? 'rgba(34,197,94,0.25)' : 'rgba(255,153,0,0.25)',
+                    opacity: pressed ? 0.85 : 1,
+                  })}>
                   <Ionicons
                     name={isApproved ? "checkmark-circle" : "time"}
                     size={20}
@@ -2174,11 +2201,13 @@ export default function JobDetailScreen() {
                     </Text>
                     <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textSecondary, marginTop: 1 }}>
                       {isApproved ? 'Confirmed' : 'Pending approval'}{truckType ? ` · ${truckType}` : ''}
+                      {jobStatus !== 'completed' && jobStatus !== 'cancelled' && !isRunning ? '  ·  Tap to reassign' : ''}
                     </Text>
                   </View>
                   {jobStatus !== 'completed' && jobStatus !== 'cancelled' && !isRunning && (
                     <Pressable
-                      onPress={() => {
+                      onPress={(e) => {
+                        e.stopPropagation();
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                         setRemovingAssignmentId(a.id);
                       }}
@@ -2191,7 +2220,7 @@ export default function JobDetailScreen() {
                       <Ionicons name="close-circle" size={20} color="#ef4444" />
                     </Pressable>
                   )}
-                </View>
+                </Pressable>
               );
             })}
             {job && myAssignments.length < (job.trucksNeeded || 1) && jobStatus !== 'completed' && jobStatus !== 'cancelled' && !isRunning && (
@@ -2556,16 +2585,18 @@ export default function JobDetailScreen() {
         visible={truckSelectVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setTruckSelectVisible(false)}
+        onRequestClose={() => { setTruckSelectVisible(false); setReassigningAssignmentId(null); }}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setTruckSelectVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => { setTruckSelectVisible(false); setReassigningAssignmentId(null); }}>
           <Pressable style={styles.truckSelectSheet} onPress={() => {}}>
             <View style={styles.modalHandle} />
-            <Text style={styles.truckSelectTitle}>SELECT YOUR TRUCK{job.trucksNeeded > 1 ? 'S' : ''}</Text>
+            <Text style={styles.truckSelectTitle}>{reassigningAssignmentId ? 'REASSIGN TRUCK' : `SELECT YOUR TRUCK${job.trucksNeeded > 1 ? 'S' : ''}`}</Text>
             <Text style={styles.truckSelectSubtitle}>
-              {job.trucksNeeded > 1
-                ? `This job needs ${job.trucksNeeded} trucks. Select which to assign.`
-                : 'Choose which truck to assign to this job.'}
+              {reassigningAssignmentId
+                ? 'Select a different truck to assign to this job.'
+                : job.trucksNeeded > 1
+                  ? `This job needs ${job.trucksNeeded} trucks. Select which to assign.`
+                  : 'Choose which truck to assign to this job.'}
             </Text>
 
             {truckWarning && (
@@ -2735,7 +2766,9 @@ export default function JobDetailScreen() {
                   <>
                     <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
                     <Text style={styles.confirmAcceptText}>
-                      ACCEPT WITH {selectedVehicleIds.length} TRUCK{selectedVehicleIds.length !== 1 ? 'S' : ''}
+                      {reassigningAssignmentId
+                        ? `REASSIGN TO ${selectedVehicleIds.length === 1 ? 'THIS TRUCK' : 'SELECTED TRUCK'}`
+                        : `ACCEPT WITH ${selectedVehicleIds.length} TRUCK${selectedVehicleIds.length !== 1 ? 'S' : ''}`}
                     </Text>
                   </>
                 )}

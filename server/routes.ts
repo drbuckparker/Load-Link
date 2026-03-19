@@ -523,10 +523,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       if (result.rows.length > 0) {
         const job = result.rows[0];
-        const assignResult = await pool.query(`SELECT * FROM job_assignments WHERE job_id = $1`, [req.params.id]);
+        const assignResult = await pool.query(
+          `SELECT ja.*, t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
+                  t.truck_number as vehicle_truck_number, t.license_plate as vehicle_license_plate,
+                  t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp
+           FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id WHERE ja.job_id = $1`, [req.params.id]);
         const runsResult = await pool.query(`SELECT * FROM job_runs WHERE job_id = $1 ORDER BY created_at DESC`, [req.params.id]);
         const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
-        job.assignments = assignResult.rows.map(addDualKeys);
+        job.assignments = assignResult.rows.map(row => {
+          const a = addDualKeys(row);
+          if (row.vehicle_id) {
+            a.vehicle = {
+              id: row.vehicle_id,
+              make: row.vehicle_make, model: row.vehicle_model, year: row.vehicle_year,
+              truck_number: row.vehicle_truck_number, truckNumber: row.vehicle_truck_number,
+              license_plate: row.vehicle_license_plate, licensePlate: row.vehicle_license_plate,
+              truck_type: row.vehicle_truck_type, truckType: row.vehicle_truck_type,
+              capacity: row.vehicle_capacity, max_capacity_tons: row.vehicle_capacity,
+              has_tarp: row.vehicle_has_tarp, hasTarp: row.vehicle_has_tarp,
+            };
+          }
+          return a;
+        });
         job.jobRuns = runsResult.rows.map(addDualKeys);
         job.job_runs = job.jobRuns;
         job.weightTickets = weightResult.rows.map(addDualKeys);
