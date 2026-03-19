@@ -1420,6 +1420,12 @@ export default function JobDetailScreen() {
         })()}
 
         <View style={styles.headerSection}>
+          {job.contractorName ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <Ionicons name="business" size={18} color={Colors.primary} />
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 20, color: Colors.primary }}>{job.contractorName}</Text>
+            </View>
+          ) : null}
           {job.projectName && (
             <Text style={styles.projectName}>{job.projectName}</Text>
           )}

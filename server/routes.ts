@@ -518,7 +518,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.id = $1`,
+        `SELECT j.*, cp.name as project_name, u.company_name as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.id = $1`,
         [req.params.id]
       );
       if (result.rows.length > 0) {
