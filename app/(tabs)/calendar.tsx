@@ -689,12 +689,13 @@ export default function CalendarScreen() {
               if (isContractor) {
                 const cap = capacityQuery.data?.dailyCapacity?.[key];
                 const booked = cap?.booked || 0;
+                const pending = cap?.pending || 0;
                 const needed = cap?.needed || 0;
                 const jobCount = cap?.jobCount || 0;
                 let capacityStatus: 'full' | 'partial' | 'open' | null = null;
                 if (jobCount > 0) {
                   if (needed > 0 && booked >= needed) capacityStatus = 'full';
-                  else if (booked > 0) capacityStatus = 'partial';
+                  else if (booked > 0 || pending > 0) capacityStatus = 'partial';
                   else capacityStatus = 'open';
                 }
 

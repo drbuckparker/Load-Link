@@ -1695,28 +1695,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const placeholders = jobIds.map((_: any, i: number) => `$${i + 1}`).join(',');
           const acResult = await pool.query(
             `SELECT job_id, 
-              COUNT(*) FILTER (WHERE status::text IN ('approved', 'pending')) as approved,
+              COUNT(*) FILTER (WHERE status::text = 'approved') as approved,
+              COUNT(*) FILTER (WHERE status::text = 'pending') as pending,
               COUNT(*) FILTER (WHERE status::text NOT IN ('rejected', 'withdrawn')) as applied
             FROM job_assignments WHERE job_id IN (${placeholders}) AND status::text NOT IN ('rejected', 'withdrawn') GROUP BY job_id`,
             jobIds
           );
           for (const row of acResult.rows) {
-            assignmentCounts[row.job_id] = { approved: parseInt(row.approved) || 0, applied: parseInt(row.applied) || 0 };
+            assignmentCounts[row.job_id] = { approved: parseInt(row.approved) || 0, pending: parseInt(row.pending) || 0, applied: parseInt(row.applied) || 0 };
           }
         }
       } catch {}
 
       const dailyJobs: Record<string, any[]> = {};
-      const dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }> = {};
+      const dailyCapacity: Record<string, { booked: number; pending: number; needed: number; jobCount: number }> = {};
       const addToDay = (dateKey: string, jobEntry: any) => {
         const [y, m] = dateKey.split('-').map(Number);
         if (y !== year || m !== month) return;
         if (!dailyJobs[dateKey]) dailyJobs[dateKey] = [];
-        const ac = assignmentCounts[jobEntry.id] || { approved: 0, applied: 0 };
-        dailyJobs[dateKey].push({ ...jobEntry, approved: ac.approved, applied: ac.applied });
+        const ac = assignmentCounts[jobEntry.id] || { approved: 0, pending: 0, applied: 0 };
+        dailyJobs[dateKey].push({ ...jobEntry, approved: ac.approved, pending: ac.pending, applied: ac.applied });
         const trucksNeeded = jobEntry.trucksNeeded || jobEntry.trucks_needed || 0;
-        if (!dailyCapacity[dateKey]) dailyCapacity[dateKey] = { booked: 0, needed: 0, jobCount: 0 };
+        if (!dailyCapacity[dateKey]) dailyCapacity[dateKey] = { booked: 0, pending: 0, needed: 0, jobCount: 0 };
         dailyCapacity[dateKey].booked += ac.approved;
+        dailyCapacity[dateKey].pending += ac.pending;
         dailyCapacity[dateKey].needed += trucksNeeded;
         dailyCapacity[dateKey].jobCount += 1;
       };
