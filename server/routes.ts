@@ -666,9 +666,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       }
 
+      const jobRow = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [req.params.id]);
+      const contractorId = jobRow.rows[0]?.contractor_id;
+      let autoApproved = false;
+      if (contractorId) {
+        const userRow = await pool.query(`SELECT company FROM users WHERE id::text = $1`, [auth.userId]);
+        const driverCompany = userRow.rows[0]?.company || '';
+        const favCheck = await pool.query(
+          `SELECT id FROM contractor_favorites WHERE contractor_id = $1 AND (
+            (favorite_type = 'driver' AND favorite_driver_id = $2)
+            OR (favorite_type = 'company' AND favorite_company_name = $3 AND $3 != '')
+          ) LIMIT 1`,
+          [contractorId, auth.userId, driverCompany]
+        );
+        if (favCheck.rows.length > 0) {
+          await pool.query(
+            `UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE job_id = $1 AND driver_id = $2 AND status::text = 'pending'`,
+            [req.params.id, auth.userId]
+          );
+          await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+          autoApproved = true;
+        }
+      }
+
       pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
-      return res.json(addDualKeys(result.rows[0] || { id: req.params.id, status: 'pending' }));
+      return res.json({ ...addDualKeys(result.rows[0] || { id: req.params.id, status: 'pending' }), autoApproved });
     } catch (e: any) {
       console.error("Accept job error:", e.message);
       return res.status(500).json({ message: "Failed to accept job" });
@@ -872,6 +895,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
+    }
+  });
+
+  app.get("/api/favorites", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT * FROM contractor_favorites WHERE contractor_id = $1 ORDER BY created_at DESC`,
+        [auth.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch (e: any) {
+      return res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.post("/api/favorites", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const { favoriteType, favoriteDriverId, favoriteCompanyName } = req.body;
+      const crypto = require("crypto");
+      const id = crypto.randomUUID();
+      if (favoriteType === 'driver' && favoriteDriverId) {
+        await pool.query(
+          `INSERT INTO contractor_favorites (id, contractor_id, favorite_type, favorite_driver_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+          [id, auth.userId, 'driver', favoriteDriverId]
+        );
+      } else if (favoriteType === 'company' && favoriteCompanyName) {
+        await pool.query(
+          `INSERT INTO contractor_favorites (id, contractor_id, favorite_type, favorite_company_name) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+          [id, auth.userId, 'company', favoriteCompanyName]
+        );
+      }
+      return res.json({ ok: true, id });
+    } catch (e: any) {
+      return res.status(500).json({ message: e.message });
+    }
+  });
+
+  app.delete("/api/favorites/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(`DELETE FROM contractor_favorites WHERE id = $1 AND contractor_id = $2`, [req.params.id, auth.userId]);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(500).json({ message: e.message });
     }
   });
 

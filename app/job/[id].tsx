@@ -31,6 +31,7 @@ interface VehicleInfo {
 
 interface Assignment {
   id: string;
+  driverId: string;
   driverName: string;
   driverPhone: string;
   driverEmail: string;
@@ -53,6 +54,7 @@ function mapAssignment(a: any): Assignment {
   const v = a.vehicle;
   return {
     id: a.id,
+    driverId: a.driver_id ?? a.driverId ?? '',
     driverName: a.driver_name ?? a.driverName ?? 'Unknown',
     driverPhone: a.driver_phone ?? a.driverPhone ?? '',
     driverEmail: a.driver_email ?? a.driverEmail ?? '',
@@ -278,6 +280,46 @@ export default function JobDetailScreen() {
     queryKey: [`/api/jobs/${id}/weight-tickets`],
     enabled: !!id && jobRequiresWeightTickets,
   });
+
+  const { data: favoritesData } = useQuery<any[]>({
+    queryKey: ['/api/favorites'],
+    enabled: isContractor,
+  });
+
+  const isFavoriteDriver = (driverId: string) => {
+    return favoritesData?.some((f: any) => f.favoriteType === 'driver' && f.favoriteDriverId === driverId) || false;
+  };
+  const isFavoriteCompany = (companyName: string) => {
+    if (!companyName) return false;
+    return favoritesData?.some((f: any) => f.favoriteType === 'company' && f.favoriteCompanyName === companyName) || false;
+  };
+  const getFavoriteId = (type: 'driver' | 'company', value: string) => {
+    if (!value) return null;
+    const fav = favoritesData?.find((f: any) =>
+      type === 'driver' ? (f.favoriteType === 'driver' && f.favoriteDriverId === value)
+        : (f.favoriteType === 'company' && f.favoriteCompanyName === value)
+    );
+    return fav?.id || null;
+  };
+
+  async function toggleFavorite(type: 'driver' | 'company', driverId?: string, companyName?: string) {
+    try {
+      const value = type === 'driver' ? driverId : companyName;
+      const existingId = getFavoriteId(type, value || '');
+      if (existingId) {
+        await apiRequest('DELETE', `/api/favorites/${existingId}`);
+      } else {
+        await apiRequest('POST', '/api/favorites', {
+          favoriteType: type,
+          ...(type === 'driver' ? { favoriteDriverId: driverId } : { favoriteCompanyName: companyName }),
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ['/api/favorites'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to update favorite');
+    }
+  }
 
   useEffect(() => {
     if (job) {
@@ -2022,29 +2064,23 @@ export default function JobDetailScreen() {
             <Text style={styles.sectionTitle}>DRIVER APPLICATIONS ({assignments.length})</Text>
             {assignments.length > 0 ? (
               <>
-                {approvedAssignments.map(a => (
+                {approvedAssignments.map(a => {
+                  const companyName = a.truckingCompanyName || a.driverCompany || '';
+                  const displayName = companyName || a.driverName;
+                  const capacity = a.vehicle?.maxCapacityTons;
+                  return (
                   <Pressable key={a.id} style={[styles.assignmentCard, { borderColor: 'rgba(34, 197, 94, 0.3)' }]} onPress={() => setSelectedDriver(a)}>
                     <View style={styles.assignmentInfo}>
                       <View style={[styles.driverAvatar, { borderColor: Colors.success }]}>
-                        <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{(a.truckingCompanyName || a.driverCompany || a.driverName).charAt(0)}</Text>
+                        <Text style={[styles.driverAvatarText, { color: Colors.success }]}>{displayName.charAt(0)}</Text>
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.driverNameText}>{formatDriverDisplay(a)}</Text>
+                        <Text style={styles.driverNameText}>{displayName}</Text>
                         <View style={styles.driverMeta}>
-                          {a.driverTruckType ? (
-                            <View style={styles.driverMetaItem}>
-                              <TruckIcon size={12} />
-                              <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
-                            </View>
-                          ) : null}
-                          {a.vehicle ? (
-                            <View style={styles.driverMetaItem}>
-                              <Ionicons name="car" size={12} color={Colors.textMuted} />
-                              <Text style={styles.driverMetaText}>
-                                {[a.vehicle.year, a.vehicle.make, a.vehicle.model].filter(Boolean).join(' ')}
-                              </Text>
-                            </View>
-                          ) : null}
+                          <View style={styles.driverMetaItem}>
+                            <Ionicons name="person" size={12} color={Colors.textMuted} />
+                            <Text style={styles.driverMetaText}>{a.driverName}{capacity ? ` · ${capacity}T` : ''}</Text>
+                          </View>
                         </View>
                       </View>
                       <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
@@ -2056,36 +2092,25 @@ export default function JobDetailScreen() {
                       </View>
                     </View>
                   </Pressable>
-                ))}
-                {pendingAssignments.map(a => (
+                  );
+                })}
+                {pendingAssignments.map(a => {
+                  const companyName = a.truckingCompanyName || a.driverCompany || '';
+                  const displayName = companyName || a.driverName;
+                  const capacity = a.vehicle?.maxCapacityTons;
+                  return (
                   <Pressable key={a.id} style={styles.assignmentCard} onPress={() => setSelectedDriver(a)}>
                     <View style={styles.assignmentInfo}>
                       <View style={styles.driverAvatar}>
-                        <Text style={styles.driverAvatarText}>{(a.truckingCompanyName || a.driverCompany || a.driverName).charAt(0)}</Text>
+                        <Text style={styles.driverAvatarText}>{displayName.charAt(0)}</Text>
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.driverNameText}>{formatDriverDisplay(a)}</Text>
+                        <Text style={styles.driverNameText}>{displayName}</Text>
                         <View style={styles.driverMeta}>
-                          {a.driverTruckType ? (
-                            <View style={styles.driverMetaItem}>
-                              <TruckIcon size={12} />
-                              <Text style={styles.driverMetaText}>{formatTruckType(a.driverTruckType)}</Text>
-                            </View>
-                          ) : null}
-                          {a.driverRating > 0 && (
-                            <View style={styles.driverMetaItem}>
-                              <Ionicons name="star" size={12} color={Colors.warning} />
-                              <Text style={styles.driverMetaText}>{a.driverRating.toFixed(1)}</Text>
-                            </View>
-                          )}
-                          {a.vehicle ? (
-                            <View style={styles.driverMetaItem}>
-                              <Ionicons name="car" size={12} color={Colors.textMuted} />
-                              <Text style={styles.driverMetaText}>
-                                {[a.vehicle.year, a.vehicle.make, a.vehicle.model].filter(Boolean).join(' ')}
-                              </Text>
-                            </View>
-                          ) : null}
+                          <View style={styles.driverMetaItem}>
+                            <Ionicons name="person" size={12} color={Colors.textMuted} />
+                            <Text style={styles.driverMetaText}>{a.driverName}{capacity ? ` · ${capacity}T` : ''}</Text>
+                          </View>
                         </View>
                       </View>
                       <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginRight: 4 }} />
@@ -2107,7 +2132,8 @@ export default function JobDetailScreen() {
                       </View>
                     </View>
                   </Pressable>
-                ))}
+                  );
+                })}
               </>
             ) : (
               <View style={styles.noAssignments}>
@@ -2379,6 +2405,31 @@ export default function JobDetailScreen() {
                     )}
                   </View>
                 </View>
+
+                {isContractor && (
+                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                    <Pressable
+                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.border, backgroundColor: isFavoriteDriver(selectedDriver.driverId) ? 'rgba(255,193,7,0.08)' : 'transparent' }}
+                      onPress={() => toggleFavorite('driver', selectedDriver.driverId)}
+                    >
+                      <Ionicons name={isFavoriteDriver(selectedDriver.driverId) ? 'star' : 'star-outline'} size={18} color={isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.textMuted} />
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.textMuted }}>
+                        {isFavoriteDriver(selectedDriver.driverId) ? 'Favorite Driver' : 'Favorite Driver'}
+                      </Text>
+                    </Pressable>
+                    {(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? (
+                      <Pressable
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.border, backgroundColor: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? 'rgba(255,193,7,0.08)' : 'transparent' }}
+                        onPress={() => toggleFavorite('company', undefined, selectedDriver.truckingCompanyName || selectedDriver.driverCompany)}
+                      >
+                        <Ionicons name={isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? 'star' : 'star-outline'} size={18} color={isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.textMuted} />
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.textMuted }}>
+                          Favorite Company
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                )}
 
                 {(selectedDriver.driverPhone || selectedDriver.driverEmail) && (
                   <View style={styles.modalSection}>
