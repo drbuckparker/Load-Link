@@ -334,7 +334,9 @@ export default function CalendarScreen() {
         if (job.vehicleAssignments) {
           for (const a of job.vehicleAssignments) {
             if (a.vehicleId && a.status !== 'rejected' && a.status !== 'withdrawn') {
-              if (a.status === 'pending') {
+              if (isFleetManager) {
+                vehicleStatuses[a.vehicleId] = 'approved';
+              } else if (a.status === 'pending') {
                 if (!vehicleStatuses[a.vehicleId]) vehicleStatuses[a.vehicleId] = 'pending';
               } else {
                 vehicleStatuses[a.vehicleId] = 'approved';
@@ -353,7 +355,7 @@ export default function CalendarScreen() {
       result[dateKey] = { count: vehicleIds.size, vehicleIds, approvedVehicleIds, pendingVehicleIds };
     }
     return result;
-  }, [calendarJobsQuery.data]);
+  }, [calendarJobsQuery.data, isFleetManager]);
 
   const pendingJobsPerDay = useMemo(() => {
     const result: Record<string, { pending: number; total: number }> = {};
