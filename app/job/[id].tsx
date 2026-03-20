@@ -2900,9 +2900,9 @@ export default function JobDetailScreen() {
             ) : null}
 
             {!pendingApproveAssignment?.vehicle && (
-              <View style={{ backgroundColor: 'rgba(255,153,0,0.08)', borderRadius: 10, padding: 14, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <Ionicons name="information-circle" size={20} color={Colors.warning} />
-                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted, flex: 1 }}>No truck details provided yet. The driver will assign a truck after approval.</Text>
+              <View style={{ backgroundColor: 'rgba(234,179,8,0.1)', borderRadius: 10, padding: 14, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: 'rgba(234,179,8,0.25)' }}>
+                <Ionicons name="warning" size={20} color={Colors.warning} />
+                <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.warning, flex: 1 }}>A truck must be assigned before approval. The driver needs to select a truck first.</Text>
               </View>
             )}
 
@@ -2917,10 +2917,10 @@ export default function JobDetailScreen() {
                 style={[
                   styles.confirmAcceptBtn,
                   { flex: 2, backgroundColor: Colors.success },
-                  approvingAssignment && { opacity: 0.6 },
+                  (approvingAssignment || !pendingApproveAssignment?.vehicle) && { opacity: 0.4 },
                 ]}
                 onPress={handleFleetApprove}
-                disabled={approvingAssignment}
+                disabled={approvingAssignment || !pendingApproveAssignment?.vehicle}
               >
                 {approvingAssignment ? (
                   <ActivityIndicator size="small" color="#fff" />
