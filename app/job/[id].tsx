@@ -324,20 +324,7 @@ export default function JobDetailScreen() {
   function toggleFavorite(type: 'driver' | 'company', driverId?: string, companyName?: string, driverName?: string) {
     const value = type === 'driver' ? driverId : companyName;
     const existingId = getFavoriteId(type, value || '');
-    if (existingId) {
-      Alert.alert(
-        type === 'driver' ? 'Remove Favorite Driver' : 'Remove Favorite Company',
-        type === 'driver'
-          ? `${driverName || 'This driver'} will no longer be auto-approved on your jobs. Remove from favorites?`
-          : `Trucks from ${companyName} will no longer be auto-approved on your jobs. Remove from favorites?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Remove', style: 'destructive', onPress: () => doToggleFavorite(type, driverId, companyName) },
-        ]
-      );
-    } else {
-      doToggleFavorite(type, driverId, companyName);
-    }
+    doToggleFavorite(type, driverId, companyName);
   }
 
   useEffect(() => {
