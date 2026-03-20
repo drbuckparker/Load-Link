@@ -62,6 +62,36 @@ export default function ProfileScreen() {
     enabled: !!user,
   });
 
+  const isContractor = isContractorRole(user?.role || '');
+  const favoritesQuery = useQuery<any[]>({
+    queryKey: ['/api/favorites'],
+    enabled: isContractor,
+  });
+  const [favoritesExpanded, setFavoritesExpanded] = useState(false);
+
+  async function removeFavorite(fav: any) {
+    Alert.alert(
+      fav.favoriteType === 'driver' ? 'Remove Favorite Driver' : 'Remove Favorite Company',
+      fav.favoriteType === 'driver'
+        ? `This driver will no longer be auto-approved on your jobs. Remove?`
+        : `Trucks from ${fav.favoriteCompanyName} will no longer be auto-approved. Remove?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove', style: 'destructive', onPress: async () => {
+            try {
+              await apiRequest('DELETE', `/api/favorites/${fav.id}`);
+              queryClient.invalidateQueries({ queryKey: ['/api/favorites'] });
+              if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Failed to remove favorite');
+            }
+          }
+        },
+      ]
+    );
+  }
+
   function openFieldEditor(label: string, key: string, currentValue: string, apiKey: string, keyboard?: string) {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setEditField({ label, key, value: currentValue, apiKey, keyboard });
@@ -235,6 +265,80 @@ export default function ProfileScreen() {
           </View>
           <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
         </Pressable>
+
+        {isContractor && (
+          <View style={{ marginBottom: 20 }}>
+            <Pressable
+              style={styles.navCard}
+              onPress={() => {
+                setFavoritesExpanded(!favoritesExpanded);
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              }}
+            >
+              <View style={styles.navCardLeft}>
+                <View style={[styles.navIconBox, { backgroundColor: 'rgba(234,179,8,0.15)' }]}>
+                  <Ionicons name="star" size={18} color={Colors.warning} />
+                </View>
+                <Text style={styles.navCardText}>Manage Favorites</Text>
+                {(favoritesQuery.data?.length || 0) > 0 && (
+                  <View style={{ backgroundColor: Colors.warning, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 1, marginLeft: 4 }}>
+                    <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 11, color: '#000' }}>{favoritesQuery.data?.length}</Text>
+                  </View>
+                )}
+              </View>
+              <Ionicons name={favoritesExpanded ? 'chevron-down' : 'chevron-forward'} size={18} color={Colors.textMuted} />
+            </Pressable>
+            {favoritesExpanded && (
+              <View style={{ backgroundColor: Colors.card, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, marginTop: -12, paddingTop: 12 }}>
+                {(!favoritesQuery.data || favoritesQuery.data.length === 0) ? (
+                  <View style={{ padding: 20, alignItems: 'center' }}>
+                    <Ionicons name="star-outline" size={28} color={Colors.textMuted} />
+                    <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.textMuted, marginTop: 8, textAlign: 'center' }}>
+                      No favorites yet. Favorite drivers or companies from a job's assignment list.
+                    </Text>
+                  </View>
+                ) : (
+                  favoritesQuery.data.map((fav: any, idx: number) => (
+                    <View
+                      key={fav.id}
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14,
+                        borderBottomWidth: idx < (favoritesQuery.data?.length || 0) - 1 ? 1 : 0,
+                        borderBottomColor: Colors.border,
+                      }}
+                    >
+                      <Ionicons
+                        name={fav.favoriteType === 'driver' ? 'person' : 'business'}
+                        size={18}
+                        color={Colors.warning}
+                        style={{ marginRight: 10 }}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.text }}>
+                          {fav.favoriteType === 'driver'
+                            ? (fav.driverName?.trim() || 'Driver')
+                            : (fav.favoriteCompanyName || 'Company')}
+                        </Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted, marginTop: 1 }}>
+                          {fav.favoriteType === 'driver'
+                            ? (fav.driverCompany ? `${fav.driverCompany} · Favorite Driver` : 'Favorite Driver')
+                            : 'Favorite Company · Auto-approve all trucks'}
+                        </Text>
+                      </View>
+                      <Pressable
+                        onPress={() => removeFavorite(fav)}
+                        style={{ padding: 6 }}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="star" size={20} color={Colors.warning} />
+                      </Pressable>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+          </View>
+        )}
 
         <Text style={styles.sectionTitle}>WORK LOCATIONS</Text>
         <View style={styles.infoCard}>

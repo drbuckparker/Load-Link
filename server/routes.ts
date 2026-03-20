@@ -910,7 +910,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
-        `SELECT * FROM contractor_favorites WHERE contractor_id = $1 ORDER BY created_at DESC`,
+        `SELECT cf.*, 
+          COALESCE(u.first_name || ' ' || u.last_name, '') as driver_name,
+          u.company as driver_company
+        FROM contractor_favorites cf
+        LEFT JOIN users u ON cf.favorite_driver_id = u.id AND cf.favorite_type = 'driver'
+        WHERE cf.contractor_id = $1 
+        ORDER BY cf.created_at DESC`,
         [auth.userId]
       );
       return res.json(result.rows.map(addDualKeys));
