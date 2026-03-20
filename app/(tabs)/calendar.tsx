@@ -334,7 +334,7 @@ export default function CalendarScreen() {
         if (job.vehicleAssignments) {
           for (const a of job.vehicleAssignments) {
             if (a.vehicleId && a.status !== 'rejected' && a.status !== 'withdrawn') {
-              if (isFleetManager) {
+              if (a.status === 'approved') {
                 vehicleStatuses[a.vehicleId] = 'approved';
               } else if (a.status === 'pending') {
                 if (!vehicleStatuses[a.vehicleId]) vehicleStatuses[a.vehicleId] = 'pending';
@@ -355,7 +355,7 @@ export default function CalendarScreen() {
       result[dateKey] = { count: vehicleIds.size, vehicleIds, approvedVehicleIds, pendingVehicleIds };
     }
     return result;
-  }, [calendarJobsQuery.data, isFleetManager]);
+  }, [calendarJobsQuery.data]);
 
   const pendingJobsPerDay = useMemo(() => {
     const result: Record<string, { pending: number; total: number }> = {};
@@ -1108,13 +1108,25 @@ export default function CalendarScreen() {
                 const dayJobs = calendarJobsQuery.data?.dailyJobs?.[selectedDate] || [];
 
                 const vehicleStatuses = vehicles.map((v: any) => {
-                  const bookedJob = dayJobs.find((j: any) => {
-                    if (j.vehicle?.id === v.id) return true;
-                    if (j.vehicleAssignments?.some((a: any) => a.vehicleId === v.id && a.status !== 'rejected' && a.status !== 'withdrawn')) return true;
-                    return false;
-                  });
+                  let bookedJob: any = null;
+                  let assignmentStatus: 'approved' | 'pending' = 'approved';
+                  for (const j of dayJobs) {
+                    if (j.vehicle?.id === v.id) {
+                      bookedJob = j;
+                      const directAssignment = j.vehicleAssignments?.find((a: any) => a.vehicleId === v.id && a.status !== 'rejected' && a.status !== 'withdrawn');
+                      assignmentStatus = directAssignment?.status === 'pending' ? 'pending' : 'approved';
+                      break;
+                    }
+                    const matchingAssignment = j.vehicleAssignments?.find((a: any) => a.vehicleId === v.id && a.status !== 'rejected' && a.status !== 'withdrawn');
+                    if (matchingAssignment) {
+                      bookedJob = j;
+                      assignmentStatus = matchingAssignment.status === 'pending' ? 'pending' : 'approved';
+                      break;
+                    }
+                  }
                   if (bookedJob) return {
                     vehicle: v, status: 'booked' as const,
+                    assignmentStatus,
                     jobName: bookedJob.material || bookedJob.projectName || 'Job',
                     contractorName: bookedJob.contractorName || bookedJob.contractor_name || '',
                     pickup: bookedJob.pickup || bookedJob.originAddress || bookedJob.origin_address || '',
@@ -1133,7 +1145,8 @@ export default function CalendarScreen() {
 
                 const availCount = vehicleStatuses.filter(s => s.status === 'available').length;
                 const unavailCount = vehicleStatuses.filter(s => s.status === 'unavailable').length;
-                const bookedCount = vehicleStatuses.filter(s => s.status === 'booked').length;
+                const confirmedCount = vehicleStatuses.filter(s => s.status === 'booked' && s.assignmentStatus !== 'pending').length;
+                const pendingCount = vehicleStatuses.filter(s => s.status === 'booked' && s.assignmentStatus === 'pending').length;
 
                 return (
                   <View style={{ marginTop: 12 }}>
@@ -1144,15 +1157,16 @@ export default function CalendarScreen() {
                       </Text>
                       <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
                       <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: Colors.textSecondary }}>
-                        {availCount} avail · {unavailCount} off · {bookedCount} booked
+                        {availCount} avail · {unavailCount} off · {confirmedCount} booked{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}
                       </Text>
                     </View>
-                    {vehicleStatuses.map(({ vehicle: v, status, jobName, contractorName, pickup }: any) => {
+                    {vehicleStatuses.map(({ vehicle: v, status, assignmentStatus, jobName, contractorName, pickup }: any) => {
                       const truckName = v.truck_number || `Truck ${v.id.slice(0, 6)}`;
                       const truckDesc = [v.year, v.make, v.model].filter(Boolean).join(' ');
                       const plate = v.license_plate;
-                      const statusColor = status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : '#3b82f6';
-                      const statusLabel = status === 'booked' ? `Booked – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
+                      const isPending = status === 'booked' && assignmentStatus === 'pending';
+                      const statusColor = status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : isPending ? Colors.warning : '#3b82f6';
+                      const statusLabel = status === 'booked' ? `${isPending ? 'Pending' : 'Booked'} – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
                       return (
                         <Pressable key={v.id} onPress={() => {
                           if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
