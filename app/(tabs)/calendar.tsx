@@ -328,10 +328,7 @@ export default function CalendarScreen() {
     for (const [dateKey, dayJobs] of Object.entries(dailyJobs)) {
       const vehicleStatuses: Record<string, 'approved' | 'pending'> = {};
       for (const job of dayJobs) {
-        if (job.vehicle?.id) {
-          vehicleStatuses[job.vehicle.id] = 'approved';
-        }
-        if (job.vehicleAssignments) {
+        if (job.vehicleAssignments && job.vehicleAssignments.length > 0) {
           for (const a of job.vehicleAssignments) {
             if (a.vehicleId && a.status !== 'rejected' && a.status !== 'withdrawn') {
               if (a.status === 'approved') {
@@ -343,6 +340,8 @@ export default function CalendarScreen() {
               }
             }
           }
+        } else if (job.vehicle?.id) {
+          if (!vehicleStatuses[job.vehicle.id]) vehicleStatuses[job.vehicle.id] = 'approved';
         }
       }
       const vehicleIds = new Set<string>(Object.keys(vehicleStatuses));
