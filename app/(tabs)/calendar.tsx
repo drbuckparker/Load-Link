@@ -208,7 +208,7 @@ export default function CalendarScreen() {
   const [savingQuick, setSavingQuick] = useState<string | null>(null);
   const [showTruckPicker, setShowTruckPicker] = useState<'available' | 'unavailable' | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<Set<string>>(new Set());
-  const [truckDetailModal, setTruckDetailModal] = useState<{ vehicle: any; status: string; jobName: string; contractorName?: string; pickup?: string } | null>(null);
+  const [truckDetailModal, setTruckDetailModal] = useState<{ vehicle: any; status: string; jobName: string; contractorName?: string; pickup?: string; jobId?: string } | null>(null);
   const [togglingAvail, setTogglingAvail] = useState(false);
 
   const isContractor = user?.role ? (isContractorRole(user.role) && user.role !== 'trucking_company') : false;
@@ -1127,6 +1127,7 @@ export default function CalendarScreen() {
                     jobName: bookedJob.material || bookedJob.projectName || 'Job',
                     contractorName: bookedJob.contractorName || bookedJob.contractor_name || '',
                     pickup: bookedJob.pickup || bookedJob.originAddress || bookedJob.origin_address || '',
+                    jobId: bookedJob.id,
                   };
 
                   let isUnavail = false;
@@ -1157,7 +1158,7 @@ export default function CalendarScreen() {
                         {availCount} avail · {unavailCount} off · {confirmedCount} booked{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}
                       </Text>
                     </View>
-                    {vehicleStatuses.map(({ vehicle: v, status, assignmentStatus, jobName, contractorName, pickup }: any) => {
+                    {vehicleStatuses.map(({ vehicle: v, status, assignmentStatus, jobName, contractorName, pickup, jobId }: any) => {
                       const truckName = v.truck_number || `Truck ${v.id.slice(0, 6)}`;
                       const truckDesc = [v.year, v.make, v.model].filter(Boolean).join(' ');
                       const plate = v.license_plate;
@@ -1167,7 +1168,7 @@ export default function CalendarScreen() {
                       return (
                         <Pressable key={v.id} onPress={() => {
                           if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          setTruckDetailModal({ vehicle: v, status, jobName, contractorName, pickup });
+                          setTruckDetailModal({ vehicle: v, status, jobName, contractorName, pickup, jobId });
                         }} style={({ pressed }) => ({
                           flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 4,
                           borderBottomWidth: 1, borderBottomColor: Colors.border,
@@ -1466,7 +1467,15 @@ export default function CalendarScreen() {
                     </Pressable>
                   </View>
 
-                  <View style={{ backgroundColor: Colors.background, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                  <Pressable
+                    style={{ backgroundColor: Colors.background, borderRadius: 12, padding: 14, marginBottom: 16 }}
+                    onPress={() => {
+                      if (st === 'booked' && truckDetailModal.jobId) {
+                        setTruckDetailModal(null);
+                        router.push(`/job/${truckDetailModal.jobId}`);
+                      }
+                    }}
+                  >
                     {plate ? (
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
                         <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textMuted }}>Plate</Text>
@@ -1503,7 +1512,7 @@ export default function CalendarScreen() {
                         <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.text, flex: 1, textAlign: 'right', marginLeft: 12 }} numberOfLines={2}>{truckDetailModal.pickup}</Text>
                       </View>
                     ) : null}
-                  </View>
+                  </Pressable>
 
                   {st === 'unavailable' && (
                     <View style={{ backgroundColor: 'rgba(239,68,68,0.08)', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -1514,12 +1523,35 @@ export default function CalendarScreen() {
                     </View>
                   )}
                   {st === 'booked' && (
-                    <View style={{ backgroundColor: 'rgba(59,130,246,0.08)', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Pressable
+                      onPress={() => {
+                        if (truckDetailModal.jobId) {
+                          setTruckDetailModal(null);
+                          router.push(`/job/${truckDetailModal.jobId}`);
+                        }
+                      }}
+                      style={{ backgroundColor: 'rgba(59,130,246,0.08)', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: truckDetailModal.jobId ? 1 : 0, borderColor: 'rgba(59,130,246,0.25)' }}
+                    >
                       <Ionicons name="information-circle" size={18} color="#3b82f6" />
                       <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, flex: 1 }}>
                         This truck is booked for "{truckDetailModal.jobName}" on {dateLabel}.
                       </Text>
-                    </View>
+                      {truckDetailModal.jobId && (
+                        <Ionicons name="chevron-forward" size={16} color="#3b82f6" />
+                      )}
+                    </Pressable>
+                  )}
+                  {st === 'booked' && truckDetailModal.jobId && (
+                    <Pressable
+                      onPress={() => {
+                        setTruckDetailModal(null);
+                        router.push(`/job/${truckDetailModal.jobId}`);
+                      }}
+                      style={{ backgroundColor: Colors.info, borderRadius: 10, padding: 14, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                    >
+                      <Ionicons name="open-outline" size={16} color="#fff" />
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: '#fff' }}>VIEW JOB DETAILS</Text>
+                    </Pressable>
                   )}
                   {st === 'available' && (
                     <View style={{ backgroundColor: 'rgba(34,197,94,0.08)', borderRadius: 10, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
