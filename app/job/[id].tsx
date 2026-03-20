@@ -302,7 +302,7 @@ export default function JobDetailScreen() {
     return fav?.id || null;
   };
 
-  async function toggleFavorite(type: 'driver' | 'company', driverId?: string, companyName?: string) {
+  async function doToggleFavorite(type: 'driver' | 'company', driverId?: string, companyName?: string) {
     try {
       const value = type === 'driver' ? driverId : companyName;
       const existingId = getFavoriteId(type, value || '');
@@ -318,6 +318,34 @@ export default function JobDetailScreen() {
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to update favorite');
+    }
+  }
+
+  function toggleFavorite(type: 'driver' | 'company', driverId?: string, companyName?: string, driverName?: string) {
+    const value = type === 'driver' ? driverId : companyName;
+    const existingId = getFavoriteId(type, value || '');
+    if (existingId) {
+      Alert.alert(
+        type === 'driver' ? 'Remove Favorite Driver' : 'Remove Favorite Company',
+        type === 'driver'
+          ? `${driverName || 'This driver'} will no longer be auto-approved on your jobs. Remove from favorites?`
+          : `Trucks from ${companyName} will no longer be auto-approved on your jobs. Remove from favorites?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Remove', style: 'destructive', onPress: () => doToggleFavorite(type, driverId, companyName) },
+        ]
+      );
+    } else {
+      Alert.alert(
+        type === 'driver' ? 'Favorite Driver' : 'Favorite Company',
+        type === 'driver'
+          ? `${driverName || 'This driver'} will be auto-approved on any job they accept from you. Are you sure?`
+          : `Any trucks from ${companyName} will be auto-approved on your jobs. Are you sure you want to favorite this company?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Yes, Favorite', onPress: () => doToggleFavorite(type, driverId, companyName) },
+        ]
+      );
     }
   }
 
@@ -628,12 +656,13 @@ export default function JobDetailScreen() {
         const result = await res.json();
         if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setTruckSelectVisible(false);
-        if (result.isFavorite) {
+        const wasAutoApproved = result.autoApproved ?? result.isFavorite ?? false;
+        if (wasAutoApproved) {
           setJobStatus('accepted');
         }
         setAcceptBannerData({
-          isFavorite: result.isFavorite ?? false,
-          message: result.message || (result.isFavorite
+          isFavorite: wasAutoApproved,
+          message: result.message || (wasAutoApproved
             ? "You are assigned to this job!"
             : "The company has been notified."),
         });
@@ -2407,25 +2436,37 @@ export default function JobDetailScreen() {
                 </View>
 
                 {isContractor && (
-                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                  <View style={{ gap: 8, marginBottom: 12 }}>
                     <Pressable
-                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.border, backgroundColor: isFavoriteDriver(selectedDriver.driverId) ? 'rgba(255,193,7,0.08)' : 'transparent' }}
-                      onPress={() => toggleFavorite('driver', selectedDriver.driverId)}
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1.5, borderColor: isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.border, backgroundColor: isFavoriteDriver(selectedDriver.driverId) ? 'rgba(255,193,7,0.08)' : 'transparent', gap: 10 }}
+                      onPress={() => toggleFavorite('driver', selectedDriver.driverId, undefined, selectedDriver.driverName)}
                     >
-                      <Ionicons name={isFavoriteDriver(selectedDriver.driverId) ? 'star' : 'star-outline'} size={18} color={isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.textMuted} />
-                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.textMuted }}>
-                        {isFavoriteDriver(selectedDriver.driverId) ? 'Favorite Driver' : 'Favorite Driver'}
-                      </Text>
+                      <Ionicons name={isFavoriteDriver(selectedDriver.driverId) ? 'star' : 'star-outline'} size={20} color={isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.textMuted} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: isFavoriteDriver(selectedDriver.driverId) ? Colors.warning : Colors.text }}>
+                          {isFavoriteDriver(selectedDriver.driverId) ? 'Favorited Driver' : 'Favorite Driver'}
+                        </Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted, marginTop: 2 }}>
+                          {isFavoriteDriver(selectedDriver.driverId) ? 'This driver is auto-approved on your jobs' : 'Auto-approve this driver on your jobs'}
+                        </Text>
+                      </View>
                     </Pressable>
                     {(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? (
                       <Pressable
-                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.border, backgroundColor: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? 'rgba(255,193,7,0.08)' : 'transparent' }}
+                        style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1.5, borderColor: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.border, backgroundColor: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? 'rgba(255,193,7,0.08)' : 'transparent', gap: 10 }}
                         onPress={() => toggleFavorite('company', undefined, selectedDriver.truckingCompanyName || selectedDriver.driverCompany)}
                       >
-                        <Ionicons name={isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? 'star' : 'star-outline'} size={18} color={isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.textMuted} />
-                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.textMuted }}>
-                          Favorite Company
-                        </Text>
+                        <Ionicons name={isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? 'star' : 'star-outline'} size={20} color={isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.textMuted} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? Colors.warning : Colors.text }}>
+                            {isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany) ? 'Favorited Company' : 'Favorite Company'}
+                          </Text>
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted, marginTop: 2 }}>
+                            {isFavoriteCompany(selectedDriver.truckingCompanyName || selectedDriver.driverCompany)
+                              ? `All trucks from ${selectedDriver.truckingCompanyName || selectedDriver.driverCompany} are auto-approved`
+                              : `Auto-approve any truck from ${selectedDriver.truckingCompanyName || selectedDriver.driverCompany}`}
+                          </Text>
+                        </View>
                       </Pressable>
                     ) : null}
                   </View>

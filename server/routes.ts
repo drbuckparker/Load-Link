@@ -877,7 +877,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/assignments/:assignmentId/approve", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1`, [req.params.assignmentId]);
+      const jobCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [req.params.id]);
+      if (!jobCheck.rows[0] || jobCheck.rows[0].contractor_id !== auth.userId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
       await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true });
@@ -890,7 +894,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/assignments/:assignmentId/reject", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      await pool.query(`UPDATE job_assignments SET status = 'rejected' WHERE id = $1`, [req.params.assignmentId]);
+      const jobCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [req.params.id]);
+      if (!jobCheck.rows[0] || jobCheck.rows[0].contractor_id !== auth.userId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      await pool.query(`UPDATE job_assignments SET status = 'rejected' WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
       pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/reject`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true });
     } catch {
