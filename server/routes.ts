@@ -864,11 +864,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
-        `SELECT ja.*, u.full_name as driver_name, u.phone as driver_phone, u.email as driver_email, u.truck_type as driver_truck_type, u.rating as driver_rating, u.company as driver_company
-         FROM job_assignments ja LEFT JOIN users u ON ja.driver_id = u.id WHERE ja.job_id = $1`,
+        `SELECT ja.*, u.full_name as driver_name, u.phone as driver_phone, u.email as driver_email, u.truck_type as driver_truck_type, u.rating as driver_rating, u.company as driver_company,
+                t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
+                t.truck_number as vehicle_truck_number, t.license_plate as vehicle_license_plate,
+                t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp
+         FROM job_assignments ja 
+         LEFT JOIN users u ON ja.driver_id = u.id 
+         LEFT JOIN trucks t ON ja.vehicle_id = t.id
+         WHERE ja.job_id = $1`,
         [req.params.id]
       );
-      return res.json(result.rows.map(addDualKeys));
+      return res.json(result.rows.map(row => {
+        const a = addDualKeys(row);
+        if (row.vehicle_id) {
+          a.vehicle = {
+            id: row.vehicle_id,
+            make: row.vehicle_make, model: row.vehicle_model, year: row.vehicle_year,
+            truck_number: row.vehicle_truck_number, truckNumber: row.vehicle_truck_number,
+            license_plate: row.vehicle_license_plate, licensePlate: row.vehicle_license_plate,
+            truck_type: row.vehicle_truck_type, truckType: row.vehicle_truck_type,
+            capacity: row.vehicle_capacity, max_capacity_tons: row.vehicle_capacity, maxCapacityTons: row.vehicle_capacity,
+            has_tarp: row.vehicle_has_tarp, hasTarp: row.vehicle_has_tarp,
+          };
+        }
+        return a;
+      }));
     } catch {
       return res.json([]);
     }
