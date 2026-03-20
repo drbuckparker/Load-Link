@@ -402,7 +402,7 @@ export default function DashboardScreen() {
           </View>
         ) : null}
 
-        {!contractor && !dashboard?.activeRun && (
+        {!contractor && !dashboard?.activeRun && !(dashboard?.fleetActiveRuns?.length) && (
           <Text style={styles.sectionHint}>Check back later or expand your search radius in Settings</Text>
         )}
 

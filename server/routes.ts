@@ -996,7 +996,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const runId = require("crypto").randomUUID();
       await pool.query(
-        `INSERT INTO job_runs (id, job_id, driver_id, status, started_at, created_at) VALUES ($1, $2, $3, 'in_progress', NOW(), NOW())`,
+        `INSERT INTO job_runs (id, job_id, driver_id, status, started_at, created_at) VALUES ($1, $2, $3, 'active', NOW(), NOW())`,
         [runId, req.params.id, auth.userId]
       );
       await pool.query(`UPDATE jobs SET status = 'in_progress', updated_at = NOW() WHERE id = $1`, [req.params.id]);
@@ -1538,6 +1538,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [userId]
       );
 
+      let activeFleetRuns: any[] = [];
+      if (role === 'trucking_company' || role.includes('trucking')) {
+        const fleetRunsResult = await pool.query(
+          `SELECT jr.id as run_id, jr.job_id, jr.started_at as clock_in_time, jr.vehicle_id, jr.driver_id,
+                  t.truck_number, t.make as truck_make, t.model as truck_model, t.year as truck_year,
+                  j.material, j.project_name, j.origin_address, j.contractor_name,
+                  u.full_name as driver_name
+           FROM job_runs jr
+           JOIN trucks t ON jr.vehicle_id = t.id
+           JOIN jobs j ON jr.job_id = j.id
+           LEFT JOIN users u ON jr.driver_id = u.id
+           WHERE t.trucking_company_id = $1 AND jr.status::text = 'active'
+           ORDER BY jr.started_at ASC`,
+          [userId]
+        );
+        activeFleetRuns = fleetRunsResult.rows.map(r => {
+          const row = addDualKeys(r);
+          row.vehicleDesc = [r.truck_year, r.truck_make, r.truck_model].filter(Boolean).join(' ');
+          row.driverFullName = r.driver_name || '';
+          return row;
+        });
+      }
+
       const dashboard = {
         openJobs, activeJobs, completedJobs, pendingApplications,
         totalJobs: jobs.length,
@@ -1552,6 +1575,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           address: user?.primary_location_address || user?.address,
         },
         status: user?.is_connected ? 'online' : 'offline',
+        activeFleetRuns,
+        fleetActiveRuns: activeFleetRuns,
       };
 
       return res.json(addDualKeys(dashboard));
