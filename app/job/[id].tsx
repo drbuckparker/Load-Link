@@ -336,16 +336,7 @@ export default function JobDetailScreen() {
         ]
       );
     } else {
-      Alert.alert(
-        type === 'driver' ? 'Favorite Driver' : 'Favorite Company',
-        type === 'driver'
-          ? `${driverName || 'This driver'} will be auto-approved on any job they accept from you. Are you sure?`
-          : `Any trucks from ${companyName} will be auto-approved on your jobs. Are you sure you want to favorite this company?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Yes, Favorite', onPress: () => doToggleFavorite(type, driverId, companyName) },
-        ]
-      );
+      doToggleFavorite(type, driverId, companyName);
     }
   }
 
