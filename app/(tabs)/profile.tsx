@@ -72,8 +72,17 @@ export default function ProfileScreen() {
     if (!editField) return;
     setSaving(true);
     try {
-      await apiRequest('PUT', '/api/profile', { [editField.apiKey]: editValue.trim() });
-      await updateUser({ [editField.key]: editValue.trim() });
+      const trimmed = editValue.trim();
+      if (editField.key === 'fullName') {
+        const parts = trimmed.split(' ');
+        const firstName = parts[0] || '';
+        const lastName = parts.slice(1).join(' ') || '';
+        await apiRequest('PUT', '/api/profile', { full_name: trimmed, first_name: firstName, last_name: lastName });
+        await updateUser({ fullName: trimmed, firstName, lastName });
+      } else {
+        await apiRequest('PUT', '/api/profile', { [editField.apiKey]: trimmed });
+        await updateUser({ [editField.key]: trimmed });
+      }
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setEditField(null);
     } catch (e: any) {
@@ -150,7 +159,10 @@ export default function ProfileScreen() {
           <View style={styles.avatarLarge}>
             <Text style={styles.avatarLargeText}>{user.firstName.charAt(0)}{user.lastName.charAt(0)}</Text>
           </View>
-          <Text style={styles.profileName}>{user.fullName}</Text>
+          <Pressable onPress={() => openFieldEditor('Name', 'fullName', user.fullName || '', 'full_name')} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.profileName}>{user.fullName}</Text>
+            <Ionicons name="pencil" size={14} color={Colors.textMuted} />
+          </Pressable>
           <View style={styles.roleBadge}>
             <Text style={styles.roleBadgeText}>{user.role.replace(/_/g, ' ').toUpperCase()}</Text>
           </View>
