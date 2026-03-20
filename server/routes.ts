@@ -864,7 +864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
-        `SELECT ja.*, u.full_name as driver_name, u.phone as driver_phone, u.truck_type as driver_truck_type, u.rating as driver_rating
+        `SELECT ja.*, u.full_name as driver_name, u.phone as driver_phone, u.email as driver_email, u.truck_type as driver_truck_type, u.rating as driver_rating, u.company as driver_company
          FROM job_assignments ja LEFT JOIN users u ON ja.driver_id = u.id WHERE ja.job_id = $1`,
         [req.params.id]
       );
