@@ -706,8 +706,8 @@ export default function CalendarScreen() {
                   >
                     <Text style={[
                       styles.dayNumber,
+                      capacityStatus === 'full' && !isToday && { color: Colors.info },
                       isToday && styles.dayNumberToday,
-                      capacityStatus === 'full' && { color: Colors.info },
                     ]}>
                       {day.date}
                     </Text>
@@ -725,7 +725,6 @@ export default function CalendarScreen() {
                     {jobCount > 0 && (
                       <Text style={[styles.truckCountBadge, capacityStatus === 'full' && { color: Colors.info }]}>{booked}/{needed}</Text>
                     )}
-                    {isToday && <View style={styles.todayIndicator} />}
                   </Pressable>
                 );
               }
@@ -767,9 +766,9 @@ export default function CalendarScreen() {
                 >
                   <Text style={[
                     styles.dayNumber,
+                    hasJobs && !isToday && { color: allPending ? Colors.warning : Colors.info },
+                    allTrucksBooked && !isToday && { color: '#fff' },
                     isToday && styles.dayNumberToday,
-                    hasJobs && { color: allPending ? Colors.warning : Colors.info },
-                    allTrucksBooked && { color: '#fff' },
                   ]}>
                     {day.date}
                   </Text>
@@ -796,7 +795,6 @@ export default function CalendarScreen() {
                       )}
                     </>
                   )}
-                  {isToday && <View style={styles.todayIndicator} />}
                 </Pressable>
               );
             })}
@@ -1686,7 +1684,7 @@ const styles = StyleSheet.create({
     color: Colors.text,
   },
   dayNumberToday: {
-    color: Colors.primary,
+    color: Colors.success,
     fontFamily: 'Inter_700Bold',
   },
   statusDot: {
