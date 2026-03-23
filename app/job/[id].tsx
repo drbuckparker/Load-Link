@@ -1301,7 +1301,7 @@ export default function JobDetailScreen() {
                           </View>
                         )}
                       </View>
-                      {isDriverOwner && (
+                      {isDriverOwner && !isContractor && (
                         <View style={{ flexDirection: 'row', gap: 4 }}>
                           <Pressable
                             onPress={() => openEditRun(run)}
@@ -1350,7 +1350,7 @@ export default function JobDetailScreen() {
                         {run.loads_hauled ? ` · ${run.loads_hauled} load${run.loads_hauled !== 1 ? 's' : ''}` : ''}
                       </Text>
                     )}
-                    <Pressable onPress={isActive && isDriverOwner ? () => openEditRun(run) : undefined} style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: isActive ? 0 : 6 }}>
+                    <Pressable onPress={isActive && isDriverOwner && !isContractor ? () => openEditRun(run) : undefined} style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: isActive ? 0 : 6 }}>
                       <Ionicons name="log-in-outline" size={16} color={Colors.success} style={{ marginTop: 1, marginRight: 8 }} />
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success, letterSpacing: 0.5 }}>CLOCK IN</Text>
@@ -1358,19 +1358,30 @@ export default function JobDetailScreen() {
                           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
                             {startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                           </Text>
-                          {isActive && isDriverOwner && (
+                          {isActive && isDriverOwner && !isContractor && (
                             <Ionicons name="pencil" size={12} color={Colors.textMuted} />
                           )}
                         </View>
                         {clockInManual ? (
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                          <Pressable
+                            onPress={hasStartLoc ? () => openLocationMap(Number(run.start_lat), Number(run.start_lng)) : undefined}
+                            style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}
+                          >
                             <Ionicons name="pencil" size={11} color={Colors.warning} />
                             <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.warning, marginLeft: 3 }}>
                               Time manually entered at {createdAt!.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                             </Text>
-                          </View>
+                            {hasStartLoc && (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 6 }}>
+                                <Ionicons name="location" size={11} color={Colors.info} />
+                                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.info, marginLeft: 2, textDecorationLine: 'underline' }}>
+                                  View location
+                                </Text>
+                              </View>
+                            )}
+                          </Pressable>
                         ) : null}
-                        {hasStartLoc ? (
+                        {!clockInManual && hasStartLoc ? (
                           <Pressable
                             onPress={() => openLocationMap(Number(run.start_lat), Number(run.start_lng))}
                             style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}
