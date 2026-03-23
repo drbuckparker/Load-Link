@@ -720,21 +720,23 @@ export default function JobDetailScreen() {
 
   function openEditRun(run: any) {
     const start = new Date(run.started_at);
-    const end = new Date(run.ended_at);
     let sH = start.getHours();
     const sM = start.getMinutes();
     const sAP = sH >= 12 ? 'PM' as const : 'AM' as const;
     sH = sH % 12 || 12;
-    let eH = end.getHours();
-    const eM = end.getMinutes();
-    const eAP = eH >= 12 ? 'PM' as const : 'AM' as const;
-    eH = eH % 12 || 12;
     setEditStartHour(sH);
     setEditStartMinute(sM);
     setEditStartAmPm(sAP);
-    setEditEndHour(eH);
-    setEditEndMinute(eM);
-    setEditEndAmPm(eAP);
+    if (run.ended_at) {
+      const end = new Date(run.ended_at);
+      let eH = end.getHours();
+      const eM = end.getMinutes();
+      const eAP = eH >= 12 ? 'PM' as const : 'AM' as const;
+      eH = eH % 12 || 12;
+      setEditEndHour(eH);
+      setEditEndMinute(eM);
+      setEditEndAmPm(eAP);
+    }
     setEditLoads(run.loads_hauled || 1);
     setEditingRun(run);
   }
@@ -747,20 +749,34 @@ export default function JobDetailScreen() {
       const startH24 = editStartAmPm === 'PM' ? (editStartHour === 12 ? 12 : editStartHour + 12) : (editStartHour === 12 ? 0 : editStartHour);
       const newStart = new Date(orig.getFullYear(), orig.getMonth(), orig.getDate(), startH24, editStartMinute, 0, 0);
 
-      const origEnd = new Date(editingRun.ended_at);
-      const endH24 = editEndAmPm === 'PM' ? (editEndHour === 12 ? 12 : editEndHour + 12) : (editEndHour === 12 ? 0 : editEndHour);
-      const newEnd = new Date(origEnd.getFullYear(), origEnd.getMonth(), origEnd.getDate(), endH24, editEndMinute, 0, 0);
+      const isActiveEdit = editingRun.status === 'active' && !editingRun.ended_at;
+      if (!isActiveEdit) {
+        const origEnd = new Date(editingRun.ended_at);
+        const endH24 = editEndAmPm === 'PM' ? (editEndHour === 12 ? 12 : editEndHour + 12) : (editEndHour === 12 ? 0 : editEndHour);
+        const newEnd = new Date(origEnd.getFullYear(), origEnd.getMonth(), origEnd.getDate(), endH24, editEndMinute, 0, 0);
 
-      if (newEnd.getTime() <= newStart.getTime()) {
-        setSavingEdit(false);
-        return;
+        if (newEnd.getTime() <= newStart.getTime()) {
+          setSavingEdit(false);
+          return;
+        }
+
+        await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, {
+          started_at: newStart.toISOString(),
+          ended_at: newEnd.toISOString(),
+          loads_hauled: editLoads,
+        });
+      } else {
+        if (newStart.getTime() > Date.now()) {
+          setSavingEdit(false);
+          return;
+        }
+        await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, {
+          started_at: newStart.toISOString(),
+        });
+        const newElapsed = Math.max(0, Math.floor((Date.now() - newStart.getTime()) / 1000));
+        const completedTime = getCompletedRunsSeconds();
+        setElapsedSeconds(completedTime + newElapsed);
       }
-
-      await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, {
-        started_at: newStart.toISOString(),
-        ended_at: newEnd.toISOString(),
-        loads_hauled: editLoads,
-      });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
@@ -1276,7 +1292,7 @@ export default function JobDetailScreen() {
                           </View>
                         )}
                       </View>
-                      {isDriverOwner && !isActive && (
+                      {isDriverOwner && (
                         <View style={{ flexDirection: 'row', gap: 4 }}>
                           <Pressable
                             onPress={() => openEditRun(run)}
@@ -1285,13 +1301,15 @@ export default function JobDetailScreen() {
                           >
                             <Ionicons name="create-outline" size={16} color={Colors.textSecondary} />
                           </Pressable>
-                          <Pressable
-                            onPress={() => setConfirmDeleteRunId(run.id)}
-                            hitSlop={8}
-                            style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}
-                          >
-                            <Ionicons name="trash-outline" size={16} color={'#ef4444'} />
-                          </Pressable>
+                          {!isActive && (
+                            <Pressable
+                              onPress={() => setConfirmDeleteRunId(run.id)}
+                              hitSlop={8}
+                              style={{ padding: 6, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }}
+                            >
+                              <Ionicons name="trash-outline" size={16} color={'#ef4444'} />
+                            </Pressable>
+                          )}
                         </View>
                       )}
                     </View>
@@ -1323,13 +1341,18 @@ export default function JobDetailScreen() {
                         {run.loads_hauled ? ` · ${run.loads_hauled} load${run.loads_hauled !== 1 ? 's' : ''}` : ''}
                       </Text>
                     )}
-                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: isActive ? 0 : 6 }}>
+                    <Pressable onPress={isActive && isDriverOwner ? () => openEditRun(run) : undefined} style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: isActive ? 0 : 6 }}>
                       <Ionicons name="log-in-outline" size={16} color={Colors.success} style={{ marginTop: 1, marginRight: 8 }} />
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success, letterSpacing: 0.5 }}>CLOCK IN</Text>
-                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
-                          {startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.text }}>
+                            {startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                          </Text>
+                          {isActive && isDriverOwner && (
+                            <Ionicons name="pencil" size={12} color={Colors.textMuted} />
+                          )}
+                        </View>
                         {clockInManual ? (
                           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
                             <Ionicons name="pencil" size={11} color={Colors.warning} />
@@ -1350,7 +1373,7 @@ export default function JobDetailScreen() {
                           </Pressable>
                         ) : null}
                       </View>
-                    </View>
+                    </Pressable>
                     {isActive && (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: 'rgba(76,175,80,0.2)' }}>
                         <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success, marginRight: 8 }} />
@@ -1838,7 +1861,7 @@ export default function JobDetailScreen() {
         <Modal visible={!!editingRun} transparent animationType="fade" onRequestClose={() => setEditingRun(null)}>
           <View style={styles.wtModalOverlay}>
             <View style={[styles.wtModalContent, { paddingTop: 20, paddingBottom: 20 }]} onStartShouldSetResponder={() => true}>
-              <Text style={[styles.wtModalTitle, { marginBottom: 16 }]}>Edit Session</Text>
+              <Text style={[styles.wtModalTitle, { marginBottom: 16 }]}>{editingRun?.ended_at ? 'Edit Session' : 'Adjust Clock In Time'}</Text>
               <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success, letterSpacing: 0.5, marginBottom: 6 }}>CLOCK IN TIME</Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
@@ -1864,41 +1887,46 @@ export default function JobDetailScreen() {
                   <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.primary }}>{editStartAmPm}</Text>
                 </Pressable>
               </View>
-              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.primary, letterSpacing: 0.5, marginBottom: 6 }}>CLOCK OUT TIME</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
-                  <Pressable onPress={() => setEditEndHour(h => h >= 12 ? 1 : h + 1)} style={{ padding: 8 }}>
-                    <Ionicons name="chevron-up" size={16} color={Colors.text} />
-                  </Pressable>
-                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editEndHour}</Text>
-                  <Pressable onPress={() => setEditEndHour(h => h <= 1 ? 12 : h - 1)} style={{ padding: 8 }}>
-                    <Ionicons name="chevron-down" size={16} color={Colors.text} />
-                  </Pressable>
-                </View>
-                <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>:</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
-                  <Pressable onPress={() => setEditEndMinute(m => m >= 59 ? 0 : m + 1)} style={{ padding: 8 }}>
-                    <Ionicons name="chevron-up" size={16} color={Colors.text} />
-                  </Pressable>
-                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editEndMinute.toString().padStart(2, '0')}</Text>
-                  <Pressable onPress={() => setEditEndMinute(m => m <= 0 ? 59 : m - 1)} style={{ padding: 8 }}>
-                    <Ionicons name="chevron-down" size={16} color={Colors.text} />
-                  </Pressable>
-                </View>
-                <Pressable onPress={() => setEditEndAmPm(v => v === 'AM' ? 'PM' : 'AM')} style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
-                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.primary }}>{editEndAmPm}</Text>
-                </Pressable>
-              </View>
-              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.5, marginBottom: 6 }}>LOADS HAULED</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-                <Pressable onPress={() => setEditLoads(l => Math.max(0, l - 1))} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name="remove" size={18} color={Colors.text} />
-                </Pressable>
-                <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 20, color: Colors.text, minWidth: 30, textAlign: 'center' }}>{editLoads}</Text>
-                <Pressable onPress={() => setEditLoads(l => l + 1)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons name="add" size={18} color={Colors.text} />
-                </Pressable>
-              </View>
+              {editingRun?.ended_at && (
+                <>
+                  <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.primary, letterSpacing: 0.5, marginBottom: 6 }}>CLOCK OUT TIME</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                      <Pressable onPress={() => setEditEndHour(h => h >= 12 ? 1 : h + 1)} style={{ padding: 8 }}>
+                        <Ionicons name="chevron-up" size={16} color={Colors.text} />
+                      </Pressable>
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editEndHour}</Text>
+                      <Pressable onPress={() => setEditEndHour(h => h <= 1 ? 12 : h - 1)} style={{ padding: 8 }}>
+                        <Ionicons name="chevron-down" size={16} color={Colors.text} />
+                      </Pressable>
+                    </View>
+                    <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>:</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                      <Pressable onPress={() => setEditEndMinute(m => m >= 59 ? 0 : m + 1)} style={{ padding: 8 }}>
+                        <Ionicons name="chevron-up" size={16} color={Colors.text} />
+                      </Pressable>
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, minWidth: 24, textAlign: 'center' }}>{editEndMinute.toString().padStart(2, '0')}</Text>
+                      <Pressable onPress={() => setEditEndMinute(m => m <= 0 ? 59 : m - 1)} style={{ padding: 8 }}>
+                        <Ionicons name="chevron-down" size={16} color={Colors.text} />
+                      </Pressable>
+                    </View>
+                    <Pressable onPress={() => setEditEndAmPm(v => v === 'AM' ? 'PM' : 'AM')} style={{ paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.primary }}>{editEndAmPm}</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.5, marginBottom: 6 }}>LOADS HAULED</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+                    <Pressable onPress={() => setEditLoads(l => Math.max(0, l - 1))} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' }}>
+                      <Ionicons name="remove" size={18} color={Colors.text} />
+                    </Pressable>
+                    <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 20, color: Colors.text, minWidth: 30, textAlign: 'center' }}>{editLoads}</Text>
+                    <Pressable onPress={() => setEditLoads(l => l + 1)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' }}>
+                      <Ionicons name="add" size={18} color={Colors.text} />
+                    </Pressable>
+                  </View>
+                </>
+              )}
+              {!editingRun?.ended_at && <View style={{ height: 20 }} />}
               <View style={{ flexDirection: 'row', gap: 10 }}>
                 <Pressable onPress={() => setEditingRun(null)} style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, alignItems: 'center' }}>
                   <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 15, color: Colors.text }}>Cancel</Text>
