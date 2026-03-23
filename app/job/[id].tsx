@@ -350,6 +350,10 @@ export default function JobDetailScreen() {
       }, 0);
   };
 
+  const getCompletedRunsSeconds = () => {
+    return getRunsSecondsForDay(new Date());
+  };
+
   const getAllCompletedRunsSeconds = () => {
     if (!jobData?.runs) return 0;
     return (jobData.runs as any[])
@@ -782,7 +786,7 @@ export default function JobDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
       setEditingRun(null);
     } catch (e: any) {
-      console.error('Edit run error:', e);
+      console.error('Edit run error:', e?.message || e);
     }
     setSavingEdit(false);
   }
