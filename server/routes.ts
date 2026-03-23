@@ -995,6 +995,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/clock-in", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      const existingRun = await pool.query(
+        `SELECT id FROM job_runs WHERE job_id = $1 AND driver_id = $2 AND status::text = 'active'`,
+        [req.params.id, auth.userId]
+      );
+      if (existingRun.rows.length > 0) {
+        const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [existingRun.rows[0].id]);
+        return res.json(addDualKeys(result.rows[0]));
+      }
       const runId = require("crypto").randomUUID();
       const vehicleFromBody = req.body?.vehicle_id || req.body?.vehicleId || null;
       let vehicleId = vehicleFromBody;
