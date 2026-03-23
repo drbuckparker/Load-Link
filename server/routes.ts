@@ -547,6 +547,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         job.jobRuns = runsResult.rows.map(addDualKeys);
         job.job_runs = job.jobRuns;
+        job.runs = job.jobRuns;
         job.weightTickets = weightResult.rows.map(addDualKeys);
         job.weight_tickets = job.weightTickets;
         return res.json(addDualKeys(job));
@@ -995,9 +996,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const runId = require("crypto").randomUUID();
+      const vehicleFromBody = req.body?.vehicle_id || req.body?.vehicleId || null;
+      let vehicleId = vehicleFromBody;
+      if (!vehicleId) {
+        const vRes = await pool.query(
+          `SELECT vehicle_id FROM job_assignments WHERE job_id = $1 AND driver_id = $2 AND vehicle_id IS NOT NULL AND status::text != 'rejected' LIMIT 1`,
+          [req.params.id, auth.userId]
+        );
+        vehicleId = vRes.rows[0]?.vehicle_id || null;
+      }
       await pool.query(
-        `INSERT INTO job_runs (id, job_id, driver_id, status, started_at, created_at) VALUES ($1, $2, $3, 'active', NOW(), NOW())`,
-        [runId, req.params.id, auth.userId]
+        `INSERT INTO job_runs (id, job_id, driver_id, vehicle_id, status, started_at, created_at) VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())`,
+        [runId, req.params.id, auth.userId, vehicleId]
       );
       await pool.query(`UPDATE jobs SET status = 'in_progress', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       pushToWebsite(`/api/jobs/${req.params.id}/clock-in`, auth, { method: "POST", body: req.body }).catch(() => {});
