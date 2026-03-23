@@ -406,7 +406,7 @@ export default function DashboardScreen() {
           <Text style={styles.sectionHint}>Check back later or expand your search radius in Settings</Text>
         )}
 
-        {contractor ? renderContractorStats() : renderEarningsStats()}
+        {contractor ? renderContractorStats() : null}
 
         <View style={styles.mapStatusRow}>
           <View style={styles.mapContainer}>
