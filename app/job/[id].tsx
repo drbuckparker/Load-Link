@@ -2356,7 +2356,7 @@ export default function JobDetailScreen() {
           </View>
         )}
 
-        {isRunning && (
+        {isRunning && !isContractor && (
           <Pressable
             style={({ pressed }) => [styles.stopBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
             onPress={handleStopJob}
