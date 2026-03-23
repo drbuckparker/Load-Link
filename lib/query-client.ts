@@ -1,6 +1,10 @@
-import { fetch } from "expo/fetch";
+import { fetch as expoFetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
+
+const nativeFetch = globalThis.fetch;
+const safeFetch = Platform.OS === 'web' ? nativeFetch : expoFetch;
 
 let _authToken: string | null = null;
 let _reloginInProgress: Promise<boolean> | null = null;
@@ -37,7 +41,7 @@ async function attemptSilentRelogin(): Promise<boolean> {
       const body: any = { email };
       if (password) body.password = password;
 
-      const res = await fetch(new URL('/api/auth/login', baseUrl).toString(), {
+      const res = await safeFetch(new URL('/api/auth/login', baseUrl).toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -103,7 +107,7 @@ export async function apiRequest(
   const baseUrl = getApiUrl();
   const url = new URL(route, baseUrl);
 
-  let res = await fetch(url.toString(), {
+  let res = await safeFetch(url.toString(), {
     method,
     headers: getHeaders(!!data),
     body: data ? JSON.stringify(data) : undefined,
@@ -113,7 +117,7 @@ export async function apiRequest(
   if (res.status === 401 && !route.includes('/api/auth/')) {
     const reloginOk = await attemptSilentRelogin();
     if (reloginOk) {
-      res = await fetch(url.toString(), {
+      res = await safeFetch(url.toString(), {
         method,
         headers: getHeaders(!!data),
         body: data ? JSON.stringify(data) : undefined,
@@ -135,7 +139,7 @@ export const getQueryFn: <T>(options: {
     const baseUrl = getApiUrl();
     const url = new URL(queryKey.join("/") as string, baseUrl);
 
-    let res = await fetch(url.toString(), {
+    let res = await safeFetch(url.toString(), {
       headers: getHeaders(),
       credentials: "include",
     });
@@ -143,7 +147,7 @@ export const getQueryFn: <T>(options: {
     if (res.status === 401) {
       const reloginOk = await attemptSilentRelogin();
       if (reloginOk) {
-        res = await fetch(url.toString(), {
+        res = await safeFetch(url.toString(), {
           headers: getHeaders(),
           credentials: "include",
         });

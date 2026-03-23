@@ -754,6 +754,7 @@ export default function JobDetailScreen() {
       const newStart = new Date(orig.getFullYear(), orig.getMonth(), orig.getDate(), startH24, editStartMinute, 0, 0);
 
       const isActiveEdit = editingRun.status === 'active' && !editingRun.ended_at;
+      let patchBody: any;
       if (!isActiveEdit) {
         const origEnd = new Date(editingRun.ended_at);
         const endH24 = editEndAmPm === 'PM' ? (editEndHour === 12 ? 12 : editEndHour + 12) : (editEndHour === 12 ? 0 : editEndHour);
@@ -763,20 +764,24 @@ export default function JobDetailScreen() {
           setSavingEdit(false);
           return;
         }
-
-        await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, {
+        patchBody = {
           started_at: newStart.toISOString(),
           ended_at: newEnd.toISOString(),
           loads_hauled: editLoads,
-        });
+        };
       } else {
         if (newStart.getTime() > Date.now()) {
           setSavingEdit(false);
           return;
         }
-        await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, {
+        patchBody = {
           started_at: newStart.toISOString(),
-        });
+        };
+      }
+
+      await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, patchBody);
+
+      if (isActiveEdit) {
         const newElapsed = Math.max(0, Math.floor((Date.now() - newStart.getTime()) / 1000));
         const completedTime = getCompletedRunsSeconds();
         setElapsedSeconds(completedTime + newElapsed);
