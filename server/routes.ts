@@ -1550,27 +1550,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let activeFleetRuns: any[] = [];
       if (role === 'trucking_company' || role.includes('trucking')) {
-        const fleetRunsResult = await pool.query(
-          `SELECT jr.id as run_id, jr.job_id, jr.started_at as clock_in_time, jr.vehicle_id, jr.driver_id,
-                  t.truck_number, t.make as truck_make, t.model as truck_model, t.year as truck_year,
-                  j.material, j.origin_address, j.contractor_name,
-                  cp.name as project_name,
-                  u.full_name as driver_name
-           FROM job_runs jr
-           JOIN trucks t ON jr.vehicle_id = t.id
-           JOIN jobs j ON jr.job_id = j.id
-           LEFT JOIN contractor_projects cp ON j.project_id = cp.id
-           LEFT JOIN users u ON jr.driver_id = u.id
-           WHERE t.trucking_company_id = $1 AND jr.status::text = 'active'
-           ORDER BY jr.started_at ASC`,
-          [userId]
-        );
-        activeFleetRuns = fleetRunsResult.rows.map(r => {
-          const row = addDualKeys(r);
-          row.vehicleDesc = [r.truck_year, r.truck_make, r.truck_model].filter(Boolean).join(' ');
-          row.driverFullName = r.driver_name || '';
-          return row;
-        });
+        try {
+          const fleetRunsResult = await pool.query(
+            `SELECT jr.id as run_id, jr.job_id, jr.started_at as clock_in_time, jr.vehicle_id, jr.driver_id,
+                    t.truck_number, t.make as truck_make, t.model as truck_model, t.year as truck_year,
+                    j.material, j.origin_address,
+                    c.full_name as contractor_name, c.company as contractor_company,
+                    cp.name as project_name,
+                    u.full_name as driver_name
+             FROM job_runs jr
+             JOIN trucks t ON jr.vehicle_id = t.id
+             JOIN jobs j ON jr.job_id = j.id
+             LEFT JOIN users c ON j.contractor_id = c.id
+             LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+             LEFT JOIN users u ON jr.driver_id = u.id
+             WHERE t.trucking_company_id = $1 AND jr.status::text = 'active'
+             ORDER BY jr.started_at ASC`,
+            [userId]
+          );
+          activeFleetRuns = fleetRunsResult.rows.map(r => {
+            const row = addDualKeys(r);
+            row.vehicleDesc = [r.truck_year, r.truck_make, r.truck_model].filter(Boolean).join(' ');
+            row.driverFullName = r.driver_name || '';
+            return row;
+          });
+        } catch (fleetErr: any) {
+          console.error("Fleet runs query error:", fleetErr.message);
+        }
       }
 
       const dashboard = {
