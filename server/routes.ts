@@ -1013,9 +1013,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
         vehicleId = vRes.rows[0]?.vehicle_id || null;
       }
+      const customTime = req.body?.custom_time || req.body?.customTime || null;
+      const startedAt = customTime ? new Date(customTime) : new Date();
       await pool.query(
-        `INSERT INTO job_runs (id, job_id, driver_id, vehicle_id, status, started_at, created_at) VALUES ($1, $2, $3, $4, 'active', NOW(), NOW())`,
-        [runId, req.params.id, auth.userId, vehicleId]
+        `INSERT INTO job_runs (id, job_id, driver_id, vehicle_id, status, started_at, created_at) VALUES ($1, $2, $3, $4, 'active', $5, NOW())`,
+        [runId, req.params.id, auth.userId, vehicleId, startedAt]
       );
       await pool.query(`UPDATE jobs SET status = 'in_progress', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       pushToWebsite(`/api/jobs/${req.params.id}/clock-in`, auth, { method: "POST", body: req.body }).catch(() => {});
