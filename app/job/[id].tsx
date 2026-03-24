@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
+import * as Notifications from 'expo-notifications';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
@@ -252,6 +253,7 @@ export default function JobDetailScreen() {
   const [pickerHour, setPickerHour] = useState(0);
   const [pickerMinute, setPickerMinute] = useState(0);
   const [pickerAmPm, setPickerAmPm] = useState<'AM' | 'PM'>('AM');
+  const [pickerDateOffset, setPickerDateOffset] = useState(0);
   const [timeManuallyAdjusted, setTimeManuallyAdjusted] = useState(false);
   const pickerOriginalTime = useRef<{ hour: number; minute: number; amPm: 'AM' | 'PM' }>({ hour: 12, minute: 0, amPm: 'AM' });
   const hourScrollRef = useRef<ScrollView>(null);
@@ -951,6 +953,7 @@ export default function JobDetailScreen() {
     setPickerHour(hour12);
     setPickerMinute(m);
     setPickerAmPm(amPm);
+    setPickerDateOffset(0);
     setTimeManuallyAdjusted(false);
     pickerOriginalTime.current = { hour: hour12, minute: m, amPm };
     setShowTimePicker(mode);
@@ -962,18 +965,53 @@ export default function JobDetailScreen() {
 
   function getPickerDate(): Date {
     const now = new Date();
+    const targetDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + pickerDateOffset);
     let h24 = pickerAmPm === 'AM' ? (pickerHour === 12 ? 0 : pickerHour) : (pickerHour === 12 ? 12 : pickerHour + 12);
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h24, pickerMinute, 0, 0);
+    const d = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), h24, pickerMinute, 0, 0);
     return d;
   }
 
   function isTimeAdjusted(): boolean {
     const orig = pickerOriginalTime.current;
-    return pickerHour !== orig.hour || pickerMinute !== orig.minute || pickerAmPm !== orig.amPm;
+    return pickerDateOffset !== 0 || pickerHour !== orig.hour || pickerMinute !== orig.minute || pickerAmPm !== orig.amPm;
   }
 
   async function handleStartJob() {
     openTimePicker('clock-in');
+  }
+
+  const CLOCK_OUT_REMINDER_ID = 'clock-out-reminder-6pm';
+
+  async function scheduleClockOutReminder() {
+    try {
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== 'granted') {
+        const { status: newStatus } = await Notifications.requestPermissionsAsync();
+        if (newStatus !== 'granted') return;
+      }
+      await Notifications.cancelScheduledNotificationAsync(CLOCK_OUT_REMINDER_ID).catch(() => {});
+      const now = new Date();
+      if (now.getHours() >= 18) return;
+      const secondsUntil6pm = Math.max(61, Math.floor(
+        (new Date(now.getFullYear(), now.getMonth(), now.getDate(), 18, 0, 0).getTime() - now.getTime()) / 1000
+      ));
+      await Notifications.scheduleNotificationAsync({
+        identifier: CLOCK_OUT_REMINDER_ID,
+        content: {
+          title: 'Still on the clock?',
+          body: 'It\'s 6 PM — don\'t forget to clock out if you\'re done for the day.',
+          sound: true,
+        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: secondsUntil6pm },
+      });
+    } catch (e) {
+    }
+  }
+
+  async function cancelClockOutReminder() {
+    try {
+      await Notifications.cancelScheduledNotificationAsync(CLOCK_OUT_REMINDER_ID);
+    } catch (e) {}
   }
 
   async function confirmClockIn() {
@@ -994,6 +1032,7 @@ export default function JobDetailScreen() {
       setElapsedSeconds(initialElapsed);
       setJobStatus('in_progress');
       setIsRunning(true);
+      scheduleClockOutReminder();
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
@@ -1027,6 +1066,7 @@ export default function JobDetailScreen() {
       setElapsedSeconds(completedTime + activeElapsed);
       setJobStatus('in_progress');
       setIsRunning(true);
+      scheduleClockOutReminder();
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
@@ -1042,6 +1082,7 @@ export default function JobDetailScreen() {
 
   async function doStop() {
     try {
+      cancelClockOutReminder();
       const runs = (jobData as any)?.runs;
       const activeRun = runs?.find?.((r: any) => !r.clock_out_time && !r.clockOutTime);
       if (activeRun) {
@@ -1844,10 +1885,39 @@ export default function JobDetailScreen() {
                   </View>
                 </View>
               </View>
+              {showTimePicker === 'clock-out' && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12, width: '100%', justifyContent: 'center' }}>
+                  <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.textMuted, letterSpacing: 0.5, marginRight: 4 }}>DATE</Text>
+                  {[
+                    { offset: -2, label: (() => { const d = new Date(); d.setDate(d.getDate() - 2); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })() },
+                    { offset: -1, label: 'Yesterday' },
+                    { offset: 0, label: 'Today' },
+                  ].map((item) => (
+                    <Pressable
+                      key={item.offset}
+                      onPress={() => { setPickerDateOffset(item.offset); if (item.offset !== 0) setTimeManuallyAdjusted(true); }}
+                      style={{
+                        paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8,
+                        backgroundColor: pickerDateOffset === item.offset ? Colors.primary : Colors.card,
+                        borderWidth: 1, borderColor: pickerDateOffset === item.offset ? Colors.primary : Colors.border,
+                      }}
+                    >
+                      <Text style={{
+                        fontFamily: 'Inter_600SemiBold', fontSize: 12,
+                        color: pickerDateOffset === item.offset ? '#fff' : Colors.textMuted,
+                      }}>{item.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
               {isTimeAdjusted() && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12, backgroundColor: 'rgba(245,158,11,0.12)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}>
                   <Ionicons name="time-outline" size={14} color={Colors.warning} />
-                  <Text style={{ color: Colors.warning, fontSize: 12, fontFamily: 'Inter_400Regular' }}>Time manually adjusted</Text>
+                  <Text style={{ color: Colors.warning, fontSize: 12, fontFamily: 'Inter_400Regular' }}>
+                    {pickerDateOffset !== 0
+                      ? `Time & date manually adjusted`
+                      : 'Time manually adjusted'}
+                  </Text>
                 </View>
               )}
               <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
