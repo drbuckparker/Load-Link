@@ -244,6 +244,8 @@ export default function JobDetailScreen() {
   const [editStartHour, setEditStartHour] = useState(0);
   const [editStartMinute, setEditStartMinute] = useState(0);
   const [editStartAmPm, setEditStartAmPm] = useState<'AM' | 'PM'>('AM');
+  const [editStartDate, setEditStartDate] = useState<Date>(new Date());
+  const [editEndDate, setEditEndDate] = useState<Date>(new Date());
   const [editEndHour, setEditEndHour] = useState(0);
   const [editEndMinute, setEditEndMinute] = useState(0);
   const [editEndAmPm, setEditEndAmPm] = useState<'AM' | 'PM'>('AM');
@@ -733,6 +735,7 @@ export default function JobDetailScreen() {
     setEditStartHour(sH);
     setEditStartMinute(sM);
     setEditStartAmPm(sAP);
+    setEditStartDate(new Date(start.getFullYear(), start.getMonth(), start.getDate()));
     if (run.ended_at) {
       const end = new Date(run.ended_at);
       let eH = end.getHours();
@@ -742,6 +745,7 @@ export default function JobDetailScreen() {
       setEditEndHour(eH);
       setEditEndMinute(eM);
       setEditEndAmPm(eAP);
+      setEditEndDate(new Date(end.getFullYear(), end.getMonth(), end.getDate()));
     }
     setEditLoads(run.loads_hauled || 1);
     setEditingRun(run);
@@ -751,16 +755,14 @@ export default function JobDetailScreen() {
     if (!editingRun) return;
     setSavingEdit(true);
     try {
-      const orig = new Date(editingRun.started_at);
       const startH24 = editStartAmPm === 'PM' ? (editStartHour === 12 ? 12 : editStartHour + 12) : (editStartHour === 12 ? 0 : editStartHour);
-      const newStart = new Date(orig.getFullYear(), orig.getMonth(), orig.getDate(), startH24, editStartMinute, 0, 0);
+      const newStart = new Date(editStartDate.getFullYear(), editStartDate.getMonth(), editStartDate.getDate(), startH24, editStartMinute, 0, 0);
 
       const isActiveEdit = editingRun.status === 'active' && !editingRun.ended_at;
       let patchBody: any;
       if (!isActiveEdit) {
-        const origEnd = new Date(editingRun.ended_at);
         const endH24 = editEndAmPm === 'PM' ? (editEndHour === 12 ? 12 : editEndHour + 12) : (editEndHour === 12 ? 0 : editEndHour);
-        const newEnd = new Date(origEnd.getFullYear(), origEnd.getMonth(), origEnd.getDate(), endH24, editEndMinute, 0, 0);
+        const newEnd = new Date(editEndDate.getFullYear(), editEndDate.getMonth(), editEndDate.getDate(), endH24, editEndMinute, 0, 0);
 
         if (newEnd.getTime() <= newStart.getTime()) {
           setSavingEdit(false);
@@ -1953,6 +1955,24 @@ export default function JobDetailScreen() {
             <View style={[styles.wtModalContent, { paddingTop: 20, paddingBottom: 20 }]} onStartShouldSetResponder={() => true}>
               <Text style={[styles.wtModalTitle, { marginBottom: 16 }]}>{editingRun?.ended_at ? 'Edit Session' : 'Adjust Clock In Time'}</Text>
               <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success, letterSpacing: 0.5, marginBottom: 6 }}>CLOCK IN TIME</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <Ionicons name="calendar-outline" size={13} color={Colors.textMuted} />
+                {[
+                  { offset: -2, label: (() => { const d = new Date(); d.setDate(d.getDate() - 2); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })() },
+                  { offset: -1, label: 'Yesterday' },
+                  { offset: 0, label: 'Today' },
+                ].map((item) => {
+                  const d = new Date(); d.setDate(d.getDate() + item.offset);
+                  const itemDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                  const isSelected = editStartDate.getTime() === itemDate.getTime();
+                  return (
+                    <Pressable key={item.offset} onPress={() => setEditStartDate(itemDate)}
+                      style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: isSelected ? Colors.success : Colors.background, borderWidth: 1, borderColor: isSelected ? Colors.success : Colors.border }}>
+                      <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 10, color: isSelected ? '#fff' : Colors.textMuted }}>{item.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
                   <Pressable onPress={() => setEditStartHour(h => h >= 12 ? 1 : h + 1)} style={{ padding: 8 }}>
@@ -1980,6 +2000,24 @@ export default function JobDetailScreen() {
               {editingRun?.ended_at && (
                 <>
                   <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.primary, letterSpacing: 0.5, marginBottom: 6 }}>CLOCK OUT TIME</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                    <Ionicons name="calendar-outline" size={13} color={Colors.textMuted} />
+                    {[
+                      { offset: -2, label: (() => { const d = new Date(); d.setDate(d.getDate() - 2); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); })() },
+                      { offset: -1, label: 'Yesterday' },
+                      { offset: 0, label: 'Today' },
+                    ].map((item) => {
+                      const d = new Date(); d.setDate(d.getDate() + item.offset);
+                      const itemDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                      const isSelected = editEndDate.getTime() === itemDate.getTime();
+                      return (
+                        <Pressable key={item.offset} onPress={() => setEditEndDate(itemDate)}
+                          style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: isSelected ? Colors.primary : Colors.background, borderWidth: 1, borderColor: isSelected ? Colors.primary : Colors.border }}>
+                          <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 10, color: isSelected ? '#fff' : Colors.textMuted }}>{item.label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.background, borderRadius: 8, borderWidth: 1, borderColor: Colors.border }}>
                       <Pressable onPress={() => setEditEndHour(h => h >= 12 ? 1 : h + 1)} style={{ padding: 8 }}>
