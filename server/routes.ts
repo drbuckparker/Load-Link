@@ -1803,6 +1803,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch {}
       }
 
+      let activeRunsByJob: Record<string, { started_at: string; vehicle_id: string }[]> = {};
+      if (jobIds.length > 0) {
+        try {
+          const runsResult = await pool.query(
+            `SELECT job_id, started_at, vehicle_id FROM job_runs WHERE job_id = ANY($1) AND status::text = 'active'`,
+            [jobIds]
+          );
+          for (const row of runsResult.rows) {
+            if (!activeRunsByJob[row.job_id]) activeRunsByJob[row.job_id] = [];
+            activeRunsByJob[row.job_id].push({ started_at: row.started_at, vehicle_id: row.vehicle_id });
+          }
+        } catch {}
+      }
+
       for (const job of myJobs) {
         const sd = job.scheduledDate || job.scheduled_date || job.startDate || job.start_date;
         if (!sd) continue;
@@ -1810,7 +1824,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const includesWeekends = job.includesWeekends ?? job.includes_weekends ?? false;
         const jobDates = getJobDateRange(sd, estDays, includesWeekends);
         const vehicleAssignments = assignmentsByJob[job.id] || [];
-        const enrichedJob = { ...job, vehicleAssignments };
+        const activeRuns = activeRunsByJob[job.id] || [];
+        const enrichedJob = { ...job, vehicleAssignments, activeRuns };
         if (vehicleAssignments.length > 0) {
           const active = vehicleAssignments.filter((a: any) => a.status !== 'rejected' && a.status !== 'withdrawn');
           if (active.length > 0) {

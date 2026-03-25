@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -46,6 +46,28 @@ const AVAILABILITY_TYPES = [
   { key: 'unavailable_weekdays', label: 'Unavailable - All Month Weekdays' },
   { key: 'unavailable_weekends', label: 'Unavailable - All Month Weekends' },
 ];
+
+function LiveTimer({ startedAt }: { startedAt: string }) {
+  const [elapsed, setElapsed] = useState(() => Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)));
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsed(Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startedAt]);
+  const h = Math.floor(elapsed / 3600);
+  const m = Math.floor((elapsed % 3600) / 60);
+  const s = elapsed % 60;
+  const display = h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.success }} />
+      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.success }}>{display}</Text>
+    </View>
+  );
+}
 
 function DetailJobsBlock({ assignedJobs, dayAllBooked, dayBookedCount, totalVehicles, trucksExpanded, setTrucksExpanded, modalDate, selectedDate, router }: {
   assignedJobs: any[]; dayAllBooked: boolean; dayBookedCount: number; totalVehicles: number;
@@ -107,25 +129,30 @@ function DetailJobsBlock({ assignedJobs, dayAllBooked, dayBookedCount, totalVehi
               ) : null}
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Text style={styles.calJobMaterial} numberOfLines={1}>{job.material}</Text>
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  {job.isMultiDay && (
-                    <View style={[styles.calJobStatusBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
-                      <Text style={[styles.calJobStatusText, { color: '#8b5cf6' }]}>DAY {job.dayNumber}/{job.totalDays}</Text>
-                    </View>
+                <View style={{ alignItems: 'flex-end', gap: 3 }}>
+                  {job.activeRuns?.length > 0 && (
+                    <LiveTimer startedAt={job.activeRuns[0].started_at} />
                   )}
-                  {job.assignmentStatus === 'pending' ? (
-                    <View style={[styles.calJobStatusBadge, { backgroundColor: Colors.warningBg }]}>
-                      <Text style={[styles.calJobStatusText, { color: Colors.warning }]}>PENDING</Text>
-                    </View>
-                  ) : (
-                    <View style={[styles.calJobStatusBadge, {
-                      backgroundColor: job.status === 'in_progress' ? Colors.warningBg : Colors.successBg
-                    }]}>
-                      <Text style={[styles.calJobStatusText, {
-                        color: job.status === 'in_progress' ? Colors.warning : Colors.success
-                      }]}>{job.status === 'in_progress' ? 'Active' : 'Confirmed'}</Text>
-                    </View>
-                  )}
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    {job.isMultiDay && (
+                      <View style={[styles.calJobStatusBadge, { backgroundColor: 'rgba(139,92,246,0.15)' }]}>
+                        <Text style={[styles.calJobStatusText, { color: '#8b5cf6' }]}>DAY {job.dayNumber}/{job.totalDays}</Text>
+                      </View>
+                    )}
+                    {job.assignmentStatus === 'pending' ? (
+                      <View style={[styles.calJobStatusBadge, { backgroundColor: Colors.warningBg }]}>
+                        <Text style={[styles.calJobStatusText, { color: Colors.warning }]}>PENDING</Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.calJobStatusBadge, {
+                        backgroundColor: job.activeRuns?.length > 0 ? Colors.warningBg : job.status === 'in_progress' ? Colors.warningBg : Colors.successBg
+                      }]}>
+                        <Text style={[styles.calJobStatusText, {
+                          color: job.activeRuns?.length > 0 ? Colors.warning : job.status === 'in_progress' ? Colors.warning : Colors.success
+                        }]}>{job.activeRuns?.length > 0 ? 'ACTIVE' : job.status === 'in_progress' ? 'Active' : 'Confirmed'}</Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
               </View>
 
@@ -1121,14 +1148,18 @@ export default function CalendarScreen() {
                       break;
                     }
                   }
-                  if (bookedJob) return {
-                    vehicle: v, status: 'booked' as const,
-                    assignmentStatus,
-                    jobName: bookedJob.material || bookedJob.projectName || 'Job',
-                    contractorName: bookedJob.contractorName || bookedJob.contractor_name || '',
-                    pickup: bookedJob.pickup || bookedJob.originAddress || bookedJob.origin_address || '',
-                    jobId: bookedJob.id,
-                  };
+                  if (bookedJob) {
+                    const activeRun = bookedJob.activeRuns?.find((r: any) => r.vehicle_id === v.id);
+                    return {
+                      vehicle: v, status: 'booked' as const,
+                      assignmentStatus,
+                      jobName: bookedJob.material || bookedJob.projectName || 'Job',
+                      contractorName: bookedJob.contractorName || bookedJob.contractor_name || '',
+                      pickup: bookedJob.pickup || bookedJob.originAddress || bookedJob.origin_address || '',
+                      jobId: bookedJob.id,
+                      activeRunStartedAt: activeRun?.started_at || (bookedJob.activeRuns?.length > 0 ? bookedJob.activeRuns[0].started_at : null),
+                    };
+                  }
 
                   let isUnavail = false;
                   for (const item of availData) {
@@ -1158,13 +1189,14 @@ export default function CalendarScreen() {
                         {availCount} avail · {unavailCount} off · {confirmedCount} booked{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}
                       </Text>
                     </View>
-                    {vehicleStatuses.map(({ vehicle: v, status, assignmentStatus, jobName, contractorName, pickup, jobId }: any) => {
+                    {vehicleStatuses.map(({ vehicle: v, status, assignmentStatus, jobName, contractorName, pickup, jobId, activeRunStartedAt }: any) => {
                       const truckName = v.truck_number || `Truck ${v.id.slice(0, 6)}`;
                       const truckDesc = [v.year, v.make, v.model].filter(Boolean).join(' ');
                       const plate = v.license_plate;
                       const isPending = status === 'booked' && assignmentStatus === 'pending';
-                      const statusColor = status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : isPending ? Colors.warning : '#3b82f6';
-                      const statusLabel = status === 'booked' ? `${isPending ? 'Pending' : 'Booked'} – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
+                      const isClockedIn = !!activeRunStartedAt;
+                      const statusColor = isClockedIn ? Colors.success : status === 'available' ? Colors.success : status === 'unavailable' ? Colors.destructive : isPending ? Colors.warning : '#3b82f6';
+                      const statusLabel = isClockedIn ? `Clocked In – ${jobName}` : status === 'booked' ? `${isPending ? 'Pending' : 'Booked'} – ${jobName}` : status.charAt(0).toUpperCase() + status.slice(1);
                       return (
                         <Pressable key={v.id} onPress={() => {
                           if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1183,7 +1215,10 @@ export default function CalendarScreen() {
                               {truckDesc}{plate ? `     ${plate}` : ''}
                             </Text>
                           </View>
-                          <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: statusColor }}>{statusLabel}</Text>
+                          <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                            {isClockedIn && <LiveTimer startedAt={activeRunStartedAt} />}
+                            <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: statusColor }}>{statusLabel}</Text>
+                          </View>
                           <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
                         </Pressable>
                       );
