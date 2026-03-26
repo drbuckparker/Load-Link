@@ -1825,20 +1825,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const jobDates = getJobDateRange(sd, estDays, includesWeekends);
         const vehicleAssignments = assignmentsByJob[job.id] || [];
         const activeRuns = activeRunsByJob[job.id] || [];
-        const enrichedJob = { ...job, vehicleAssignments, activeRuns };
-        if (vehicleAssignments.length > 0) {
-          const active = vehicleAssignments.filter((a: any) => a.status !== 'rejected' && a.status !== 'withdrawn');
-          if (active.length > 0) {
-            enrichedJob.vehicle = { id: active[0].vehicleId, make: active[0].make, model: active[0].model, year: active[0].year, truckNumber: active[0].truckNumber, licensePlate: active[0].licensePlate, truckType: active[0].truckType };
+        const activeAssignments = vehicleAssignments.filter((a: any) => a.status !== 'rejected' && a.status !== 'withdrawn');
+        const entriesToAdd: any[] = [];
+        if (activeAssignments.length > 1) {
+          for (const assignment of activeAssignments) {
+            const truckActiveRuns = activeRuns.filter((r: any) => String(r.vehicle_id) === String(assignment.vehicleId));
+            entriesToAdd.push({
+              ...job,
+              vehicleAssignments,
+              activeRuns: truckActiveRuns,
+              vehicle: { id: assignment.vehicleId, make: assignment.make, model: assignment.model, year: assignment.year, truckNumber: assignment.truckNumber, licensePlate: assignment.licensePlate, truckType: assignment.truckType },
+            });
           }
+        } else {
+          const enrichedJob = { ...job, vehicleAssignments, activeRuns } as any;
+          if (activeAssignments.length === 1) {
+            enrichedJob.vehicle = { id: activeAssignments[0].vehicleId, make: activeAssignments[0].make, model: activeAssignments[0].model, year: activeAssignments[0].year, truckNumber: activeAssignments[0].truckNumber, licensePlate: activeAssignments[0].licensePlate, truckType: activeAssignments[0].truckType };
+          }
+          entriesToAdd.push(enrichedJob);
         }
-        jobDates.forEach((dateKey, idx) => {
-          if (idx === 0) {
-            addToDay(dateKey, enrichedJob);
-          } else {
-            addToDay(dateKey, { ...enrichedJob, isMultiDay: true, dayNumber: idx + 1, totalDays: jobDates.length });
-          }
-        });
+        for (const entry of entriesToAdd) {
+          jobDates.forEach((dateKey, idx) => {
+            if (idx === 0) {
+              addToDay(dateKey, entry);
+            } else {
+              addToDay(dateKey, { ...entry, isMultiDay: true, dayNumber: idx + 1, totalDays: jobDates.length });
+            }
+          });
+        }
       }
       return res.json({ dailyJobs, jobDates: Array.from(jobDateSet).sort() });
     } catch {
