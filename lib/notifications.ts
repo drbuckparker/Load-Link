@@ -1,26 +1,42 @@
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
 import { apiRequest } from '@/lib/query-client';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+let Notifications: typeof import('expo-notifications') | null = null;
+
+async function getNotifications() {
+  if (Notifications) return Notifications;
+  if (Platform.OS === 'web') return null;
+  try {
+    Notifications = await import('expo-notifications');
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    return Notifications;
+  } catch {
+    return null;
+  }
+}
+
+if (Platform.OS === 'ios') {
+  getNotifications();
+}
 
 export async function registerForPushNotifications(): Promise<string | null> {
   try {
-    if (Platform.OS === 'web') return null;
+    const N = await getNotifications();
+    if (!N) return null;
 
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    const { status: existingStatus } = await N.getPermissionsAsync();
     let finalStatus = existingStatus;
 
     if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
+      const { status } = await N.requestPermissionsAsync();
       finalStatus = status;
     }
 
@@ -29,15 +45,15 @@ export async function registerForPushNotifications(): Promise<string | null> {
     }
 
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', {
+      await N.setNotificationChannelAsync('default', {
         name: 'LoadLink',
-        importance: Notifications.AndroidImportance.HIGH,
+        importance: N.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
         sound: 'default',
       });
     }
 
-    const tokenData = await Notifications.getExpoPushTokenAsync({
+    const tokenData = await N.getExpoPushTokenAsync({
       projectId: undefined,
     });
     const token = tokenData.data;

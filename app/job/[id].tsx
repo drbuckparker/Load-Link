@@ -6,7 +6,12 @@ import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
-import * as Notifications from 'expo-notifications';
+let _Notif: typeof import('expo-notifications') | null = null;
+async function getNotif() {
+  if (_Notif) return _Notif;
+  if (Platform.OS === 'web') return null;
+  try { _Notif = await import('expo-notifications'); return _Notif; } catch { return null; }
+}
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
@@ -986,25 +991,27 @@ export default function JobDetailScreen() {
 
   async function scheduleClockOutReminder() {
     try {
-      const { status } = await Notifications.getPermissionsAsync();
+      const N = await getNotif();
+      if (!N) return;
+      const { status } = await N.getPermissionsAsync();
       if (status !== 'granted') {
-        const { status: newStatus } = await Notifications.requestPermissionsAsync();
+        const { status: newStatus } = await N.requestPermissionsAsync();
         if (newStatus !== 'granted') return;
       }
-      await Notifications.cancelScheduledNotificationAsync(CLOCK_OUT_REMINDER_ID).catch(() => {});
+      await N.cancelScheduledNotificationAsync(CLOCK_OUT_REMINDER_ID).catch(() => {});
       const now = new Date();
       if (now.getHours() >= 18) return;
       const secondsUntil6pm = Math.max(61, Math.floor(
         (new Date(now.getFullYear(), now.getMonth(), now.getDate(), 18, 0, 0).getTime() - now.getTime()) / 1000
       ));
-      await Notifications.scheduleNotificationAsync({
+      await N.scheduleNotificationAsync({
         identifier: CLOCK_OUT_REMINDER_ID,
         content: {
           title: 'Still on the clock?',
           body: 'It\'s 6 PM — don\'t forget to clock out if you\'re done for the day.',
           sound: true,
         },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: secondsUntil6pm },
+        trigger: { type: N.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: secondsUntil6pm },
       });
     } catch (e) {
     }
@@ -1012,7 +1019,9 @@ export default function JobDetailScreen() {
 
   async function cancelClockOutReminder() {
     try {
-      await Notifications.cancelScheduledNotificationAsync(CLOCK_OUT_REMINDER_ID);
+      const N = await getNotif();
+      if (!N) return;
+      await N.cancelScheduledNotificationAsync(CLOCK_OUT_REMINDER_ID);
     } catch (e) {}
   }
 
