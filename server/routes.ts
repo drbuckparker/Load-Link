@@ -860,7 +860,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/withdraw", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      await pool.query(`DELETE FROM job_assignments WHERE job_id = $1 AND driver_id = $2`, [req.params.id, auth.userId]);
+      await pool.query(`UPDATE job_assignments SET status = 'withdrawn' WHERE job_id = $1 AND driver_id = $2`, [req.params.id, auth.userId]);
+      const remaining = await pool.query(`SELECT COUNT(*) FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`, [req.params.id]);
+      if (parseInt(remaining.rows[0]?.count || '0') === 0) {
+        await pool.query(`UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      }
       pushToWebsite(`/api/jobs/${req.params.id}/withdraw`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true });
     } catch {
@@ -870,10 +874,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req: Request, res: Response) => {
     try {
-      await pool.query(`DELETE FROM job_assignments WHERE id = $1`, [req.params.assignmentId]);
       const auth = getWebsiteAuth(req)!;
+      await pool.query(`UPDATE job_assignments SET status = 'withdrawn' WHERE id = $1`, [req.params.assignmentId]);
+      const remaining = await pool.query(`SELECT COUNT(*) FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`, [req.params.id]);
+      const remainingCount = parseInt(remaining.rows[0]?.count || '0');
+      if (remainingCount === 0) {
+        await pool.query(`UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      }
       pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}`, auth, { method: "DELETE" }).catch(() => {});
-      return res.json({ ok: true });
+      return res.json({ ok: true, remainingAssignments: remainingCount });
     } catch {
       return res.json({ ok: true });
     }
@@ -1760,7 +1769,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (userRole === 'trucking_company') {
         result = await pool.query(
           `SELECT DISTINCT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
-           WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON ja.vehicle_id = t.id WHERE t.trucking_company_id = $1)
+           WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON ja.vehicle_id = t.id WHERE t.trucking_company_id = $1 AND ja.status::text NOT IN ('withdrawn', 'rejected'))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
           [auth.userId]
@@ -1768,7 +1777,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         result = await pool.query(
           `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
-           WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+           WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
           [auth.userId]
@@ -1815,7 +1824,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const assResult = await pool.query(
             `SELECT ja.job_id, ja.vehicle_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type
              FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id
-             WHERE ja.job_id = ANY($1)`,
+             WHERE ja.job_id = ANY($1) AND ja.status::text NOT IN ('withdrawn', 'rejected')`,
             [jobIds]
           );
           for (const row of assResult.rows) {

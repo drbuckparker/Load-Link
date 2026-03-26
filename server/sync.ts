@@ -133,6 +133,7 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
     .map((k) => `${k} = EXCLUDED.${k}`);
 
   const archiveGuard = ARCHIVE_PROTECTED_TABLES.has(tableName) && columns.has("archived_at");
+  const withdrawnGuard = tableName === "job_assignments" && columns.has("status");
 
   if (updateClauses.length === 0) {
     const sql = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO NOTHING`;
@@ -144,6 +145,10 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
       if (!incomingArchived) {
         whereClause = ` WHERE ${tableName}.archived_at IS NULL`;
       }
+    }
+    if (withdrawnGuard) {
+      const prefix = whereClause ? " AND " : " WHERE ";
+      whereClause += `${prefix}${tableName}.status::text != 'withdrawn'`;
     }
     const sql = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO UPDATE SET ${updateClauses.join(", ")}${whereClause}`;
     await pool.query(sql, values);
