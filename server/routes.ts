@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pool } from "./db";
-import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity } from "./sync";
+import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
@@ -11,6 +11,23 @@ const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API
 
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+
+async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>) {
+  try {
+    const result = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
+    const token = result.rows[0]?.expo_push_token;
+    if (!token) return;
+    const message = { to: token, sound: 'default' as const, title, body, data: data || {} };
+    const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    });
+    if (!pushRes.ok) console.error('Push notification failed:', pushRes.status);
+  } catch (e: any) {
+    console.error('Push notification error:', e.message);
+  }
+}
 
 function loadJsonMap<T>(filename: string): Map<string, T> {
   try {
@@ -692,7 +709,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
-      return res.json({ ...addDualKeys(result.rows[0] || { id: req.params.id, status: 'pending' }), autoApproved });
+      const jobForNotif = result.rows[0];
+      if (contractorId && contractorId !== auth.userId) {
+        const applicantRow = await pool.query(`SELECT full_name, company FROM users WHERE id::text = $1`, [auth.userId]);
+        const applicantName = applicantRow.rows[0]?.company || applicantRow.rows[0]?.full_name || 'A driver';
+        const truckCount = (vehicleIds && Array.isArray(vehicleIds)) ? vehicleIds.length : 1;
+        const notifTitle = 'New Truck Application';
+        const notifBody = `${applicantName} applied ${truckCount} truck${truckCount > 1 ? 's' : ''} to your ${jobForNotif?.material || ''} job`;
+        sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: 'job_application' });
+      }
+      return res.json({ ...addDualKeys(jobForNotif || { id: req.params.id, status: 'pending' }), autoApproved });
     } catch (e: any) {
       console.error("Accept job error:", e.message);
       return res.status(500).json({ message: "Failed to accept job" });
@@ -864,6 +890,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      try {
+        await syncJobAssignments(auth);
+      } catch {}
+
       const result = await pool.query(
         `SELECT ja.*, u.full_name as driver_name, u.phone as driver_phone, u.email as driver_email, u.truck_type as driver_truck_type, u.rating as driver_rating, u.company as driver_company,
                 t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
