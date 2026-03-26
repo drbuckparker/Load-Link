@@ -2452,7 +2452,16 @@ export default function JobDetailScreen() {
                 onPress={handleStartJob}
               >
                 <Ionicons name="play-circle" size={20} color="#fff" />
-                <Text style={styles.startBtnText}>CLOCK IN</Text>
+                <Text style={styles.startBtnText}>
+                  {(() => {
+                    const days = parseFloat(String(jobData?.estimated_days || jobData?.listed_days || job.estimatedDays || '1')) || 1;
+                    if (days > 1) {
+                      const now = new Date();
+                      return `CLOCK IN FOR ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()}`;
+                    }
+                    return 'CLOCK IN';
+                  })()}
+                </Text>
               </Pressable>
             )}
             {clockInError ? (
