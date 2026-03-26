@@ -190,7 +190,34 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
       jobs = allJobs.filter((j: any) => j.id && !hiddenJobIds.has(j.id));
     }
 
-    const count = await upsertMany("jobs", jobs);
+    const localJobsResult = await pool.query(
+      `SELECT id, material, contractor_id, scheduled_date, created_at FROM jobs WHERE archived_at IS NULL`
+    );
+    const localJobs = localJobsResult.rows;
+
+    const deduped = jobs.filter((wj: any) => {
+      const wId = wj.id;
+      if (localJobs.some((lj: any) => lj.id === wId)) return true;
+      const wMaterial = (wj.material || '').toLowerCase().trim();
+      const wContractor = String(wj.contractor_id || wj.contractorId || '');
+      const wScheduled = wj.scheduled_date || wj.scheduledDate || '';
+      const wScheduledStr = wScheduled ? String(wScheduled).substring(0, 10) : '';
+      const wCreated = new Date(wj.created_at || wj.createdAt || 0).getTime();
+
+      for (const lj of localJobs) {
+        if (lj.id === wId) continue;
+        const lMaterial = (lj.material || '').toLowerCase().trim();
+        const lContractor = String(lj.contractor_id || '');
+        const lScheduledStr = lj.scheduled_date ? String(lj.scheduled_date).substring(0, 10) : '';
+        const lCreated = new Date(lj.created_at).getTime();
+        if (lMaterial === wMaterial && lContractor === wContractor && lScheduledStr === wScheduledStr && Math.abs(wCreated - lCreated) < 60000) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const count = await upsertMany("jobs", deduped);
     await updateSyncTime("jobs", auth.userId);
     return count;
   } catch (e: any) {
