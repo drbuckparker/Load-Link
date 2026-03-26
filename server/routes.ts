@@ -2034,22 +2034,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       query += ` ORDER BY created_at DESC`;
 
       const result = await pool.query(query, params);
-      let projects = result.rows;
-
-      if (projects.length === 0) {
-        const jobResult = await pool.query(
-          `SELECT DISTINCT project_id, material as name, contractor_id FROM jobs WHERE contractor_id = $1 AND project_id IS NOT NULL`,
-          [auth.userId]
-        );
-        if (jobResult.rows.length > 0) {
-          projects = jobResult.rows.map((r: any) => ({
-            id: r.project_id,
-            name: r.name || 'Untitled Project',
-            contractor_id: r.contractor_id,
-            status: 'active',
-          }));
-        }
-      }
+      const projects = result.rows;
 
       return res.json(projects.map(addDualKeys));
     } catch (e: any) {

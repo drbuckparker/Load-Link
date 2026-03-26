@@ -234,32 +234,13 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
 export async function syncProjects(auth: SyncAuth, cachedJobs?: any[]): Promise<number> {
   if (jobSyncPaused) return 0;
   try {
-    let projects: any[] = [];
-
     const websiteProjects = await websiteFetchSync("/api/projects", { jwt: auth.jwt });
-    if (Array.isArray(websiteProjects) && websiteProjects.length > 0) {
-      projects = websiteProjects;
+    if (!Array.isArray(websiteProjects) || websiteProjects.length === 0) {
+      await updateSyncTime("projects", auth.userId);
+      return 0;
     }
 
-    if (projects.length === 0 && cachedJobs) {
-      const projectMap = new Map<string, any>();
-      for (const j of cachedJobs.filter((j: any) => !hiddenJobIds.has(j.id))) {
-        const pId = j.projectId || j.project_id;
-        const pName = j.projectName || j.project_name;
-        const cId = j.contractorId || j.contractor_id;
-        if (pId && pName) {
-          projectMap.set(pId, {
-            id: pId,
-            name: pName,
-            contractor_id: cId || auth.userId,
-            status: "active",
-          });
-        }
-      }
-      projects = [...projectMap.values()];
-    }
-
-    const count = await upsertMany("contractor_projects", projects);
+    const count = await upsertMany("contractor_projects", websiteProjects);
     await updateSyncTime("projects", auth.userId);
     return count;
   } catch (e: any) {
