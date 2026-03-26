@@ -607,7 +607,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [id]);
       const job = result.rows[0] || { id, ...snakeBody };
 
-      pushToWebsite("/api/jobs", auth, { method: "POST", body: { ...req.body, id } }).catch(() => {});
+      const pushBody = { ...req.body, id };
+      console.log(`POST /api/jobs pushing to website with projectId=${pushBody.projectId || pushBody.project_id || 'none'}, id=${id}`);
+      pushToWebsite("/api/jobs", auth, { method: "POST", body: pushBody }).catch(() => {});
 
       return res.status(201).json(addDualKeys(job));
     } catch (e: any) {
