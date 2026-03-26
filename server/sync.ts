@@ -80,6 +80,8 @@ const hiddenJobIds = new Set([
   "260669a8-564b-4711-82af-dfc57daf65ed",
   "996c08da-c1ee-4863-a811-d29565e19625",
   "eec5123e-70d0-43f9-a0f0-1471d52e61e9",
+  "5fd6891d-8bf8-4b81-bc89-b5c963767051",
+  "0c9c925b-07f6-4caf-b00d-871671e266fb",
 ]);
 
 function camelToSnake(str: string): string {
@@ -215,7 +217,7 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
         const lContractor = String(lj.contractor_id || '');
         const lScheduledStr = lj.scheduled_date ? String(lj.scheduled_date).substring(0, 10) : '';
         const lCreated = new Date(lj.created_at).getTime();
-        if (lMaterial === wMaterial && lContractor === wContractor && lScheduledStr === wScheduledStr && Math.abs(wCreated - lCreated) < 60000) {
+        if (lMaterial === wMaterial && lContractor === wContractor && lScheduledStr === wScheduledStr && Math.abs(wCreated - lCreated) < 300000) {
           return false;
         }
       }
