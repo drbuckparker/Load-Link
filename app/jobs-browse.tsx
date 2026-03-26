@@ -302,8 +302,32 @@ export default function JobsBrowseScreen() {
   const jobs = useMemo(() => {
     if (!rawJobs) return [];
     const list = Array.isArray(rawJobs) ? rawJobs : [];
-    return list.map(mapDbJob);
-  }, [rawJobs]);
+    let mapped = list.map(mapDbJob);
+    if (activeFilter === 'Open') {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      mapped = mapped.filter(j => {
+        if (!j.scheduledDate) return true;
+        const raw = String(j.scheduledDate);
+        const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
+        const days = parseFloat(String(j.estimatedDays || '1')) || 1;
+        if (days <= 1) {
+          return dateStr >= todayStr;
+        }
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const start = new Date(y, m - 1, d);
+        let added = 0;
+        let cur = new Date(start);
+        while (added < days - 1) {
+          cur.setDate(cur.getDate() + 1);
+          if (cur.getDay() !== 0 && cur.getDay() !== 6) added++;
+        }
+        const endStr = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
+        return endStr >= todayStr;
+      });
+    }
+    return mapped;
+  }, [rawJobs, activeFilter]);
 
   const filteredProjects = useMemo(() => {
     let list = projects;
