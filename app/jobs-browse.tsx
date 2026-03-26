@@ -421,7 +421,12 @@ export default function JobsBrowseScreen() {
           <View style={styles.footerItem}>
             <Ionicons name="calendar-outline" size={13} color={Colors.textMuted} />
             <Text style={styles.footerText}>
-              {item.scheduledDate ? new Date(item.scheduledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+              {item.scheduledDate ? (() => {
+                const raw = String(item.scheduledDate);
+                const ds = raw.length >= 10 ? raw.substring(0, 10) : raw;
+                const [y, m, d] = ds.split('-').map(Number);
+                return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              })() : '—'}
             </Text>
           </View>
           <View style={styles.footerItem}>
