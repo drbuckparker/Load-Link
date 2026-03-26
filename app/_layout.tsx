@@ -11,7 +11,6 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, ChakraPetch_600SemiBold, ChakraPetch_700Bold } from "@expo-google-fonts/chakra-petch";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
-import * as Notifications from "expo-notifications";
 import { playNotificationSound } from "@/lib/sounds";
 
 SplashScreen.preventAutoHideAsync();
@@ -85,28 +84,35 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
+    let notifSub: any = null;
+    let responseSub: any = null;
+    let cancelled = false;
 
-    const notifListener = Notifications.addNotificationReceivedListener(() => {
-      playNotificationSound();
-      queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
-    });
-
-    const responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response.notification.request.content.data;
-      if (data?.type === 'message' && data?.jobId) {
-        router.push(`/chat/${data.jobId}`);
-      } else if (data?.jobId) {
-        router.push(`/job/${data.jobId}`);
-      } else {
-        router.push('/notifications');
-      }
-    });
+    (async () => {
+      try {
+        const N = await import('expo-notifications');
+        if (cancelled) return;
+        notifSub = N.addNotificationReceivedListener(() => {
+          playNotificationSound();
+          queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
+        });
+        responseSub = N.addNotificationResponseReceivedListener((response) => {
+          const data = response.notification.request.content.data;
+          if (data?.type === 'message' && data?.jobId) {
+            router.push(`/chat/${data.jobId}`);
+          } else if (data?.jobId) {
+            router.push(`/job/${data.jobId}`);
+          } else {
+            router.push('/notifications');
+          }
+        });
+      } catch {}
+    })();
 
     return () => {
-      if (notifListener?.remove) notifListener.remove();
-      else if (Notifications.removeNotificationSubscription) Notifications.removeNotificationSubscription(notifListener);
-      if (responseListener?.remove) responseListener.remove();
-      else if (Notifications.removeNotificationSubscription) Notifications.removeNotificationSubscription(responseListener);
+      cancelled = true;
+      if (notifSub?.remove) notifSub.remove();
+      if (responseSub?.remove) responseSub.remove();
     };
   }, []);
 
