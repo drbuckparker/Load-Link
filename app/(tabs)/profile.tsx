@@ -322,7 +322,7 @@ export default function ProfileScreen() {
                         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted, marginTop: 1 }}>
                           {fav.favoriteType === 'driver'
                             ? (fav.driverCompany ? `${fav.driverCompany} · Favorite Driver` : 'Favorite Driver')
-                            : 'Favorite Company · Auto-approve all trucks'}
+                            : 'Auto-approve all trucks from this company'}
                         </Text>
                       </View>
                       <Pressable
