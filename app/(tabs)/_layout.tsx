@@ -1,6 +1,4 @@
-import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { Tabs } from "expo-router";
-import { NativeTabs, Icon, Label, Badge } from "expo-router/unstable-native-tabs";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import { Platform, StyleSheet, View, Text } from "react-native";
@@ -9,6 +7,31 @@ import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { Redirect } from "expo-router";
+
+let _liquidGlassAvailable: boolean | null = null;
+function checkLiquidGlass(): boolean {
+  if (Platform.OS === 'android' || Platform.OS === 'web') return false;
+  if (_liquidGlassAvailable !== null) return _liquidGlassAvailable;
+  try {
+    const { isLiquidGlassAvailable } = require("expo-glass-effect");
+    _liquidGlassAvailable = isLiquidGlassAvailable();
+  } catch {
+    _liquidGlassAvailable = false;
+  }
+  return _liquidGlassAvailable;
+}
+
+let NativeTabsModule: any = null;
+function getNativeTabsModule() {
+  if (NativeTabsModule) return NativeTabsModule;
+  if (Platform.OS === 'android' || Platform.OS === 'web') return null;
+  try {
+    NativeTabsModule = require("expo-router/unstable-native-tabs");
+    return NativeTabsModule;
+  } catch {
+    return null;
+  }
+}
 
 function isContractorRole(role: string): boolean {
   return role.includes('contractor') || role === 'trucking_company';
@@ -27,38 +50,41 @@ function useUnreadCount() {
 function NativeTabLayout({ role }: { role: string }) {
   const contractor = isContractorRole(role);
   const unreadCount = useUnreadCount();
+  const mod = getNativeTabsModule();
+  if (!mod) return <ClassicTabLayout role={role} />;
+  const { NativeTabs: NT, Icon, Label, Badge } = mod;
 
   return (
-    <NativeTabs>
-      <NativeTabs.Trigger name="index">
+    <NT>
+      <NT.Trigger name="index">
         <Icon sf={{ default: "house", selected: "house.fill" }} />
         <Label>Home</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="calendar">
+      </NT.Trigger>
+      <NT.Trigger name="calendar">
         <Icon sf={{ default: "calendar", selected: "calendar" }} />
         <Label>Calendar</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="messages">
+      </NT.Trigger>
+      <NT.Trigger name="messages">
         <Icon sf={{ default: "message", selected: "message.fill" }} />
         <Label>Messages</Label>
         {unreadCount > 0 && <Badge>{unreadCount > 99 ? '99+' : String(unreadCount)}</Badge>}
-      </NativeTabs.Trigger>
+      </NT.Trigger>
       {contractor ? (
-        <NativeTabs.Trigger name="invoices">
+        <NT.Trigger name="invoices">
           <Icon sf={{ default: "doc.text", selected: "doc.text.fill" }} />
           <Label>Invoices</Label>
-        </NativeTabs.Trigger>
+        </NT.Trigger>
       ) : (
-        <NativeTabs.Trigger name="my-jobs">
+        <NT.Trigger name="my-jobs">
           <Icon sf={{ default: "briefcase", selected: "briefcase.fill" }} />
           <Label>Jobs</Label>
-        </NativeTabs.Trigger>
+        </NT.Trigger>
       )}
-      <NativeTabs.Trigger name="profile">
+      <NT.Trigger name="profile">
         <Icon sf={{ default: "person", selected: "person.fill" }} />
         <Label>Profile</Label>
-      </NativeTabs.Trigger>
-    </NativeTabs>
+      </NT.Trigger>
+    </NT>
   );
 }
 
@@ -197,12 +223,7 @@ export default function TabLayout() {
 
   const role = user?.role || 'driver';
 
-  let useLiquidGlass = false;
-  try {
-    useLiquidGlass = isLiquidGlassAvailable();
-  } catch {}
-
-  if (useLiquidGlass) {
+  if (checkLiquidGlass()) {
     return <NativeTabLayout role={role} />;
   }
   return <ClassicTabLayout role={role} />;
