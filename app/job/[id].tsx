@@ -9,7 +9,7 @@ import * as ImagePicker from 'expo-image-picker';
 let _Notif: typeof import('expo-notifications') | null = null;
 async function getNotif() {
   if (_Notif) return _Notif;
-  if (Platform.OS === 'web') return null;
+  if (Platform.OS === 'web' || Platform.OS === 'android') return null;
   try { _Notif = await import('expo-notifications'); return _Notif; } catch { return null; }
 }
 import { useQuery } from '@tanstack/react-query';

@@ -83,7 +83,7 @@ export default function RootLayout() {
   }, [fontsLoaded, fontError]);
 
   useEffect(() => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web' || Platform.OS === 'android') return;
     let notifSub: any = null;
     let responseSub: any = null;
     let cancelled = false;

@@ -5,7 +5,7 @@ let Notifications: typeof import('expo-notifications') | null = null;
 
 async function getNotifications() {
   if (Notifications) return Notifications;
-  if (Platform.OS === 'web') return null;
+  if (Platform.OS === 'web' || Platform.OS === 'android') return null;
   try {
     Notifications = await import('expo-notifications');
     Notifications.setNotificationHandler({
@@ -42,15 +42,6 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
     if (finalStatus !== 'granted') {
       return null;
-    }
-
-    if (Platform.OS === 'android') {
-      await N.setNotificationChannelAsync('default', {
-        name: 'LoadLink',
-        importance: N.AndroidImportance.HIGH,
-        vibrationPattern: [0, 250, 250, 250],
-        sound: 'default',
-      });
     }
 
     const tokenData = await N.getExpoPushTokenAsync({
