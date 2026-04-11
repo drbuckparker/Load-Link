@@ -15,8 +15,8 @@ interface MapPickerViewProps {
 export default function MapPickerView({ mapPin, onMapPress, userLat, userLng, originLat, originLng }: MapPickerViewProps) {
   const mapRef = useRef<MapView>(null);
 
-  const centerLat = mapPin?.latitude || originLat || userLat || 43.48;
-  const centerLng = mapPin?.longitude || originLng || userLng || -110.76;
+  const centerLat = Number(mapPin?.latitude || originLat || userLat || 43.48);
+  const centerLng = Number(mapPin?.longitude || originLng || userLng || -110.76);
 
   return (
     <MapView

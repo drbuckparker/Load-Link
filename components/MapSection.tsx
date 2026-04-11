@@ -46,10 +46,10 @@ export default function MapSection({ address, defaultLat, defaultLng }: MapSecti
     }
   }, [defaultLat, defaultLng]);
 
-  const displayLat = userLocation?.lat || defaultLat;
-  const displayLng = userLocation?.lng || defaultLng;
+  const displayLat = userLocation?.lat || (defaultLat != null ? Number(defaultLat) : undefined);
+  const displayLng = userLocation?.lng || (defaultLng != null ? Number(defaultLng) : undefined);
 
-  const hasCoordinates = displayLat !== undefined && displayLng !== undefined;
+  const hasCoordinates = displayLat !== undefined && displayLng !== undefined && !isNaN(displayLat) && !isNaN(displayLng);
 
   return (
     <View style={styles.mapWrapper}>

@@ -172,8 +172,10 @@ export default function DashboardScreen() {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  const mapLat = deviceLat || dashboard?.location?.lat || undefined;
-  const mapLng = deviceLng || dashboard?.location?.lng || undefined;
+  const rawLat = deviceLat || dashboard?.location?.lat;
+  const rawLng = deviceLng || dashboard?.location?.lng;
+  const mapLat = rawLat != null ? Number(rawLat) : undefined;
+  const mapLng = rawLng != null ? Number(rawLng) : undefined;
   const mapAddress = deviceAddress || dashboard?.location?.address || undefined;
 
   async function handleStatusToggle(value: boolean) {
