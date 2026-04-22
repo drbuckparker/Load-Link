@@ -333,12 +333,17 @@ export default function JobsBrowseScreen() {
   }, [rawJobs, activeFilter]);
 
   const jobsListData = useMemo(() => {
-    if (!selectedProjectFilter || activeFilter === 'Completed') return jobs as any[];
+    const sortPending = (list: Job[]) => {
+      if (!isContractor) return list;
+      return [...list].sort((a, b) => (b.pendingApplications || 0 ? 1 : 0) - (a.pendingApplications || 0 ? 1 : 0));
+    };
+    if (!selectedProjectFilter || activeFilter === 'Completed') return sortPending(jobs) as any[];
     const completed = jobs.filter(j => String(j.status).toLowerCase() === 'completed');
     const active = jobs.filter(j => String(j.status).toLowerCase() !== 'completed');
-    if (completed.length === 0) return active as any[];
-    return [...active, { id: '__completed_divider__', __divider: true, count: completed.length }, ...completed] as any[];
-  }, [jobs, selectedProjectFilter, activeFilter]);
+    const activeSorted = sortPending(active);
+    if (completed.length === 0) return activeSorted as any[];
+    return [...activeSorted, { id: '__completed_divider__', __divider: true, count: completed.length }, ...completed] as any[];
+  }, [jobs, selectedProjectFilter, activeFilter, isContractor]);
 
   const filteredProjects = useMemo(() => {
     let list = projects;
