@@ -207,8 +207,21 @@ export default function EditJobScreen() {
       const authHeaders: Record<string, string> = {};
       const authToken = getAuthToken();
       if (authToken) authHeaders['Authorization'] = `Bearer ${authToken}`;
+      // Bias by the *other* end of the route if it's set, so e.g. typing into
+      // Dropoff prefers matches near the Pickup pin. Falls back to user GPS.
+      let biasLat: number | null = null;
+      let biasLng: number | null = null;
+      if (target === 'destination' && originLat != null && originLng != null) {
+        biasLat = Number(originLat); biasLng = Number(originLng);
+      } else if (target === 'origin' && destLat != null && destLng != null) {
+        biasLat = Number(destLat); biasLng = Number(destLng);
+      } else if (userLat != null && userLng != null) {
+        biasLat = Number(userLat); biasLng = Number(userLng);
+      }
       let url = `${baseUrl}/api/places/autocomplete?input=${encodeURIComponent(input)}`;
-      if (userLat && userLng) url += `&lat=${userLat}&lng=${userLng}`;
+      if (biasLat != null && biasLng != null && Number.isFinite(biasLat) && Number.isFinite(biasLng)) {
+        url += `&lat=${biasLat}&lng=${biasLng}`;
+      }
       const res = await fetch(url, { headers: authHeaders });
       const data = await res.json();
       const results = Array.isArray(data) ? data : (data.predictions || []);

@@ -2478,9 +2478,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       url.searchParams.set("types", "geocode|establishment");
       url.searchParams.set("components", "country:us|country:ca");
       if (lat && lng) {
+        // Soft location bias: results near (lat,lng) are preferred and ranked higher,
+        // but distant matches still appear if nothing local matches. We deliberately do
+        // NOT set strictbounds=true (which would exclude all out-of-radius results).
         url.searchParams.set("location", `${lat},${lng}`);
-        url.searchParams.set("radius", "160000");
-        url.searchParams.set("strictbounds", "true");
+        url.searchParams.set("radius", "80000");
       }
 
       const response = await fetch(url.toString());

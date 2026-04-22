@@ -451,14 +451,26 @@ export default function CreateJobScreen() {
 
       const savedUrl = new URL('/api/saved-locations', baseUrl);
       savedUrl.searchParams.set('search', input);
+      // Bias by the *other* end of the route if it's set. e.g. when typing into
+      // Dropoff, prefer matches near the Pickup pin. Fall back to user's GPS.
+      let biasLat: number | null = null;
+      let biasLng: number | null = null;
+      if (target === 'destination' && originLat != null && originLng != null) {
+        biasLat = Number(originLat); biasLng = Number(originLng);
+      } else if (target === 'origin' && destLat != null && destLng != null) {
+        biasLat = Number(destLat); biasLng = Number(destLng);
+      } else if (userLat != null && userLng != null) {
+        biasLat = Number(userLat); biasLng = Number(userLng);
+      }
+
       const [savedRes, placesRes] = await Promise.all([
         fetch(savedUrl.toString(), { credentials: 'include', headers: authHeaders }).catch(() => null),
         (() => {
           const url = new URL('/api/places/autocomplete', baseUrl);
           url.searchParams.set('input', input);
-          if (userLat && userLng) {
-            url.searchParams.set('lat', String(userLat));
-            url.searchParams.set('lng', String(userLng));
+          if (biasLat != null && biasLng != null && Number.isFinite(biasLat) && Number.isFinite(biasLng)) {
+            url.searchParams.set('lat', String(biasLat));
+            url.searchParams.set('lng', String(biasLng));
           }
           return fetch(url.toString(), { credentials: 'include', headers: authHeaders }).catch(() => null);
         })(),
