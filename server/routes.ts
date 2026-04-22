@@ -495,6 +495,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         params.push(`%${search}%`);
         paramIdx++;
       }
+      // Hide open jobs that are already fully crewed OR have hit their application cap.
+      // Application cap by trucks_needed: 1 -> 5, 2 -> 8, 3+ -> 3 * trucks_needed.
+      // Jobs the current user has already applied to remain visible regardless.
+      query += ` AND NOT (
+        j.status::text = 'open'
+        AND (
+          (SELECT COUNT(*) FROM job_assignments ja
+            WHERE ja.job_id = j.id AND ja.status::text = 'approved')
+          >= COALESCE(j.trucks_needed, 1)
+          OR
+          (SELECT COUNT(*) FROM job_assignments ja
+            WHERE ja.job_id = j.id AND ja.status::text IN ('pending', 'approved'))
+          >= CASE
+              WHEN COALESCE(j.trucks_needed, 1) <= 1 THEN 5
+              WHEN COALESCE(j.trucks_needed, 1) = 2 THEN 8
+              ELSE 3 * COALESCE(j.trucks_needed, 1)
+            END
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM job_assignments ja
+          WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
+            AND ja.status::text NOT IN ('rejected', 'withdrawn')
+        )
+        AND j.contractor_id <> $${paramIdx}
+      )`;
+      params.push(auth.userId);
+      paramIdx++;
       query += ` ORDER BY j.scheduled_date ASC NULLS LAST, j.created_at DESC`;
 
       const result = await pool.query(query, params);
