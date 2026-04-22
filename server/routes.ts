@@ -2020,13 +2020,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const status = req.query.status as string | undefined;
-      let query = `SELECT * FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`;
+      let query = `
+        SELECT mi.*,
+          c.full_name AS contractor_name, c.company AS contractor_company,
+          c.email AS contractor_email, c.phone AS contractor_phone,
+          c.address AS contractor_address, c.city AS contractor_city,
+          c.state AS contractor_state, c.zip_code AS contractor_zip,
+          d.full_name AS driver_name, d.company AS driver_company,
+          d.email AS driver_email, d.phone AS driver_phone,
+          d.address AS driver_address, d.city AS driver_city,
+          d.state AS driver_state, d.zip_code AS driver_zip
+        FROM monthly_invoices mi
+        LEFT JOIN users c ON c.id = mi.contractor_id
+        LEFT JOIN users d ON d.id = mi.driver_id
+        WHERE mi.contractor_id = $1 OR mi.driver_id = $1`;
       const params: any[] = [auth.userId];
       if (status) {
-        query += ` AND status::text = $2`;
+        query += ` AND mi.status::text = $2`;
         params.push(status.toLowerCase());
       }
-      query += ` ORDER BY created_at DESC`;
+      query += ` ORDER BY mi.created_at DESC`;
       const result = await pool.query(query, params);
       return res.json(result.rows.map(addDualKeys));
     } catch (e: any) {
@@ -2037,7 +2050,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/invoices/:id", requireAuth, async (req: Request, res: Response) => {
     try {
-      const result = await pool.query(`SELECT * FROM monthly_invoices WHERE id = $1`, [req.params.id]);
+      const result = await pool.query(
+        `SELECT mi.*,
+          c.full_name AS contractor_name, c.company AS contractor_company,
+          c.email AS contractor_email, c.phone AS contractor_phone,
+          c.address AS contractor_address, c.city AS contractor_city,
+          c.state AS contractor_state, c.zip_code AS contractor_zip,
+          d.full_name AS driver_name, d.company AS driver_company,
+          d.email AS driver_email, d.phone AS driver_phone,
+          d.address AS driver_address, d.city AS driver_city,
+          d.state AS driver_state, d.zip_code AS driver_zip
+        FROM monthly_invoices mi
+        LEFT JOIN users c ON c.id = mi.contractor_id
+        LEFT JOIN users d ON d.id = mi.driver_id
+        WHERE mi.id = $1`,
+        [req.params.id]
+      );
       if (result.rows.length > 0) {
         const invoice = result.rows[0];
         const jobsResult = await pool.query(
@@ -2048,7 +2076,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(addDualKeys(invoice));
       }
       return res.status(404).json({ message: "Invoice not found" });
-    } catch {
+    } catch (e: any) {
+      console.error("GET /api/invoices/:id error:", e.message);
       return res.status(500).json({ message: "Failed to load invoice" });
     }
   });

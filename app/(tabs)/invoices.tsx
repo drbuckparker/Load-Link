@@ -6,65 +6,49 @@ import Colors from '@/constants/colors';
 import { useState, useMemo } from 'react';
 import { queryClient } from '@/lib/query-client';
 import { router } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
 
-interface Invoice {
+interface RawInvoice {
   id: string;
-  contractorId: string;
-  driverId: string;
-  periodMonth: number;
-  periodYear: number;
-  totalAmount: number;
-  status: 'open' | 'issued' | 'payment_sent' | 'payment_received' | 'void';
-  contractorName: string;
-  driverName: string;
-  createdAt: string;
+  contractor_id: string;
+  driver_id: string;
+  contractor_name?: string;
+  contractor_company?: string;
+  driver_name?: string;
+  driver_company?: string;
+  total_amount: any;
+  status: string;
+  created_at: string;
+  period_month?: string;
+  period_label?: string;
 }
 
-function mapInvoice(inv: any): Invoice {
-  let month = inv.periodMonth ?? 1;
-  let year = inv.periodYear ?? 2026;
-  if (inv.period_month && typeof inv.period_month === 'string') {
-    const d = new Date(inv.period_month);
-    month = d.getUTCMonth() + 1;
-    year = d.getUTCFullYear();
-  }
-  return {
-    id: inv.id,
-    contractorId: inv.contractor_id ?? inv.contractorId ?? '',
-    driverId: inv.driver_id ?? inv.driverId ?? '',
-    periodMonth: month,
-    periodYear: year,
-    totalAmount: Number(inv.total_amount ?? inv.totalAmount) || 0,
-    status: inv.status ?? 'open',
-    contractorName: inv.contractor_name ?? inv.contractorName ?? '',
-    driverName: inv.driver_name ?? inv.driverName ?? '',
-    createdAt: inv.created_at ?? inv.createdAt ?? '',
-  };
+interface PartyGroup {
+  partyId: string;
+  partyName: string;
+  partyCompany: string | null;
+  invoiceCount: number;
+  totalAmount: number;
+  outstanding: number;
+  paid: number;
+  latestDate: string;
+  hasOpen: boolean;
 }
 
 const STATUS_FILTERS = ['All', 'Open', 'Issued', 'Payment Sent', 'Payment Received', 'Void'] as const;
 
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function getInvoiceStatusColor(status: string): { bg: string; text: string } {
-  switch (status) {
-    case 'payment_received': return { bg: Colors.successBg, text: Colors.success };
-    case 'payment_sent': return { bg: Colors.warningBg, text: Colors.warning };
-    case 'issued': return { bg: 'rgba(59, 130, 246, 0.2)', text: '#3B82F6' };
-    case 'void': return { bg: Colors.destructiveBg, text: Colors.destructive };
-    case 'open': return { bg: 'rgba(107, 112, 128, 0.2)', text: Colors.textMuted };
-    default: return { bg: 'rgba(107, 112, 128, 0.2)', text: Colors.textMuted };
-  }
-}
-
-function formatStatusLabel(status: string): string {
-  return status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+function isContractorRole(role?: string | null): boolean {
+  if (!role) return false;
+  return role === 'trucking_company_contractor' || role === 'contractor' || role === 'trucking_company';
 }
 
 export default function InvoicesScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const [filter, setFilter] = useState<string>('All');
   const [refreshing, setRefreshing] = useState(false);
+
+  const viewerIsContractor = isContractorRole(user?.role);
 
   const filterToDbStatus: Record<string, string> = {
     'Open': 'open', 'Issued': 'issued', 'Payment Sent': 'payment_sent',
@@ -76,26 +60,64 @@ export default function InvoicesScreen() {
     queryKey: [`/api/invoices${queryParam}`],
   });
 
-  const invoices = useMemo(() => {
+  const invoices: RawInvoice[] = useMemo(() => {
     if (!invoicesData) return [];
     const items = invoicesData.invoices || invoicesData;
     if (!Array.isArray(items)) return [];
-    return items.map(mapInvoice);
+    return items as RawInvoice[];
   }, [invoicesData]);
+
+  const groups: PartyGroup[] = useMemo(() => {
+    const map = new Map<string, PartyGroup>();
+    for (const inv of invoices) {
+      const partyId = viewerIsContractor ? inv.driver_id : inv.contractor_id;
+      const partyName = (viewerIsContractor ? inv.driver_name : inv.contractor_name) || 'Unknown';
+      const partyCompany = (viewerIsContractor ? inv.driver_company : inv.contractor_company) || null;
+      if (!partyId) continue;
+      const amt = Number(inv.total_amount) || 0;
+      const isOutstanding = ['open', 'issued', 'payment_sent'].includes(inv.status);
+      const isPaid = inv.status === 'payment_received';
+      const existing = map.get(partyId);
+      if (existing) {
+        existing.invoiceCount += 1;
+        existing.totalAmount += amt;
+        if (isOutstanding) existing.outstanding += amt;
+        if (isPaid) existing.paid += amt;
+        if (inv.created_at > existing.latestDate) existing.latestDate = inv.created_at;
+        if (inv.status === 'open') existing.hasOpen = true;
+      } else {
+        map.set(partyId, {
+          partyId,
+          partyName,
+          partyCompany,
+          invoiceCount: 1,
+          totalAmount: amt,
+          outstanding: isOutstanding ? amt : 0,
+          paid: isPaid ? amt : 0,
+          latestDate: inv.created_at,
+          hasOpen: inv.status === 'open',
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.latestDate.localeCompare(a.latestDate));
+  }, [invoices, viewerIsContractor]);
 
   const stats = useMemo(() => {
     const totalOutstanding = invoices
-      .filter((inv: Invoice) => ['open', 'issued', 'payment_sent'].includes(inv.status))
-      .reduce((sum: number, inv: Invoice) => sum + inv.totalAmount, 0);
+      .filter(inv => ['open', 'issued', 'payment_sent'].includes(inv.status))
+      .reduce((sum, inv) => sum + (Number(inv.total_amount) || 0), 0);
     const totalPaid = invoices
-      .filter((inv: Invoice) => inv.status === 'payment_received')
-      .reduce((sum: number, inv: Invoice) => sum + inv.totalAmount, 0);
+      .filter(inv => inv.status === 'payment_received')
+      .reduce((sum, inv) => sum + (Number(inv.total_amount) || 0), 0);
     return {
       totalOutstanding,
       totalPaid,
       invoiceCount: invoices.length,
     };
   }, [invoices]);
+
+  const partyLabel = viewerIsContractor ? 'DRIVERS / TRUCKING COMPANIES' : 'CONTRACTORS';
+  const partyIconName = viewerIsContractor ? 'person-circle' : 'business';
 
   function renderHeader() {
     return (
@@ -140,39 +162,37 @@ export default function InvoicesScreen() {
           ))}
         </View>
 
-        <Text style={styles.sectionTitle}>INVOICE HISTORY</Text>
+        <Text style={styles.sectionTitle}>{partyLabel}</Text>
       </View>
     );
   }
 
-  function renderInvoice({ item }: { item: Invoice }) {
-    const statusColor = getInvoiceStatusColor(item.status);
-    const monthName = MONTH_NAMES[item.periodMonth - 1] || 'Jan';
-
+  function renderGroup({ item }: { item: PartyGroup }) {
     return (
       <Pressable
-        style={({ pressed }) => [styles.invoiceCard, pressed && styles.invoiceCardPressed]}
-        onPress={() => router.push({ pathname: '/invoice/[id]', params: { id: item.id } })}
+        style={({ pressed }) => [styles.groupCard, pressed && styles.groupCardPressed]}
+        onPress={() => router.push({ pathname: '/invoices-by-party/[partyId]', params: { partyId: item.partyId } })}
       >
-        <View style={styles.invoiceLeft}>
-          <View style={styles.invoiceIcon}>
-            <Ionicons name="document-text" size={18} color={Colors.primary} />
+        <View style={styles.groupLeft}>
+          <View style={styles.groupIcon}>
+            <Ionicons name={partyIconName as any} size={22} color={Colors.primary} />
           </View>
-          <View style={styles.invoiceInfo}>
-            <Text style={styles.invoicePeriod}>{monthName} {item.periodYear}</Text>
-            <Text style={styles.invoiceDriver}>{item.driverName}</Text>
-            <Text style={styles.invoiceDate}>
-              {new Date(item.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+          <View style={styles.groupInfo}>
+            <Text style={styles.groupName} numberOfLines={1}>{item.partyCompany || item.partyName}</Text>
+            {item.partyCompany && (
+              <Text style={styles.groupSubName} numberOfLines={1}>{item.partyName}</Text>
+            )}
+            <Text style={styles.groupMeta}>
+              {item.invoiceCount} invoice{item.invoiceCount !== 1 ? 's' : ''}
+              {item.outstanding > 0 && (
+                <Text style={{ color: Colors.warning }}> · ${item.outstanding.toLocaleString()} due</Text>
+              )}
             </Text>
           </View>
         </View>
-        <View style={styles.invoiceRight}>
-          <Text style={styles.invoiceAmount}>${item.totalAmount.toLocaleString()}</Text>
-          <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
-            <Text style={[styles.statusBadgeText, { color: statusColor.text }]}>
-              {formatStatusLabel(item.status).toUpperCase()}
-            </Text>
-          </View>
+        <View style={styles.groupRight}>
+          <Text style={styles.groupTotal}>${item.totalAmount.toLocaleString()}</Text>
+          <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
         </View>
       </Pressable>
     );
@@ -185,9 +205,9 @@ export default function InvoicesScreen() {
       </View>
 
       <FlatList
-        data={invoices}
-        renderItem={renderInvoice}
-        keyExtractor={item => item.id}
+        data={groups}
+        renderItem={renderGroup}
+        keyExtractor={item => item.partyId}
         contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
         ListHeaderComponent={renderHeader}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
@@ -239,57 +259,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-around',
   },
-  statItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  statDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statLabel: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-    color: Colors.textMuted,
-  },
-  statValue: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 15,
-    color: Colors.text,
-  },
-  statDivider: {
-    width: 1,
-    height: 30,
-    backgroundColor: Colors.border,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 20,
-  },
+  statItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statDot: { width: 8, height: 8, borderRadius: 4 },
+  statLabel: { fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted },
+  statValue: { fontFamily: 'Inter_600SemiBold', fontSize: 15, color: Colors.text },
+  statDivider: { width: 1, height: 30, backgroundColor: Colors.border },
+  filterRow: { flexDirection: 'row', gap: 8, marginBottom: 20, flexWrap: 'wrap' },
   filterChip: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: 'center',
     paddingVertical: 8,
+    paddingHorizontal: 10,
     borderRadius: 8,
     backgroundColor: Colors.card,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  filterChipActive: {
-    backgroundColor: Colors.primaryLight,
-    borderColor: Colors.primary,
-  },
-  filterChipText: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 12,
-    color: Colors.textSecondary,
-  },
-  filterChipTextActive: {
-    color: Colors.primary,
-  },
+  filterChipActive: { backgroundColor: Colors.primaryLight, borderColor: Colors.primary },
+  filterChipText: { fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textSecondary },
+  filterChipTextActive: { color: Colors.primary },
   sectionTitle: {
     fontFamily: 'ChakraPetch_600SemiBold',
     fontSize: 12,
@@ -297,86 +285,33 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 12,
   },
-  invoiceCard: {
+  groupCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: Colors.card,
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 14,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  invoiceCardPressed: {
-    backgroundColor: Colors.cardHover,
-    transform: [{ scale: 0.99 }],
-  },
-  invoiceLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    flex: 1,
-  },
-  invoiceIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
+  groupCardPressed: { backgroundColor: Colors.cardHover, transform: [{ scale: 0.99 }] },
+  groupLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  groupIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  invoiceInfo: {
-    flex: 1,
-    gap: 2,
-  },
-  invoicePeriod: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 14,
-    color: Colors.text,
-  },
-  invoiceDriver: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 12,
-    color: Colors.textSecondary,
-  },
-  invoiceDate: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-    color: Colors.textMuted,
-  },
-  invoiceRight: {
-    alignItems: 'flex-end',
-    gap: 4,
-  },
-  invoiceAmount: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 16,
-    color: Colors.text,
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  statusBadgeText: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 9,
-    letterSpacing: 0.5,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingTop: 60,
-    gap: 8,
-  },
-  emptyTitle: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 16,
-    color: Colors.text,
-    marginTop: 8,
-  },
-  emptyText: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 13,
-    color: Colors.textMuted,
-  },
+  groupInfo: { flex: 1, gap: 2 },
+  groupName: { fontFamily: 'Inter_600SemiBold', fontSize: 15, color: Colors.text },
+  groupSubName: { fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary },
+  groupMeta: { fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  groupRight: { alignItems: 'flex-end', gap: 4, flexDirection: 'row' },
+  groupTotal: { fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text, marginRight: 4 },
+  emptyState: { alignItems: 'center', paddingTop: 60, gap: 8 },
+  emptyTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 16, color: Colors.text, marginTop: 8 },
+  emptyText: { fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted },
 });

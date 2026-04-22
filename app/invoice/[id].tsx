@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl, Linking } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -275,23 +275,54 @@ export default function InvoiceDetailScreen() {
           )}
         </View>
 
-        {driverSnapshot && (driverSnapshot.phone || driverSnapshot.email) && (
-          <View style={styles.contactCard}>
-            <Text style={styles.sectionTitle}>{isContractor ? 'DRIVER CONTACT' : 'CONTRACTOR CONTACT'}</Text>
-            {(isContractor ? driverSnapshot : contractorSnapshot).phone && (
-              <View style={styles.contactRow}>
-                <Ionicons name="call-outline" size={16} color={Colors.textMuted} />
-                <Text style={styles.contactText}>{(isContractor ? driverSnapshot : contractorSnapshot).phone}</Text>
-              </View>
-            )}
-            {(isContractor ? driverSnapshot : contractorSnapshot).email && (
-              <View style={styles.contactRow}>
-                <Ionicons name="mail-outline" size={16} color={Colors.textMuted} />
-                <Text style={styles.contactText}>{(isContractor ? driverSnapshot : contractorSnapshot).email}</Text>
-              </View>
-            )}
-          </View>
-        )}
+        {(() => {
+          const otherEmail = isContractor ? (data.driver_email || driverSnapshot.email) : (data.contractor_email || contractorSnapshot.email);
+          const otherPhone = isContractor ? (data.driver_phone || driverSnapshot.phone) : (data.contractor_phone || contractorSnapshot.phone);
+          const otherAddress = isContractor ? data.driver_address : data.contractor_address;
+          const otherCity = isContractor ? data.driver_city : data.contractor_city;
+          const otherState = isContractor ? data.driver_state : data.contractor_state;
+          const otherZip = isContractor ? data.driver_zip : data.contractor_zip;
+          const otherName = isContractor ? (data.driver_name || driverSnapshot.fullName) : (data.contractor_name || contractorSnapshot.fullName);
+          const otherCompany = isContractor ? (data.driver_company || driverSnapshot.company) : (data.contractor_company || contractorSnapshot.company);
+          const cityLine = [otherCity, otherState].filter(Boolean).join(', ');
+          const fullAddrLine = otherZip && cityLine ? `${cityLine} ${otherZip}` : (cityLine || otherZip || '');
+          const hasAny = otherEmail || otherPhone || otherAddress || fullAddrLine;
+          if (!hasAny) return null;
+          const mapsQuery = [otherAddress, cityLine, otherZip].filter(Boolean).join(', ');
+          return (
+            <View style={styles.contactCard}>
+              <Text style={styles.sectionTitle}>{isContractor ? 'DRIVER / BILL FROM' : 'CONTRACTOR / BILL TO'}</Text>
+              <Text style={styles.billName}>{otherCompany || otherName}</Text>
+              {otherCompany && otherName && otherCompany !== otherName && (
+                <Text style={styles.billSub}>{otherName}</Text>
+              )}
+              {otherEmail && (
+                <Pressable style={styles.contactRow} onPress={() => Linking.openURL(`mailto:${otherEmail}`)}>
+                  <Ionicons name="mail-outline" size={16} color={Colors.textMuted} />
+                  <Text style={[styles.contactText, { color: Colors.primary }]}>{otherEmail}</Text>
+                </Pressable>
+              )}
+              {otherPhone && (
+                <Pressable style={styles.contactRow} onPress={() => Linking.openURL(`tel:${otherPhone}`)}>
+                  <Ionicons name="call-outline" size={16} color={Colors.textMuted} />
+                  <Text style={[styles.contactText, { color: Colors.primary }]}>{otherPhone}</Text>
+                </Pressable>
+              )}
+              {(otherAddress || fullAddrLine) && (
+                <Pressable
+                  style={styles.contactRow}
+                  onPress={() => mapsQuery && Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(mapsQuery)}`)}
+                >
+                  <Ionicons name="location-outline" size={16} color={Colors.textMuted} />
+                  <View style={{ flex: 1 }}>
+                    {otherAddress ? <Text style={[styles.contactText, { color: Colors.primary }]}>{otherAddress}</Text> : null}
+                    {fullAddrLine ? <Text style={[styles.contactText, { color: Colors.primary }]}>{fullAddrLine}</Text> : null}
+                  </View>
+                </Pressable>
+              )}
+            </View>
+          );
+        })()}
       </ScrollView>
     </View>
   );
@@ -546,5 +577,17 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 14,
     color: Colors.text,
+  },
+  billName: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  billSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 6,
   },
 });
