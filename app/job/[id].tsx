@@ -700,7 +700,8 @@ export default function JobDetailScreen() {
     }
     const isWeekend = (jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) === true;
     if (isWeekend && !reassigningAssignmentId) {
-      setWeekendConfirmVisible(true);
+      setTruckSelectVisible(false);
+      setTimeout(() => setWeekendConfirmVisible(true), 300);
       return;
     }
     void doAcceptApi();
