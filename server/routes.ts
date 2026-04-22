@@ -1962,6 +1962,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               ...job,
               vehicleAssignments,
               activeRuns: truckActiveRuns,
+              assignmentStatus: assignment.status === 'pending' ? 'pending' : 'approved',
               vehicle: { id: assignment.vehicleId, make: assignment.make, model: assignment.model, year: assignment.year, truckNumber: assignment.truckNumber, licensePlate: assignment.licensePlate, truckType: assignment.truckType },
             });
           }
@@ -1969,6 +1970,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const enrichedJob = { ...job, vehicleAssignments, activeRuns } as any;
           if (activeAssignments.length === 1) {
             enrichedJob.vehicle = { id: activeAssignments[0].vehicleId, make: activeAssignments[0].make, model: activeAssignments[0].model, year: activeAssignments[0].year, truckNumber: activeAssignments[0].truckNumber, licensePlate: activeAssignments[0].licensePlate, truckType: activeAssignments[0].truckType };
+            enrichedJob.assignmentStatus = activeAssignments[0].status === 'pending' ? 'pending' : 'approved';
           }
           entriesToAdd.push(enrichedJob);
         }
