@@ -109,7 +109,10 @@ export default function CreateJobScreen() {
   const [destinationAddress, setDestinationAddress] = useState('');
   const [destLat, setDestLat] = useState<number | null>(null);
   const [destLng, setDestLng] = useState<number | null>(null);
-  const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | null>(null);
+  const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | 'project' | null>(null);
+  const [projectSiteAddress, setProjectSiteAddress] = useState('');
+  const [projectSiteLat, setProjectSiteLat] = useState<number | null>(null);
+  const [projectSiteLng, setProjectSiteLng] = useState<number | null>(null);
   const [mapPin, setMapPin] = useState<{ latitude: number; longitude: number } | null>(null);
   const [reversingGeocode, setReversingGeocode] = useState(false);
   const [distance, setDistance] = useState('');
@@ -364,10 +367,14 @@ export default function CreateJobScreen() {
       setOriginAddress(address);
       setOriginLat(mapPin.latitude);
       setOriginLng(mapPin.longitude);
-    } else {
+    } else if (mapPickerTarget === 'destination') {
       setDestinationAddress(address);
       setDestLat(mapPin.latitude);
       setDestLng(mapPin.longitude);
+    } else {
+      setProjectSiteAddress(address);
+      setProjectSiteLat(mapPin.latitude);
+      setProjectSiteLng(mapPin.longitude);
     }
 
     setReversingGeocode(false);
@@ -752,6 +759,9 @@ export default function CreateJobScreen() {
       if (!resolvedProjectId && projectName.trim()) {
         const newProject = await apiRequest('POST', '/api/projects', {
           name: projectName.trim(),
+          ...(projectSiteAddress.trim() ? { siteAddress: projectSiteAddress.trim() } : {}),
+          ...(projectSiteLat != null ? { siteLat: String(projectSiteLat) } : {}),
+          ...(projectSiteLng != null ? { siteLng: String(projectSiteLng) } : {}),
         });
         const proj = await newProject.json();
         resolvedProjectId = proj.id;
@@ -867,6 +877,16 @@ export default function CreateJobScreen() {
             value={projectName}
             onChangeText={handleProjectNameChange}
             onFocus={() => setShowProjectDropdown(true)}
+            returnKeyType="next"
+            onSubmitEditing={() => {
+              const trimmed = projectName.trim();
+              if (!trimmed || selectedProject || exactMatch) {
+                setShowProjectDropdown(false);
+                return;
+              }
+              setShowProjectDropdown(false);
+              openMapPicker('project');
+            }}
           />
           {projectName.trim() ? (
             <Pressable onPress={() => { setProjectName(''); setProjectId(''); setShowProjectDropdown(false); }} hitSlop={8}>
