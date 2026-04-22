@@ -495,30 +495,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         params.push(`%${search}%`);
         paramIdx++;
       }
-      // Hide open jobs that are already fully crewed OR have hit their application cap.
-      // Application cap by trucks_needed: 1 -> 5, 2 -> 8, 3+ -> 3 * trucks_needed.
-      // Jobs the current user has already applied to remain visible regardless.
+      // Hide jobs from Find Jobs when they're no longer truly available to apply to.
+      // Conditions for hiding (when caller is NOT the job's contractor):
+      //   a) Fully crewed: approved trucks >= trucks_needed
+      //   b) Application cap hit: (pending+approved) >= cap AND caller hasn't applied
+      //      Cap by trucks_needed: 1 -> 5, 2 -> 8, 3+ -> 3 * trucks_needed
+      //   c) Caller is already an approved truck on this job — it lives on their
+      //      calendar now, not in Find Jobs.
       query += ` AND NOT (
-        j.status::text = 'open'
+        j.status::text IN ('open', 'accepted', 'pending')
+        AND j.contractor_id <> $${paramIdx}
         AND (
           (SELECT COUNT(*) FROM job_assignments ja
             WHERE ja.job_id = j.id AND ja.status::text = 'approved')
           >= COALESCE(j.trucks_needed, 1)
-          OR
-          (SELECT COUNT(*) FROM job_assignments ja
-            WHERE ja.job_id = j.id AND ja.status::text IN ('pending', 'approved'))
-          >= CASE
-              WHEN COALESCE(j.trucks_needed, 1) <= 1 THEN 5
-              WHEN COALESCE(j.trucks_needed, 1) = 2 THEN 8
-              ELSE 3 * COALESCE(j.trucks_needed, 1)
-            END
+          OR EXISTS (
+            SELECT 1 FROM job_assignments ja
+            WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
+              AND ja.status::text = 'approved'
+          )
+          OR (
+            (SELECT COUNT(*) FROM job_assignments ja
+              WHERE ja.job_id = j.id AND ja.status::text IN ('pending', 'approved'))
+            >= CASE
+                WHEN COALESCE(j.trucks_needed, 1) <= 1 THEN 5
+                WHEN COALESCE(j.trucks_needed, 1) = 2 THEN 8
+                ELSE 3 * COALESCE(j.trucks_needed, 1)
+              END
+            AND NOT EXISTS (
+              SELECT 1 FROM job_assignments ja
+              WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
+                AND ja.status::text IN ('pending', 'approved')
+            )
+          )
         )
-        AND NOT EXISTS (
-          SELECT 1 FROM job_assignments ja
-          WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
-            AND ja.status::text NOT IN ('rejected', 'withdrawn')
-        )
-        AND j.contractor_id <> $${paramIdx}
       )`;
       params.push(auth.userId);
       paramIdx++;
