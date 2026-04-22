@@ -490,6 +490,32 @@ export default function CreateJobScreen() {
       const placesData = placesRes && placesRes.ok ? await placesRes.json() : [];
 
       const lowerInput = input.toLowerCase();
+
+      const projectItems = (Array.isArray(projects) ? projects : [])
+        .filter((p: any) => {
+          const name = (p.name || '').toLowerCase();
+          const addr = (p.siteAddress || p.site_address || '').toLowerCase();
+          return (name && name.includes(lowerInput)) || (addr && addr.includes(lowerInput));
+        })
+        .slice(0, 5)
+        .map((p: any, i: number) => {
+          const lat = p.siteLat ?? p.site_lat;
+          const lng = p.siteLng ?? p.site_lng;
+          const addr = p.siteAddress || p.site_address || '';
+          return {
+            place_id: `project_${p.id}_${i}`,
+            description: addr || p.name,
+            saved: true,
+            savedType: 'project',
+            savedLat: lat != null ? Number(lat) : null,
+            savedLng: lng != null ? Number(lng) : null,
+            structured: {
+              main_text: p.name,
+              secondary_text: addr || 'Project (no address set)',
+            },
+          };
+        });
+
       const savedItems = (Array.isArray(savedLocations) ? savedLocations : [])
         .filter((loc: any) => {
           if (dismissedLocations.has(loc.address?.toLowerCase())) return false;
@@ -500,11 +526,11 @@ export default function CreateJobScreen() {
         .slice(0, 3)
         .map((loc: any, i: number) => formatSavedItem(loc, i));
 
-      const combined = [...savedItems, ...(Array.isArray(placesData) ? placesData : [])];
+      const combined = [...projectItems, ...savedItems, ...(Array.isArray(placesData) ? placesData : [])];
       if (target === 'origin') { setOriginSuggestions(combined); setShowOriginSuggestions(true); }
       else { setDestSuggestions(combined); setShowDestSuggestions(true); }
     } catch {}
-  }, [userLat, userLng, dismissedLocations]);
+  }, [userLat, userLng, dismissedLocations, projects, originLat, originLng, destLat, destLng]);
 
   async function geocodeAddress(address: string, target: 'origin' | 'destination') {
     if (address.trim().length < 3) return;
