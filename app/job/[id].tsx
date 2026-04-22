@@ -1291,12 +1291,26 @@ export default function JobDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 24 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}>
-        {(jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) ? (
-          <View style={styles.weekendBanner} testID="weekend-banner">
-            <Ionicons name="warning" size={18} color="#001a00" />
-            <Text style={styles.weekendBannerText}>WEEKEND WORK INCLUDED</Text>
-          </View>
-        ) : null}
+        {(jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) ? (() => {
+          const sat = (jobData as any)?.includes_saturday !== false;
+          const sun = (jobData as any)?.includes_sunday !== false;
+          const subtitle = sat && sun
+            ? 'Saturday & Sunday'
+            : sat
+              ? 'Saturday only'
+              : sun
+                ? 'Sunday only'
+                : null;
+          return (
+            <View style={styles.weekendBanner} testID="weekend-banner">
+              <Ionicons name="warning" size={18} color="#001a00" />
+              <View style={{ alignItems: 'center' }}>
+                <Text style={styles.weekendBannerText}>WEEKEND WORK INCLUDED</Text>
+                {subtitle ? <Text style={styles.weekendBannerSub}>{subtitle}</Text> : null}
+              </View>
+            </View>
+          );
+        })() : null}
         {isRunning && (() => {
           const allCompletedSeconds = getAllCompletedRunsSeconds();
           const activeRun = (jobData?.runs as any[])?.find((r: any) => r.status === 'active' && !r.ended_at);
@@ -3394,6 +3408,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     letterSpacing: 1.2,
     color: '#001a00',
+  },
+  weekendBannerSub: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    color: '#003300',
+    marginTop: 2,
+    letterSpacing: 0.5,
   },
   weekendConfirmCard: {
     backgroundColor: Colors.card,
