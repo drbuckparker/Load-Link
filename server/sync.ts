@@ -202,22 +202,31 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
     );
     const localJobs = localJobsResult.rows;
 
+    const toDayStr = (v: any): string => {
+      if (!v) return '';
+      if (v instanceof Date) return isNaN(v.getTime()) ? '' : v.toISOString().substring(0, 10);
+      const s = String(v);
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
+    };
+
     const deduped = jobs.filter((wj: any) => {
       const wId = wj.id;
       if (localJobs.some((lj: any) => lj.id === wId)) return true;
       const wMaterial = (wj.material || '').toLowerCase().trim();
       const wContractor = String(wj.contractor_id || wj.contractorId || '');
-      const wScheduled = wj.scheduled_date || wj.scheduledDate || '';
-      const wScheduledStr = wScheduled ? String(wScheduled).substring(0, 10) : '';
+      const wScheduledStr = toDayStr(wj.scheduled_date || wj.scheduledDate);
       const wCreated = new Date(wj.created_at || wj.createdAt || 0).getTime();
 
       for (const lj of localJobs) {
         if (lj.id === wId) continue;
         const lMaterial = (lj.material || '').toLowerCase().trim();
         const lContractor = String(lj.contractor_id || '');
-        const lScheduledStr = lj.scheduled_date ? String(lj.scheduled_date).substring(0, 10) : '';
+        const lScheduledStr = toDayStr(lj.scheduled_date);
         const lCreated = new Date(lj.created_at).getTime();
         if (lMaterial === wMaterial && lContractor === wContractor && lScheduledStr === wScheduledStr && Math.abs(wCreated - lCreated) < 300000) {
+          console.log(`syncJobs dedup: dropping website job ${wId} as duplicate of local ${lj.id}`);
           return false;
         }
       }
