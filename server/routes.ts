@@ -2016,6 +2016,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Compute the earnings for a single job from its completed runs.
+  // Returns { earnings, totalMinutes, totalLoads, runs }.
+  async function computeJobEarnings(job: any): Promise<{ earnings: number; totalMinutes: number; totalLoads: number; runs: any[] }> {
+    const runsRes = await pool.query(
+      `SELECT id, started_at, ended_at, actual_duration_minutes, billed_duration_minutes, loads_hauled, status
+       FROM job_runs WHERE job_id = $1`,
+      [job.id]
+    );
+    let totalMinutes = 0;
+    let totalLoads = 0;
+    for (const r of runsRes.rows) {
+      const billed = r.billed_duration_minutes != null ? Number(r.billed_duration_minutes) : null;
+      const actual = r.actual_duration_minutes != null ? Number(r.actual_duration_minutes) : null;
+      let mins = 0;
+      if (billed != null) mins = billed;
+      else if (actual != null) mins = actual;
+      else if (r.started_at && r.ended_at) {
+        mins = Math.max(0, (new Date(r.ended_at).getTime() - new Date(r.started_at).getTime()) / 60000);
+      } else if (r.started_at && r.status !== 'completed') {
+        mins = Math.max(0, (Date.now() - new Date(r.started_at).getTime()) / 60000);
+      }
+      totalMinutes += mins;
+      totalLoads += Number(r.loads_hauled || 0);
+    }
+    const rate = Number(job.rate || 0);
+    let earnings = 0;
+    switch (job.rate_type) {
+      case 'per_hour':
+        earnings = (totalMinutes / 60) * rate;
+        break;
+      case 'per_load':
+        earnings = totalLoads * rate;
+        break;
+      case 'flat':
+      case 'per_job':
+        earnings = rate;
+        break;
+      default:
+        earnings = (totalMinutes / 60) * rate;
+    }
+    return { earnings, totalMinutes, totalLoads, runs: runsRes.rows };
+  }
+
+  // Find all jobs that should be tallied under a given invoice, then recompute totals.
+  // For OPEN invoices: act as a live, rolling tally of all unbilled work between the
+  // contractor and driver that has any tracked time/loads. For issued/paid invoices:
+  // stay locked to the explicitly-linked jobs (snapshot semantics).
+  async function recomputeInvoice(invoice: any): Promise<{ jobs: any[]; total: number; jobCount: number }> {
+    const isOpen = invoice.status === 'open';
+    let jobsRes;
+    if (isOpen) {
+      jobsRes = await pool.query(
+        `SELECT DISTINCT j.* FROM jobs j
+         LEFT JOIN job_runs jr ON jr.job_id = j.id
+         WHERE j.invoice_id = $1
+            OR (j.contractor_id = $2
+                AND (j.driver_id = $3 OR jr.driver_id = $3)
+                AND j.status::text IN ('completed', 'in_progress', 'accepted')
+                AND (j.invoice_id IS NULL OR j.invoice_id = $1))`,
+        [invoice.id, invoice.contractor_id, invoice.driver_id]
+      );
+    } else {
+      jobsRes = await pool.query(
+        `SELECT DISTINCT j.* FROM jobs j WHERE j.invoice_id = $1`,
+        [invoice.id]
+      );
+    }
+    let total = 0;
+    const enrichedJobs: any[] = [];
+    for (const job of jobsRes.rows) {
+      const calc = await computeJobEarnings(job);
+      total += calc.earnings;
+      enrichedJobs.push({
+        ...job,
+        computed_earnings: Number(calc.earnings.toFixed(2)),
+        computed_total_minutes: Math.round(calc.totalMinutes),
+        computed_total_loads: calc.totalLoads,
+      });
+    }
+    return { jobs: enrichedJobs, total: Number(total.toFixed(2)), jobCount: enrichedJobs.length };
+  }
+
   app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
@@ -2041,7 +2123,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       query += ` ORDER BY mi.created_at DESC`;
       const result = await pool.query(query, params);
-      return res.json(result.rows.map(addDualKeys));
+
+      // Recompute totals for each invoice from current job runs.
+      const recomputed = await Promise.all(result.rows.map(async (row) => {
+        try {
+          const calc = await recomputeInvoice(row);
+          row.total_amount = calc.total;
+          row.job_count = calc.jobCount;
+        } catch (e) {
+          // fall back to stored value on error
+        }
+        return row;
+      }));
+
+      return res.json(recomputed.map(addDualKeys));
     } catch (e: any) {
       console.error("GET /api/invoices error:", e.message);
       return res.json([]);
@@ -2068,11 +2163,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       if (result.rows.length > 0) {
         const invoice = result.rows[0];
-        const jobsResult = await pool.query(
-          `SELECT * FROM jobs WHERE invoice_id = $1 OR (contractor_id = $2 AND status = 'completed')`,
-          [req.params.id, invoice.contractor_id]
-        );
-        invoice.jobs = jobsResult.rows.map(addDualKeys);
+        const calc = await recomputeInvoice(invoice);
+        invoice.jobs = calc.jobs.map(addDualKeys);
+        invoice.total_amount = calc.total;
+        invoice.job_count = calc.jobCount;
         return res.json(addDualKeys(invoice));
       }
       return res.status(404).json({ message: "Invoice not found" });

@@ -267,6 +267,32 @@ export default function InvoiceDetailScreen() {
                         </View>
                       )}
                     </View>
+                    {(job.computed_total_minutes != null || job.computed_total_loads != null) && (
+                      <View style={styles.jobBilledRow}>
+                        {job.rate_type === 'per_hour' && job.computed_total_minutes != null && (
+                          <View style={styles.billedItem}>
+                            <Text style={styles.billedLabel}>Truck Time</Text>
+                            <Text style={styles.billedValue}>
+                              {Math.floor(job.computed_total_minutes / 60)}h {job.computed_total_minutes % 60}m
+                            </Text>
+                          </View>
+                        )}
+                        {job.rate_type === 'per_load' && (
+                          <View style={styles.billedItem}>
+                            <Text style={styles.billedLabel}>Loads</Text>
+                            <Text style={styles.billedValue}>{job.computed_total_loads || 0}</Text>
+                          </View>
+                        )}
+                        {job.computed_earnings != null && (
+                          <View style={[styles.billedItem, { alignItems: 'flex-end' }]}>
+                            <Text style={styles.billedLabel}>Earned</Text>
+                            <Text style={[styles.billedValue, { color: Colors.success }]}>
+                              ${Number(job.computed_earnings).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    )}
                     <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ position: 'absolute', right: 12, top: '50%' }} />
                   </Pressable>
                 );
@@ -559,6 +585,28 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 11,
     color: Colors.textMuted,
+  },
+  jobBilledRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  billedItem: { gap: 2 },
+  billedLabel: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 10,
+    color: Colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  billedValue: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.text,
   },
   contactCard: {
     backgroundColor: Colors.card,
