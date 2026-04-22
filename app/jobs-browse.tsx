@@ -64,6 +64,8 @@ function mapDbJob(raw: any): Job {
     createdAt: raw.created_at || raw.createdAt || '',
     projectName: raw.project_name || raw.projectName,
     projectId: raw.project_id || raw.projectId,
+    pendingApplications: Number(raw.pending_applications || raw.pendingApplications || 0),
+    approvedAssignments: Number(raw.approved_assignments || raw.approvedAssignments || 0),
   };
 }
 
@@ -365,12 +367,27 @@ export default function JobsBrowseScreen() {
   function renderContractorCard({ item }: { item: Job }) {
     const statusColor = getStatusColor(item.status);
     const jobTypeColor = getJobTypeColor(item.jobType);
+    const pending = item.pendingApplications || 0;
+    const hasPending = pending > 0;
 
     return (
       <Pressable
-        style={({ pressed }) => [styles.cardContainer, pressed && styles.cardPressed]}
+        style={({ pressed }) => [
+          styles.cardContainer,
+          hasPending && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' as any, backgroundColor: Colors.warningBg },
+          pressed && styles.cardPressed,
+        ]}
         onPress={() => router.push(`/job/${item.id}`)}
       >
+        {hasPending && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(245,158,11,0.25)' }}>
+            <Ionicons name="alert-circle" size={14} color={Colors.warning} />
+            <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.warning, letterSpacing: 0.5, flex: 1 }}>
+              {pending} TRUCK{pending !== 1 ? 'S' : ''} APPLIED — TAP TO REVIEW
+            </Text>
+            <Ionicons name="chevron-forward" size={14} color={Colors.warning} />
+          </View>
+        )}
         {item.projectName && !selectedProjectFilter && (
           <Text style={styles.cardProjectName} numberOfLines={1}>{item.projectName}</Text>
         )}

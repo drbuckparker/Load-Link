@@ -1762,7 +1762,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const status = req.query.status as string | undefined;
       const search = req.query.search as string | undefined;
 
-      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
+      let query = `SELECT j.*, cp.name as project_name,
+          COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'pending'), 0) as pending_applications,
+          COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'approved'), 0) as approved_assignments
+        FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
       const params: any[] = [contractorId];
       let paramIdx = 2;
 

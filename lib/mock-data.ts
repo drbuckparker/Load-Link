@@ -32,6 +32,8 @@ export interface Job {
   createdAt: string;
   projectName?: string;
   projectId?: string;
+  pendingApplications?: number;
+  approvedAssignments?: number;
 }
 
 export interface Message {
