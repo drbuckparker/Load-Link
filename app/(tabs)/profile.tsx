@@ -416,6 +416,32 @@ export default function ProfileScreen() {
           <Text style={styles.roleHeaderDesc}>Change how you use LoadLink. Your current role is highlighted.</Text>
         </View>
 
+        {(user.role === 'trucking_company' || user.role === 'trucking_company_contractor') && (
+          <View style={styles.statusCard}>
+            <View style={styles.statusLeft}>
+              <Ionicons name="car" size={20} color={Colors.success} />
+              <View>
+                <Text style={styles.statusTitle}>I also drive</Text>
+                <Text style={styles.statusSubtitle}>Show up in my fleet & get driver job notifications</Text>
+              </View>
+            </View>
+            <Switch
+              value={!!(user as any).alsoDriver || !!(user as any).also_driver}
+              onValueChange={async (val) => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                try {
+                  await updateUser({ alsoDriver: val } as any);
+                  refreshUser?.();
+                } catch (e: any) {
+                  Alert.alert('Error', e.message || 'Failed to update');
+                }
+              }}
+              trackColor={{ false: Colors.border, true: Colors.success }}
+              thumbColor="#fff"
+            />
+          </View>
+        )}
+
         <View style={styles.roleGrid}>
           {ROLES.map(r => {
             const isActive = user.role === r.key;

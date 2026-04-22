@@ -1372,7 +1372,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
     try {
       const search = (req.query.q || req.query.search || '') as string;
-      let query = `SELECT id, full_name, email, phone, truck_type, rating, total_jobs, profile_image_url, is_connected FROM users WHERE role LIKE '%driver%'`;
+      let query = `SELECT id, full_name, email, phone, truck_type, rating, total_jobs, profile_image_url, is_connected FROM users WHERE (role LIKE '%driver%' OR also_driver = true)`;
       const params: any[] = [];
       if (search) {
         query += ` AND (full_name ILIKE $1 OR email ILIKE $1)`;

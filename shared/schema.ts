@@ -162,6 +162,7 @@ export const users = pgTable("users", {
   privacy_policy_accepted_at: timestamp("privacy_policy_accepted_at"),
   preferred_material_unit: text("preferred_material_unit").default("tons"),
   is_suspended: boolean("is_suspended").default(false),
+  also_driver: boolean("also_driver").default(false),
   suspended_at: timestamp("suspended_at"),
   suspend_reason: text("suspend_reason"),
   suspended_by: varchar("suspended_by"),
