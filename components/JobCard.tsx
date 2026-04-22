@@ -25,6 +25,13 @@ export default function JobCard({ job, onPress, showStatus = false }: JobCardPro
       style={({ pressed }) => [styles.container, pressed && styles.pressed]}
       onPress={handlePress}
     >
+      {job.includesWeekends ? (
+        <View style={styles.weekendBanner} testID="weekend-banner">
+          <Ionicons name="warning" size={12} color="#001a00" />
+          <Text style={styles.weekendBannerText}>WEEKEND WORK INCLUDED</Text>
+        </View>
+      ) : null}
+
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.material} numberOfLines={1}>{job.material}</Text>
@@ -143,6 +150,26 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 16,
     color: Colors.text,
+  },
+  weekendBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#39ff14',
+    borderColor: '#a4ff7a',
+    borderWidth: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+  weekendBannerText: {
+    fontFamily: Platform.select({ ios: 'ChakraPetch_700Bold', default: 'ChakraPetch_700Bold' }),
+    fontWeight: '700',
+    fontSize: 11,
+    letterSpacing: 1,
+    color: '#001a00',
   },
   urgentBadge: {
     flexDirection: 'row',

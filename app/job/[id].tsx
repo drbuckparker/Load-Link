@@ -642,12 +642,28 @@ export default function JobDetailScreen() {
     ]);
   }
 
-  function handleAccept() {
+  function openTruckPicker() {
     setSelectedVehicleIds([]);
     setSelectedAvailableDays(null);
     setTruckWarning(null);
     setTruckSelectVisible(true);
     queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/vehicle-conflicts`] });
+  }
+
+  function handleAccept() {
+    const isWeekend = (jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) === true;
+    if (isWeekend) {
+      Alert.alert(
+        'Weekend work included',
+        'This job includes work on weekends. Are you OK with working weekends?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Yes, accept', style: 'default', onPress: openTruckPicker },
+        ],
+      );
+      return;
+    }
+    openTruckPicker();
   }
 
   async function handleConfirmAccept() {
@@ -1272,6 +1288,12 @@ export default function JobDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 : insets.bottom + 24 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}>
+        {(jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) ? (
+          <View style={styles.weekendBanner} testID="weekend-banner">
+            <Ionicons name="warning" size={18} color="#001a00" />
+            <Text style={styles.weekendBannerText}>WEEKEND WORK INCLUDED</Text>
+          </View>
+        ) : null}
         {isRunning && (() => {
           const allCompletedSeconds = getAllCompletedRunsSeconds();
           const activeRun = (jobData?.runs as any[])?.find((r: any) => r.status === 'active' && !r.ended_at);
@@ -3307,6 +3329,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textSecondary,
     letterSpacing: 1,
+  },
+  weekendBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#39ff14',
+    borderColor: '#a4ff7a',
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginBottom: 12,
+    shadowColor: '#39ff14',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  weekendBannerText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    letterSpacing: 1.2,
+    color: '#001a00',
   },
   msgBtn: {
     width: 40,

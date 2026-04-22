@@ -26,6 +26,7 @@ export interface Job {
   estimatedCost?: number;
   requiresTarp: boolean;
   requiresWeightTickets: boolean;
+  includesWeekends?: boolean;
   capacityNeeded?: string;
   totalTonsNeeded?: number;
   createdAt: string;

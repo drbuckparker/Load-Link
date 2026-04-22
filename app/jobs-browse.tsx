@@ -58,6 +58,7 @@ function mapDbJob(raw: any): Job {
     estimatedCost: raw.estimated_cost || raw.estimatedCost,
     requiresTarp: Boolean(raw.requires_tarp || raw.requiresTarp),
     requiresWeightTickets: Boolean(raw.requires_weight_tickets || raw.requiresWeightTickets),
+    includesWeekends: Boolean(raw.includes_weekends || raw.includesWeekends),
     capacityNeeded: raw.capacity_needed || raw.capacityNeeded,
     totalTonsNeeded: raw.total_tons_needed || raw.totalTonsNeeded,
     createdAt: raw.created_at || raw.createdAt || '',
