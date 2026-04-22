@@ -218,6 +218,7 @@ export default function JobDetailScreen() {
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
   const [selectedAvailableDays, setSelectedAvailableDays] = useState<number | null>(null);
   const [acceptingJob, setAcceptingJob] = useState(false);
+  const [weekendConfirmVisible, setWeekendConfirmVisible] = useState(false);
   const [truckWarning, setTruckWarning] = useState<string | null>(null);
   const truckWarningTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [acceptBannerVisible, setAcceptBannerVisible] = useState(false);
@@ -642,7 +643,7 @@ export default function JobDetailScreen() {
     ]);
   }
 
-  function openTruckPicker() {
+  function handleAccept() {
     setSelectedVehicleIds([]);
     setSelectedAvailableDays(null);
     setTruckWarning(null);
@@ -650,28 +651,7 @@ export default function JobDetailScreen() {
     queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/vehicle-conflicts`] });
   }
 
-  function handleAccept() {
-    const isWeekend = (jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) === true;
-    if (isWeekend) {
-      Alert.alert(
-        'Weekend work included',
-        'This job includes work on weekends. Are you OK with working weekends?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Yes, accept', style: 'default', onPress: openTruckPicker },
-        ],
-      );
-      return;
-    }
-    openTruckPicker();
-  }
-
-  async function handleConfirmAccept() {
-    if (selectedVehicleIds.length === 0) {
-      showTruckWarning('Please select at least one truck to assign to this job');
-      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      return;
-    }
+  async function doAcceptApi() {
     setAcceptingJob(true);
     try {
       if (reassigningAssignmentId) {
@@ -710,6 +690,20 @@ export default function JobDetailScreen() {
       showTruckWarning(e.message || (reassigningAssignmentId ? 'Failed to reassign truck' : 'Failed to accept job'));
     }
     setAcceptingJob(false);
+  }
+
+  function handleConfirmAccept() {
+    if (selectedVehicleIds.length === 0) {
+      showTruckWarning('Please select at least one truck to assign to this job');
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+    const isWeekend = (jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) === true;
+    if (isWeekend && !reassigningAssignmentId) {
+      setWeekendConfirmVisible(true);
+      return;
+    }
+    void doAcceptApi();
   }
 
   async function handleRemoveTruck(assignmentId: string) {
@@ -2859,6 +2853,42 @@ export default function JobDetailScreen() {
       </Modal>
 
       <Modal
+        visible={weekendConfirmVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setWeekendConfirmVisible(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setWeekendConfirmVisible(false)}>
+          <Pressable style={styles.weekendConfirmCard} onPress={() => {}}>
+            <View style={styles.weekendConfirmIconWrap}>
+              <Ionicons name="warning" size={28} color="#001a00" />
+            </View>
+            <Text style={styles.weekendConfirmTitle}>WEEKEND WORK INCLUDED</Text>
+            <Text style={styles.weekendConfirmBody}>
+              This job includes work on weekends. Are you OK with working weekends?
+            </Text>
+            <View style={styles.weekendConfirmButtons}>
+              <Pressable
+                style={[styles.weekendConfirmBtn, styles.weekendConfirmCancel]}
+                onPress={() => setWeekendConfirmVisible(false)}
+                disabled={acceptingJob}
+              >
+                <Text style={styles.weekendConfirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.weekendConfirmBtn, styles.weekendConfirmYes]}
+                onPress={() => { setWeekendConfirmVisible(false); void doAcceptApi(); }}
+                disabled={acceptingJob}
+                testID="weekend-confirm-yes"
+              >
+                <Text style={styles.weekendConfirmYesText}>Yes, accept</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
         visible={truckSelectVisible}
         transparent
         animationType="slide"
@@ -3353,6 +3383,73 @@ const styles = StyleSheet.create({
     fontSize: 14,
     letterSpacing: 1.2,
     color: '#001a00',
+  },
+  weekendConfirmCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 16,
+    padding: 22,
+    marginHorizontal: 24,
+    width: '85%',
+    maxWidth: 380,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#39ff14',
+  },
+  weekendConfirmIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#39ff14',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  weekendConfirmTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    letterSpacing: 1.2,
+    color: '#39ff14',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  weekendConfirmBody: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 15,
+    color: Colors.text,
+    textAlign: 'center',
+    marginBottom: 22,
+    lineHeight: 21,
+  },
+  weekendConfirmButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  weekendConfirmBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weekendConfirmCancel: {
+    backgroundColor: Colors.cardHover,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  weekendConfirmYes: {
+    backgroundColor: '#39ff14',
+  },
+  weekendConfirmCancelText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: Colors.text,
+  },
+  weekendConfirmYesText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: '#001a00',
+    letterSpacing: 0.8,
   },
   msgBtn: {
     width: 40,
