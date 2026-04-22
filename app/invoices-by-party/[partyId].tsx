@@ -1,4 +1,4 @@
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl, Linking, Alert } from 'react-native';
+import { View, Text, SectionList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl, Linking, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -100,6 +100,18 @@ export default function InvoicesByPartyScreen() {
     return { total, outstanding, paid };
   }, [invoices]);
 
+  const sections = useMemo(() => {
+    const active = invoices.filter(i => i.status !== 'payment_received');
+    const paid = invoices.filter(i => i.status === 'payment_received');
+    const sortByDateDesc = (a: any, b: any) => (b.created_at || '').localeCompare(a.created_at || '');
+    active.sort(sortByDateDesc);
+    paid.sort(sortByDateDesc);
+    const out: { title: string; data: any[] }[] = [];
+    if (active.length > 0) out.push({ title: 'ACTIVE', data: active });
+    if (paid.length > 0) out.push({ title: 'PAID INVOICES', data: paid });
+    return out;
+  }, [invoices]);
+
   const fullAddress = partyInfo ? buildAddress(partyInfo.address, partyInfo.city, partyInfo.state, partyInfo.zip) : '';
 
   function renderHeader() {
@@ -176,7 +188,6 @@ export default function InvoicesByPartyScreen() {
           </View>
         </View>
 
-        <Text style={styles.sectionTitle}>INVOICES ({invoices.length})</Text>
       </View>
     );
   }
@@ -269,13 +280,20 @@ export default function InvoicesByPartyScreen() {
         <View style={{ width: 36 }} />
       </View>
 
-      <FlatList
-        data={invoices}
+      <SectionList
+        sections={sections}
         renderItem={renderInvoice}
-        keyExtractor={item => item.id}
+        keyExtractor={(item: any) => item.id}
         contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
         ListHeaderComponent={renderHeader}
+        renderSectionHeader={({ section }) => (
+          <Text style={[styles.sectionTitle, section.title === 'PAID INVOICES' && styles.sectionTitlePaid]}>
+            {section.title} ({section.data.length})
+          </Text>
+        )}
+        SectionSeparatorComponent={({ leadingItem }) => leadingItem ? <View style={{ height: 16 }} /> : null}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        stickySectionHeadersEnabled={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith('/api/invoices') }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           isLoading ? (
@@ -380,6 +398,13 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     letterSpacing: 1,
     marginBottom: 12,
+  },
+  sectionTitlePaid: {
+    color: Colors.success,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    paddingTop: 16,
+    marginTop: 4,
   },
   invoiceRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   clearBtn: {

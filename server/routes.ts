@@ -2128,14 +2128,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       query += ` ORDER BY mi.created_at DESC`;
       const result = await pool.query(query, params);
 
-      // Recompute totals for each invoice from current job runs.
+      // Recompute totals for OPEN invoices only (live tally). Issued / paid / void
+      // invoices keep their stored snapshot total — that history shouldn't shift.
       const recomputed = await Promise.all(result.rows.map(async (row) => {
-        try {
-          const calc = await recomputeInvoice(row);
-          row.total_amount = calc.total;
-          row.job_count = calc.jobCount;
-        } catch (e) {
-          // fall back to stored value on error
+        if (row.status === 'open') {
+          try {
+            const calc = await recomputeInvoice(row);
+            row.total_amount = calc.total;
+            row.job_count = calc.jobCount;
+          } catch (e) {
+            // fall back to stored value on error
+          }
         }
         return row;
       }));
