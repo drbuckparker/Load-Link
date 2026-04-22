@@ -329,6 +329,14 @@ export default function JobsBrowseScreen() {
     return mapped;
   }, [rawJobs, activeFilter]);
 
+  const jobsListData = useMemo(() => {
+    if (!selectedProjectFilter || activeFilter === 'Completed') return jobs as any[];
+    const completed = jobs.filter(j => String(j.status).toLowerCase() === 'completed');
+    const active = jobs.filter(j => String(j.status).toLowerCase() !== 'completed');
+    if (completed.length === 0) return active as any[];
+    return [...active, { id: '__completed_divider__', __divider: true, count: completed.length }, ...completed] as any[];
+  }, [jobs, selectedProjectFilter, activeFilter]);
+
   const filteredProjects = useMemo(() => {
     let list = projects;
     if (showArchived) {
@@ -797,9 +805,22 @@ export default function JobsBrowseScreen() {
             </View>
           ) : (
             <FlatList
-              data={jobs}
-              keyExtractor={(item) => item.id}
-              renderItem={isContractor ? renderContractorCard : renderDriverCard}
+              data={jobsListData}
+              keyExtractor={(item: any) => item.id}
+              renderItem={({ item }: any) => {
+                if (item.__divider) {
+                  return (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 }}>
+                      <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
+                      <Text style={{ fontFamily: 'ChakraPetch_600SemiBold', fontSize: 11, color: Colors.textMuted, letterSpacing: 1 }}>
+                        COMPLETED ({item.count})
+                      </Text>
+                      <View style={{ flex: 1, height: 1, backgroundColor: Colors.border }} />
+                    </View>
+                  );
+                }
+                return isContractor ? renderContractorCard({ item }) : renderDriverCard({ item });
+              }}
               contentContainerStyle={styles.listContent}
               ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
               showsVerticalScrollIndicator={false}

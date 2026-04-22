@@ -589,6 +589,33 @@ export default function JobDetailScreen() {
     ]);
   }
 
+  async function handleMarkComplete() {
+    const doComplete = async () => {
+      try {
+        const todayIso = new Date().toISOString();
+        await apiRequest('PUT', `/api/jobs/${id}`, { status: 'completed', completed_date: todayIso });
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        queryClient.invalidateQueries({ predicate: (q) => {
+          const key = q.queryKey.join('/');
+          return key.includes('/api/jobs') || key.includes('/api/contractor');
+        }});
+        if (router.canGoBack()) router.back();
+      } catch (e: any) {
+        Alert.alert('Error', e.message || 'Failed to mark complete');
+      }
+    };
+    if (Platform.OS === 'web') {
+      if (window.confirm('Mark this job as completed? It will be moved to the completed section.')) {
+        doComplete();
+      }
+      return;
+    }
+    Alert.alert('Mark Complete', 'Mark this job as completed? It will be moved to the completed section.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Mark Complete', onPress: doComplete },
+    ]);
+  }
+
   async function handleCancelJob() {
     const doCancel = async () => {
       try {
@@ -2319,6 +2346,13 @@ export default function JobDetailScreen() {
         {isMyPostedJob && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
           <View style={{ gap: 10, marginHorizontal: 16, marginTop: 10 }}>
             <Pressable
+              style={({ pressed }) => [styles.completeJobBtn, pressed && { opacity: 0.85 }]}
+              onPress={handleMarkComplete}
+            >
+              <Ionicons name="checkmark-circle" size={20} color={Colors.success} />
+              <Text style={styles.completeJobBtnText}>MARK JOB COMPLETED</Text>
+            </Pressable>
+            <Pressable
               style={({ pressed }) => [styles.editJobBtn, pressed && { opacity: 0.85 }]}
               onPress={() => router.push(`/edit-job/${id}`)}
             >
@@ -3863,6 +3897,23 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase' as const,
     marginBottom: 1,
+  },
+  completeJobBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    borderRadius: 12,
+    height: 48,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.35)',
+  },
+  completeJobBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.success,
+    letterSpacing: 1,
   },
   editJobBtn: {
     flexDirection: 'row',
