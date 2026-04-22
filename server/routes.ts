@@ -621,6 +621,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+
+      const beforeRow = await pool.query(`SELECT scheduled_date, material, contractor_id FROM jobs WHERE id = $1`, [req.params.id]);
+      const prevDate = beforeRow.rows[0]?.scheduled_date ? String(beforeRow.rows[0].scheduled_date).slice(0, 10) : null;
+      const jobMaterial = beforeRow.rows[0]?.material || '';
+      const jobContractorId = beforeRow.rows[0]?.contractor_id;
+
       const updates: string[] = [];
       const values: any[] = [];
       let idx = 1;
@@ -637,6 +643,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         values.push(req.params.id);
         await pool.query(`UPDATE jobs SET ${updates.join(', ')} WHERE id = $${idx}`, values);
       }
+
+      const newDateRaw = req.body?.scheduledDate ?? req.body?.scheduled_date;
+      const newDate = newDateRaw ? String(newDateRaw).slice(0, 10) : null;
+      const dateChanged = newDate && prevDate && newDate !== prevDate;
+
+      if (dateChanged) {
+        const approvedAssignments = await pool.query(
+          `SELECT id, driver_id FROM job_assignments WHERE job_id = $1 AND status::text = 'approved'`,
+          [req.params.id]
+        );
+        if (approvedAssignments.rows.length > 0) {
+          await pool.query(
+            `UPDATE job_assignments SET status = 'pending', approved_at = NULL WHERE job_id = $1 AND status::text = 'approved'`,
+            [req.params.id]
+          );
+          await pool.query(`UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1 AND status::text = 'accepted'`, [req.params.id]);
+
+          const contractorRow = jobContractorId
+            ? await pool.query(`SELECT full_name, company FROM users WHERE id::text = $1`, [String(jobContractorId)])
+            : { rows: [] as any[] };
+          const contractorName = contractorRow.rows[0]?.company || contractorRow.rows[0]?.full_name || 'The contractor';
+          const formatted = (() => {
+            try {
+              const [y, m, d] = newDate.split('-').map(Number);
+              return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            } catch { return newDate; }
+          })();
+          const notifTitle = 'Job Date Changed - Confirm Availability';
+          const notifBody = `${contractorName} moved the ${jobMaterial || 'job'} to ${formatted}. Re-confirm to keep your assignment.`;
+          for (const a of approvedAssignments.rows) {
+            if (a.driver_id) {
+              sendPushNotification(String(a.driver_id), notifTitle, notifBody, { jobId: req.params.id, type: 'job_date_changed' });
+            }
+          }
+        }
+      }
+
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
       pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
       return res.json(addDualKeys(result.rows[0] || { id: req.params.id }));
