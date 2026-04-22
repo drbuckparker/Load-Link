@@ -39,6 +39,20 @@ const ROLES = [
   { key: 'driver_trucking_company', label: 'DRIVER + TRUCKING CO.', desc: 'Drive and manage fleet', icon: 'git-network', color: '#06b6d4' },
 ];
 
+function formatRoleLabel(role: string): string {
+  if (!role) return '';
+  const map: Record<string, string> = {
+    trucking_company_contractor: 'TRUCKING COMPANY/CONTRACTOR',
+    trucking_company: 'TRUCKING COMPANY',
+    contractor: 'CONTRACTOR',
+    driver: 'DRIVER',
+    driver_contractor: 'DRIVER/CONTRACTOR',
+    driver_trucking_company: 'DRIVER/TRUCKING COMPANY',
+    foreman: 'FOREMAN',
+  };
+  return map[role] || role.replace(/_/g, ' ').toUpperCase();
+}
+
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const { user, logout, updateUser, refreshUser } = useAuth();
@@ -194,7 +208,7 @@ export default function ProfileScreen() {
             <Ionicons name="pencil" size={14} color={Colors.textMuted} />
           </Pressable>
           <View style={styles.roleBadge}>
-            <Text style={styles.roleBadgeText}>{user.role.replace(/_/g, ' ').toUpperCase()}</Text>
+            <Text style={styles.roleBadgeText}>{formatRoleLabel(user.role)}</Text>
           </View>
 
           <View style={styles.statsRow}>
