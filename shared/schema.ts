@@ -306,6 +306,7 @@ export const monthlyInvoices = pgTable("monthly_invoices", {
   contractor_snapshot: jsonb("contractor_snapshot"),
   driver_snapshot: jsonb("driver_snapshot"),
   notes: text("notes"),
+  hidden_at: timestamp("hidden_at"),
   created_at: timestamp("created_at").defaultNow(),
   updated_at: timestamp("updated_at"),
 });

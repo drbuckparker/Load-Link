@@ -2102,6 +2102,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const status = req.query.status as string | undefined;
+      const includeHidden = req.query.include_hidden === '1' || req.query.include_hidden === 'true';
       let query = `
         SELECT mi.*,
           c.full_name AS contractor_name, c.company AS contractor_company,
@@ -2115,11 +2116,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         FROM monthly_invoices mi
         LEFT JOIN users c ON c.id = mi.contractor_id
         LEFT JOIN users d ON d.id = mi.driver_id
-        WHERE mi.contractor_id = $1 OR mi.driver_id = $1`;
+        WHERE (mi.contractor_id = $1 OR mi.driver_id = $1)`;
       const params: any[] = [auth.userId];
+      if (!includeHidden) {
+        query += ` AND mi.hidden_at IS NULL`;
+      }
       if (status) {
-        query += ` AND mi.status::text = $2`;
         params.push(status.toLowerCase());
+        query += ` AND mi.status::text = $${params.length}`;
       }
       query += ` ORDER BY mi.created_at DESC`;
       const result = await pool.query(query, params);
@@ -2186,6 +2190,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json(addDualKeys(result.rows[0] || {}));
     } catch {
       return res.status(500).json({ message: "Failed to update invoice status" });
+    }
+  });
+
+  // Hide a (zero-balance) invoice from the default list.
+  app.post("/api/invoices/:id/hide", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT * FROM monthly_invoices WHERE id = $1 AND (contractor_id = $2 OR driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (result.rows.length === 0) return res.status(404).json({ message: "Invoice not found" });
+      await pool.query(`UPDATE monthly_invoices SET hidden_at = NOW(), updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      return res.json({ success: true });
+    } catch (e: any) {
+      console.error("POST /api/invoices/:id/hide error:", e.message);
+      return res.status(500).json({ message: "Failed to hide invoice" });
+    }
+  });
+
+  app.post("/api/invoices/:id/unhide", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const result = await pool.query(
+        `SELECT * FROM monthly_invoices WHERE id = $1 AND (contractor_id = $2 OR driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (result.rows.length === 0) return res.status(404).json({ message: "Invoice not found" });
+      await pool.query(`UPDATE monthly_invoices SET hidden_at = NULL, updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      return res.json({ success: true });
+    } catch (e: any) {
+      console.error("POST /api/invoices/:id/unhide error:", e.message);
+      return res.status(500).json({ message: "Failed to unhide invoice" });
     }
   });
 

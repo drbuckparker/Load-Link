@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useState, useMemo } from 'react';
-import { queryClient } from '@/lib/query-client';
+import { queryClient, apiRequest } from '@/lib/query-client';
 import { useAuth } from '@/contexts/AuthContext';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -181,6 +181,33 @@ export default function InvoicesByPartyScreen() {
     );
   }
 
+  async function hideInvoice(id: string) {
+    try {
+      await apiRequest('POST', `/api/invoices/${id}/hide`);
+      await queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith('/api/invoices') });
+    } catch (e: any) {
+      Alert.alert('Could not clear invoice', e?.message || 'Please try again.');
+    }
+  }
+
+  function confirmHide(item: any) {
+    const label = `${item.period_label || ''}`.trim() || 'this invoice';
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`Clear ${label} from your view?\n\nIt has a $0 balance. You can restore it later from the website.`)) {
+        hideInvoice(item.id);
+      }
+      return;
+    }
+    Alert.alert(
+      'Clear invoice?',
+      `${label} has a $0 balance. Hiding removes it from your view (you can restore it later from the website).`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear', style: 'destructive', onPress: () => hideInvoice(item.id) },
+      ]
+    );
+  }
+
   function renderInvoice({ item }: { item: any }) {
     const statusColor = getInvoiceStatusColor(item.status);
     let monthName = 'Jan';
@@ -190,31 +217,45 @@ export default function InvoicesByPartyScreen() {
       monthName = MONTH_NAMES[d.getUTCMonth()] || 'Jan';
       year = d.getUTCFullYear();
     }
+    const amount = Number(item.total_amount) || 0;
+    const canClear = amount === 0 && (item.status === 'open' || item.status === 'void');
     return (
-      <Pressable
-        style={({ pressed }) => [styles.invoiceCard, pressed && styles.invoiceCardPressed]}
-        onPress={() => router.push({ pathname: '/invoice/[id]', params: { id: item.id } })}
-      >
-        <View style={styles.invoiceLeft}>
-          <View style={styles.invoiceIcon}>
-            <Ionicons name="document-text" size={18} color={Colors.primary} />
+      <View style={styles.invoiceRow}>
+        <Pressable
+          style={({ pressed }) => [styles.invoiceCard, { flex: 1 }, pressed && styles.invoiceCardPressed]}
+          onPress={() => router.push({ pathname: '/invoice/[id]', params: { id: item.id } })}
+        >
+          <View style={styles.invoiceLeft}>
+            <View style={styles.invoiceIcon}>
+              <Ionicons name="document-text" size={18} color={Colors.primary} />
+            </View>
+            <View style={styles.invoiceInfo}>
+              <Text style={styles.invoicePeriod}>{monthName} {year}</Text>
+              <Text style={styles.invoiceDate}>
+                {item.created_at ? new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+              </Text>
+            </View>
           </View>
-          <View style={styles.invoiceInfo}>
-            <Text style={styles.invoicePeriod}>{monthName} {year}</Text>
-            <Text style={styles.invoiceDate}>
-              {item.created_at ? new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
-            </Text>
+          <View style={styles.invoiceRight}>
+            <Text style={styles.invoiceAmount}>${amount.toLocaleString()}</Text>
+            <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
+              <Text style={[styles.statusBadgeText, { color: statusColor.text }]}>
+                {formatStatusLabel(item.status).toUpperCase()}
+              </Text>
+            </View>
           </View>
-        </View>
-        <View style={styles.invoiceRight}>
-          <Text style={styles.invoiceAmount}>${(Number(item.total_amount) || 0).toLocaleString()}</Text>
-          <View style={[styles.statusBadge, { backgroundColor: statusColor.bg }]}>
-            <Text style={[styles.statusBadgeText, { color: statusColor.text }]}>
-              {formatStatusLabel(item.status).toUpperCase()}
-            </Text>
-          </View>
-        </View>
-      </Pressable>
+        </Pressable>
+        {canClear && (
+          <Pressable
+            style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.6 }]}
+            onPress={() => confirmHide(item)}
+            hitSlop={8}
+            accessibilityLabel="Clear invoice"
+          >
+            <Ionicons name="close-circle" size={22} color={Colors.textMuted} />
+          </Pressable>
+        )}
+      </View>
     );
   }
 
@@ -339,6 +380,14 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     letterSpacing: 1,
     marginBottom: 12,
+  },
+  invoiceRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  clearBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 18,
   },
   invoiceCard: {
     flexDirection: 'row',
