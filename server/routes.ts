@@ -2509,52 +2509,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const lat = req.query.lat as string;
       const lng = req.query.lng as string;
 
-      const buildUrl = (opts: { strict: boolean; radius: number }) => {
-        const u = new URL("https://maps.googleapis.com/maps/api/place/autocomplete/json");
-        u.searchParams.set("input", input);
-        u.searchParams.set("key", apiKey);
-        u.searchParams.set("types", "geocode|establishment");
-        u.searchParams.set("components", "country:us|country:ca");
-        if (lat && lng) {
-          u.searchParams.set("location", `${lat},${lng}`);
-          u.searchParams.set("radius", String(opts.radius));
-          if (opts.strict) u.searchParams.set("strictbounds", "true");
-        }
-        return u;
-      };
-
-      let predictions: any[] = [];
-      const seen = new Set<string>();
-
-      // Pass 1: strict ~200km bounds around bias point, when we have one.
+      // Build a single autocomplete request. We deliberately omit `types` so
+      // Google returns a mix of addresses, geocoded places, AND establishments
+      // (business names, fueling stations, gravel pits, etc.). When we have a
+      // bias point we also pass `origin` so Google computes distance_meters per
+      // prediction; we use that for client-side ranking below.
+      const url = new URL("https://maps.googleapis.com/maps/api/place/autocomplete/json");
+      url.searchParams.set("input", input);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("components", "country:us|country:ca");
       if (lat && lng) {
-        const localRes = await fetch(buildUrl({ strict: true, radius: 200000 }).toString());
-        const localData = await localRes.json() as any;
-        if (localData.status !== "OK" && localData.status !== "ZERO_RESULTS") {
-          console.error("Places API (strict) status:", localData.status, localData.error_message);
-        }
-        for (const p of (localData.predictions || [])) {
-          if (!seen.has(p.place_id)) {
-            seen.add(p.place_id);
-            predictions.push({ place_id: p.place_id, description: p.description, structured: p.structured_formatting });
-          }
-        }
+        url.searchParams.set("location", `${lat},${lng}`);
+        url.searchParams.set("radius", "100000");
+        url.searchParams.set("origin", `${lat},${lng}`);
       }
 
-      // Pass 2: only fall back to unbounded if local pass produced too few results.
-      if (predictions.length < 3) {
-        const wideRes = await fetch(buildUrl({ strict: false, radius: 80000 }).toString());
-        const wideData = await wideRes.json() as any;
-        if (wideData.status !== "OK" && wideData.status !== "ZERO_RESULTS") {
-          console.error("Places API (wide) status:", wideData.status, wideData.error_message);
-        }
-        for (const p of (wideData.predictions || [])) {
-          if (!seen.has(p.place_id)) {
-            seen.add(p.place_id);
-            predictions.push({ place_id: p.place_id, description: p.description, structured: p.structured_formatting });
-          }
-        }
+      const response = await fetch(url.toString());
+      const data = await response.json() as any;
+      if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+        console.error("Places API status:", data.status, data.error_message);
       }
+
+      const raw: any[] = Array.isArray(data.predictions) ? data.predictions : [];
+
+      // Re-rank by true distance from the bias point when we have one. Google's
+      // built-in "soft bias" still surfaces big-name distant cities first; sorting
+      // by distance_meters fixes that. Items without a distance fall to the end.
+      const ranked = lat && lng
+        ? [...raw].sort((a, b) => {
+            const da = typeof a.distance_meters === 'number' ? a.distance_meters : Number.POSITIVE_INFINITY;
+            const db = typeof b.distance_meters === 'number' ? b.distance_meters : Number.POSITIVE_INFINITY;
+            return da - db;
+          })
+        : raw;
+
+      const predictions = ranked.map((p: any) => ({
+        place_id: p.place_id,
+        description: p.description,
+        structured: p.structured_formatting,
+      }));
 
       return res.json(predictions);
     } catch (err) {
