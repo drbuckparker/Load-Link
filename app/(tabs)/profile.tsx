@@ -34,7 +34,6 @@ const ROLES = [
   { key: 'trucking_company', label: 'TRUCKING COMPANY', desc: 'Manage fleet and assign loads', icon: 'people', color: '#f97316' },
   { key: 'contractor', label: 'CONTRACTOR', desc: 'Post loads and manage drivers', icon: 'construct', color: '#eab308' },
   { key: 'driver', label: 'DRIVER', desc: 'Haul loads and earn money', icon: 'car', color: '#22c55e' },
-  { key: 'driver_contractor', label: 'DRIVER + CONTRACTOR', desc: 'Haul loads and post jobs', icon: 'git-merge', color: '#3b82f6' },
   { key: 'foreman', label: 'FOREMAN', desc: 'Manage loads for a company', icon: 'clipboard', color: '#f59e0b' },
   { key: 'driver_trucking_company', label: 'DRIVER + TRUCKING CO.', desc: 'Drive and manage fleet', icon: 'git-network', color: '#06b6d4' },
 ];
