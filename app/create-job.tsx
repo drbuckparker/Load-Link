@@ -440,7 +440,8 @@ export default function CreateJobScreen() {
 
   const fetchPlaceSuggestions = useCallback(async (input: string, target: 'origin' | 'destination') => {
     if (input.trim().length < 2) {
-      loadSavedLocations(target, input.trim() || undefined);
+      if (target === 'origin') { setOriginSuggestions([]); setShowOriginSuggestions(false); }
+      else { setDestSuggestions([]); setShowDestSuggestions(false); }
       return;
     }
     try {
@@ -1005,7 +1006,7 @@ export default function CreateJobScreen() {
                   placeholderTextColor={validationErrors.has('origin') ? '#ff6b6b' : Colors.textMuted}
                   value={originAddress}
                   onChangeText={(t) => { handleOriginTextChange(t); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('origin'); return n; }); }}
-                  onFocus={() => { if (originSuggestions.length > 0) setShowOriginSuggestions(true); else loadSavedLocations('origin'); }}
+                  onFocus={() => { if (originSuggestions.length > 0) setShowOriginSuggestions(true); }}
                 />
                 {originAddress.length > 0 && (
                   <Pressable onPress={() => { setOriginAddress(''); setOriginLat(null); setOriginLng(null); setOriginSuggestions([]); setShowOriginSuggestions(false); setRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>
@@ -1075,7 +1076,7 @@ export default function CreateJobScreen() {
                   placeholderTextColor={validationErrors.has('destination') ? '#ff6b6b' : Colors.textMuted}
                   value={destinationAddress}
                   onChangeText={(t) => { handleDestTextChange(t); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('destination'); return n; }); }}
-                  onFocus={() => { if (destSuggestions.length > 0) setShowDestSuggestions(true); else loadSavedLocations('destination'); }}
+                  onFocus={() => { if (destSuggestions.length > 0) setShowDestSuggestions(true); }}
                 />
                 {destinationAddress.length > 0 && (
                   <Pressable onPress={() => { setDestinationAddress(''); setDestLat(null); setDestLng(null); setDestSuggestions([]); setShowDestSuggestions(false); setRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>

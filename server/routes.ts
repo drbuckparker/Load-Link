@@ -2509,16 +2509,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const lat = req.query.lat as string;
       const lng = req.query.lng as string;
 
-      // Build a single autocomplete request. We deliberately omit `types` so
-      // Google returns a mix of addresses, geocoded places, AND establishments
-      // (business names, fueling stations, gravel pits, etc.). When we have a
-      // bias point we also pass `origin` so Google computes distance_meters per
-      // prediction; we use that for client-side ranking below.
+      // Legacy Places Autocomplete. The `origin` parameter makes Google return
+      // distance_meters per prediction, which we then use to:
+      //   1) hard-filter out anything beyond NEAR_LIMIT_METERS (when a bias
+      //      point is present) so distant junk like "Evansville, IN" never
+      //      surfaces near a Jackson, WY pin;
+      //   2) sort the rest closest-first.
+      // If the local filter leaves us with too few results we fall back to the
+      // unfiltered set so unusual queries aren't blocked entirely.
+      const NEAR_LIMIT_METERS = 350_000; // ~217 miles
       const url = new URL("https://maps.googleapis.com/maps/api/place/autocomplete/json");
       url.searchParams.set("input", input);
       url.searchParams.set("key", apiKey);
       url.searchParams.set("components", "country:us|country:ca");
-      if (lat && lng) {
+      const hasBias = lat && lng && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+      if (hasBias) {
         url.searchParams.set("location", `${lat},${lng}`);
         url.searchParams.set("radius", "100000");
         url.searchParams.set("origin", `${lat},${lng}`);
@@ -2531,23 +2536,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const raw: any[] = Array.isArray(data.predictions) ? data.predictions : [];
-
-      // Re-rank by true distance from the bias point when we have one. Google's
-      // built-in "soft bias" still surfaces big-name distant cities first; sorting
-      // by distance_meters fixes that. Items without a distance fall to the end.
-      const ranked = lat && lng
-        ? [...raw].sort((a, b) => {
-            const da = typeof a.distance_meters === 'number' ? a.distance_meters : Number.POSITIVE_INFINITY;
-            const db = typeof b.distance_meters === 'number' ? b.distance_meters : Number.POSITIVE_INFINITY;
-            return da - db;
-          })
-        : raw;
-
-      const predictions = ranked.map((p: any) => ({
+      const mapped = raw.map((p: any) => ({
         place_id: p.place_id,
         description: p.description,
         structured: p.structured_formatting,
+        distance_meters: typeof p.distance_meters === "number" ? p.distance_meters : undefined,
       }));
+
+      let predictions = mapped;
+      if (hasBias) {
+        const local = mapped.filter(p =>
+          typeof p.distance_meters === "number" && p.distance_meters <= NEAR_LIMIT_METERS
+        );
+        // Fall back to all results if the local filter produced almost nothing.
+        predictions = local.length >= 1 ? local : mapped;
+        predictions.sort((a, b) => {
+          const da = typeof a.distance_meters === "number" ? a.distance_meters : Number.POSITIVE_INFINITY;
+          const db = typeof b.distance_meters === "number" ? b.distance_meters : Number.POSITIVE_INFINITY;
+          return da - db;
+        });
+      }
 
       return res.json(predictions);
     } catch (err) {
