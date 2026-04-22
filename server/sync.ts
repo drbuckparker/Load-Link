@@ -211,6 +211,7 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
       return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
     };
 
+    const websiteIdToLocalId: Record<string, string> = {};
     const deduped = jobs.filter((wj: any) => {
       const wId = wj.id;
       if (localJobs.some((lj: any) => lj.id === wId)) return true;
@@ -225,13 +226,25 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
         const lContractor = String(lj.contractor_id || '');
         const lScheduledStr = toDayStr(lj.scheduled_date);
         const lCreated = new Date(lj.created_at).getTime();
-        if (lMaterial === wMaterial && lContractor === wContractor && lScheduledStr === wScheduledStr && Math.abs(wCreated - lCreated) < 300000) {
-          console.log(`syncJobs dedup: dropping website job ${wId} as duplicate of local ${lj.id}`);
+        const matchAll =
+          lMaterial === wMaterial &&
+          lContractor === wContractor &&
+          lScheduledStr === wScheduledStr &&
+          Math.abs(wCreated - lCreated) < 300000;
+        if (matchAll) {
+          console.log(`[syncJobs dedup] dropping website job ${wId} -> matches local ${lj.id}`);
+          websiteIdToLocalId[wId] = lj.id;
           return false;
+        }
+        if (lMaterial === wMaterial && lContractor === wContractor && lScheduledStr === wScheduledStr) {
+          console.log(`[syncJobs dedup-near-miss] wId=${wId} lId=${lj.id} mat=ok contractor=ok sched=ok createdDiffMs=${wCreated - lCreated}`);
         }
       }
       return true;
     });
+    if (Object.keys(websiteIdToLocalId).length > 0) {
+      console.log(`[syncJobs] dedup mappings:`, websiteIdToLocalId);
+    }
 
     const count = await upsertMany("jobs", deduped);
     await updateSyncTime("jobs", auth.userId);
