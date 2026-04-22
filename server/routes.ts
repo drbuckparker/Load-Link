@@ -620,7 +620,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const body = { ...req.body, id, contractor_id: auth.userId, status: 'open', created_at: new Date().toISOString() };
 
       const columns = ['id', 'contractor_id', 'material', 'origin_address', 'destination_address', 'rate', 'rate_type',
-        'truck_type', 'status', 'scheduled_date', 'project_id', 'trucks_needed', 'estimated_days', 'includes_weekends',
+        'truck_type', 'status', 'scheduled_date', 'project_id', 'trucks_needed', 'estimated_days', 'includes_weekends', 'includes_saturday', 'includes_sunday',
         'estimated_cost', 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng', 'job_type',
         'requires_weight_tickets', 'requires_tarp', 'urgent', 'created_at', 'updated_at',
         'capacity_needed', 'total_tons_needed', 'total_amount_unit', 'pickup_time', 'estimated_trips'];
@@ -1820,7 +1820,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  function getJobDateRange(scheduledDate: string, estimatedDays: number, includesWeekends: boolean): string[] {
+  function getJobDateRange(scheduledDate: string, estimatedDays: number, includesWeekends: boolean, includesSaturday: boolean = true, includesSunday: boolean = true): string[] {
     const startDate = new Date(scheduledDate);
     if (isNaN(startDate.getTime())) return [];
     const days = Math.max(1, Math.ceil(estimatedDays || 1));
@@ -1829,7 +1829,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     let added = 0;
     while (added < days) {
       const dow = current.getUTCDay();
-      if (includesWeekends || (dow !== 0 && dow !== 6)) {
+      const isWeekendDay = dow === 0 || dow === 6;
+      const dayAllowed = !isWeekendDay
+        ? true
+        : (includesWeekends && ((dow === 6 && includesSaturday) || (dow === 0 && includesSunday)));
+      if (dayAllowed) {
         const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
         dates.push(key);
         added++;
@@ -1944,7 +1948,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!sd) continue;
         const estDays = job.estimatedDays || job.estimated_days || 1;
         const includesWeekends = job.includesWeekends ?? job.includes_weekends ?? false;
-        const jobDates = getJobDateRange(sd, estDays, includesWeekends);
+        const includesSat = (job.includesSaturday ?? job.includes_saturday) !== false;
+        const includesSun = (job.includesSunday ?? job.includes_sunday) !== false;
+        const jobDates = getJobDateRange(sd, estDays, includesWeekends, includesSat, includesSun);
         const vehicleAssignments = assignmentsByJob[job.id] || [];
         const activeRuns = activeRunsByJob[job.id] || [];
         const activeAssignments = vehicleAssignments.filter((a: any) => a.status !== 'rejected' && a.status !== 'withdrawn');
@@ -2036,7 +2042,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!sd) continue;
         const estDays = job.estimatedDays || job.estimated_days || 1;
         const includesWeekends = job.includesWeekends ?? job.includes_weekends ?? false;
-        const jobDates = getJobDateRange(sd, estDays, includesWeekends);
+        const includesSat = (job.includesSaturday ?? job.includes_saturday) !== false;
+        const includesSun = (job.includesSunday ?? job.includes_sunday) !== false;
+        const jobDates = getJobDateRange(sd, estDays, includesWeekends, includesSat, includesSun);
         jobDates.forEach((dateKey, idx) => {
           if (idx === 0) {
             addToDay(dateKey, job);

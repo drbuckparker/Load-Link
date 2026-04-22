@@ -102,7 +102,7 @@ function formatDriverDisplay(a: { driverName: string; driverCompany: string; tru
   return shortName;
 }
 
-function getJobDateRange(scheduledDate: string, estimatedDays: number | string | null, includesWeekends: boolean): string[] {
+function getJobDateRange(scheduledDate: string, estimatedDays: number | string | null, includesWeekends: boolean, includesSaturday: boolean = true, includesSunday: boolean = true): string[] {
   if (!scheduledDate) return [];
   const startDate = new Date(scheduledDate);
   if (isNaN(startDate.getTime())) return [];
@@ -112,7 +112,11 @@ function getJobDateRange(scheduledDate: string, estimatedDays: number | string |
   let added = 0;
   while (added < days) {
     const dow = current.getUTCDay();
-    if (includesWeekends || (dow !== 0 && dow !== 6)) {
+    const isWeekendDay = dow === 0 || dow === 6;
+    const dayAllowed = !isWeekendDay
+      ? true
+      : (includesWeekends && ((dow === 6 && includesSaturday) || (dow === 0 && includesSunday)));
+    if (dayAllowed) {
       const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
       dates.push(key);
       added++;
@@ -454,7 +458,9 @@ export default function JobDetailScreen() {
       const jobDates = getJobDateRange(
         String(job.scheduledDate),
         jobData?.listed_days || job.estimatedDays,
-        jobData?.includes_weekends ?? false
+        jobData?.includes_weekends ?? false,
+        (jobData as any)?.includes_saturday !== false,
+        (jobData as any)?.includes_sunday !== false
       );
       const isTodayScheduled = jobDates.length === 0 || jobDates.includes(todayStr) || jobDates.includes(todayUTC);
       if (!isTodayScheduled) {
@@ -1155,7 +1161,9 @@ export default function JobDetailScreen() {
         const scheduledDates = getJobDateRange(
           jobData.scheduled_date,
           jobData.listed_days || jobData.estimated_days,
-          jobData.includes_weekends ?? false
+          jobData.includes_weekends ?? false,
+          (jobData as any).includes_saturday !== false,
+          (jobData as any).includes_sunday !== false
         );
         const now = new Date();
         const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -1695,7 +1703,9 @@ export default function JobDetailScreen() {
                   const estDays = parseFloat(String(job.estimatedDays || '1')) || 1;
                   if (estDays > 1) {
                     const includesWeekends = (jobData as any)?.includes_weekends ?? false;
-                    const dates = getJobDateRange(dateStr, estDays, includesWeekends);
+                    const includesSat = (jobData as any)?.includes_saturday !== false;
+                    const includesSun = (jobData as any)?.includes_sunday !== false;
+                    const dates = getJobDateRange(dateStr, estDays, includesWeekends, includesSat, includesSun);
                     if (dates.length > 1) {
                       const lastDateStr = dates[dates.length - 1];
                       const [ey, em, ed] = lastDateStr.split('-').map(Number);

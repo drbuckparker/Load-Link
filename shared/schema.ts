@@ -213,6 +213,8 @@ export const jobs = pgTable("jobs", {
   estimated_trips: integer("estimated_trips"),
   listed_days: numeric("listed_days", { precision: 4, scale: 1 }),
   includes_weekends: boolean("includes_weekends").default(false),
+  includes_saturday: boolean("includes_saturday").default(true),
+  includes_sunday: boolean("includes_sunday").default(true),
   estimated_cost: numeric("estimated_cost", { precision: 10, scale: 2 }),
   cancelled_at: timestamp("cancelled_at"),
   requires_weight_tickets: boolean("requires_weight_tickets").default(false),

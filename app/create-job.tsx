@@ -139,6 +139,8 @@ export default function CreateJobScreen() {
   const [estimatedDays, setEstimatedDays] = useState('');
   const [estimatedDaysManual, setEstimatedDaysManual] = useState(false);
   const [includesWeekends, setIncludesWeekends] = useState(false);
+  const [includesSaturday, setIncludesSaturday] = useState(true);
+  const [includesSunday, setIncludesSunday] = useState(true);
   const [rate, setRate] = useState('');
   const [rateType, setRateType] = useState('per_hour');
   const [trucksNeeded, setTrucksNeeded] = useState(1);
@@ -794,6 +796,8 @@ export default function CreateJobScreen() {
       if (jobType === 'multi_day') {
         if (estimatedDays) body.estimatedDays = String(parseInt(estimatedDays, 10));
         body.includesWeekends = includesWeekends;
+        body.includesSaturday = includesWeekends ? includesSaturday : false;
+        body.includesSunday = includesWeekends ? includesSunday : false;
       }
       if (calculatedTrips > 0) body.estimatedTrips = String(calculatedTrips);
       else if (estimatedTrips) body.estimatedTrips = String(parseInt(estimatedTrips, 10));
@@ -1349,10 +1353,40 @@ export default function CreateJobScreen() {
                   <Text style={styles.switchLabel}>Includes Weekends</Text>
                   <Switch
                     value={includesWeekends}
-                    onValueChange={setIncludesWeekends}
+                    onValueChange={(v) => {
+                      setIncludesWeekends(v);
+                      if (v) { setIncludesSaturday(true); setIncludesSunday(true); }
+                    }}
                     trackColor={{ false: Colors.border, true: Colors.success }}
                   />
                 </View>
+
+                {includesWeekends && (
+                  <View style={{ paddingLeft: 16, borderLeftWidth: 2, borderLeftColor: Colors.border, marginTop: 4 }}>
+                    <View style={styles.switchRow}>
+                      <Text style={[styles.switchLabel, { fontSize: 14 }]}>Saturday</Text>
+                      <Switch
+                        value={includesSaturday}
+                        onValueChange={(v) => {
+                          if (!v && !includesSunday) return;
+                          setIncludesSaturday(v);
+                        }}
+                        trackColor={{ false: Colors.border, true: Colors.success }}
+                      />
+                    </View>
+                    <View style={styles.switchRow}>
+                      <Text style={[styles.switchLabel, { fontSize: 14 }]}>Sunday</Text>
+                      <Switch
+                        value={includesSunday}
+                        onValueChange={(v) => {
+                          if (!v && !includesSaturday) return;
+                          setIncludesSunday(v);
+                        }}
+                        trackColor={{ false: Colors.border, true: Colors.success }}
+                      />
+                    </View>
+                  </View>
+                )}
               </>
             )}
           </View>
