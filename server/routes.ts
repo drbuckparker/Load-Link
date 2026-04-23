@@ -1117,6 +1117,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/clock-in", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+
+      // Re-entrancy: if driver already clocked into THIS job, return that run
       const existingRun = await pool.query(
         `SELECT id FROM job_runs WHERE job_id = $1 AND driver_id = $2 AND status::text = 'active'`,
         [req.params.id, auth.userId]
@@ -1125,6 +1127,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [existingRun.rows[0].id]);
         return res.json(addDualKeys(result.rows[0]));
       }
+
+      // Rule: only one active job at a time across all jobs
+      const otherActive = await pool.query(
+        `SELECT jr.id, jr.job_id, j.material
+         FROM job_runs jr
+         LEFT JOIN jobs j ON j.id = jr.job_id
+         WHERE jr.driver_id = $1 AND jr.status::text = 'active' AND jr.job_id != $2
+         LIMIT 1`,
+        [auth.userId, req.params.id]
+      );
+      if (otherActive.rows.length > 0) {
+        const other = otherActive.rows[0];
+        return res.status(409).json({
+          code: "ALREADY_CLOCKED_IN",
+          message: `You're already clocked into another job${other.material ? ` (${other.material})` : ''}. Clock out first.`,
+          activeJobId: other.job_id,
+          activeRunId: other.id,
+        });
+      }
+
+      // Load job for time/geofence rules
+      const jobRes = await pool.query(
+        `SELECT id, scheduled_date, pickup_time, origin_lat, origin_lng, destination_lat, destination_lng
+         FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      const job = jobRes.rows[0];
+      if (!job) return res.status(404).json({ message: "Job not found" });
+
+      const now = new Date();
+      const customTime = req.body?.custom_time || req.body?.customTime || null;
+      const startedAt = customTime ? new Date(customTime) : now;
+      if (customTime && (isNaN(startedAt.getTime()) || startedAt.getTime() > now.getTime() + 60_000)) {
+        return res.status(400).json({ code: "INVALID_TIME", message: "Clock-in time can't be in the future." });
+      }
+
+      // Rule: cannot clock in more than 30 min before scheduled start
+      if (job.scheduled_date) {
+        const dateStr = String(job.scheduled_date).substring(0, 10);
+        const [y, m, d] = dateStr.split('-').map(Number);
+        let scheduledStart: Date;
+        if (job.pickup_time) {
+          const [hh, mm] = String(job.pickup_time).split(':').map(Number);
+          scheduledStart = new Date(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0, 0);
+        } else {
+          // No pickup time: treat midnight (start of day) as the scheduled start
+          scheduledStart = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+        }
+        const earliest = new Date(scheduledStart.getTime() - 30 * 60 * 1000);
+        if (startedAt < earliest) {
+          const diffMin = Math.ceil((earliest.getTime() - startedAt.getTime()) / 60000);
+          const startStr = scheduledStart.toLocaleString('en-US', {
+            month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+          });
+          return res.status(400).json({
+            code: "TOO_EARLY",
+            message: `Clock-in opens 30 min before the scheduled start (${startStr}). Try again in ${diffMin} min.`,
+            earliestAt: earliest.toISOString(),
+            scheduledStartAt: scheduledStart.toISOString(),
+          });
+        }
+      }
+
+      // Rule: must be within 15 miles of job site (origin or destination)
+      const startLat = req.body?.lat ?? req.body?.start_lat ?? null;
+      const startLng = req.body?.lng ?? req.body?.start_lng ?? null;
+      const GEOFENCE_MILES = 15;
+      const haversineMiles = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+        const toRad = (v: number) => (v * Math.PI) / 180;
+        const R = 3958.7613; // earth radius in miles
+        const dLat = toRad(lat2 - lat1);
+        const dLng = toRad(lng2 - lng1);
+        const a = Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(a));
+      };
+
+      const oLat = job.origin_lat ? Number(job.origin_lat) : null;
+      const oLng = job.origin_lng ? Number(job.origin_lng) : null;
+      const dLat = job.destination_lat ? Number(job.destination_lat) : null;
+      const dLng = job.destination_lng ? Number(job.destination_lng) : null;
+      const hasJobCoords = (oLat != null && oLng != null) || (dLat != null && dLng != null);
+
+      if (hasJobCoords) {
+        if (startLat == null || startLng == null) {
+          return res.status(400).json({
+            code: "LOCATION_REQUIRED",
+            message: "Location is required to clock in. Enable location and try again.",
+          });
+        }
+        const driverLat = Number(startLat);
+        const driverLng = Number(startLng);
+        if (isNaN(driverLat) || isNaN(driverLng)) {
+          return res.status(400).json({ code: "LOCATION_REQUIRED", message: "Invalid location data." });
+        }
+        const distances: number[] = [];
+        if (oLat != null && oLng != null) distances.push(haversineMiles(driverLat, driverLng, oLat, oLng));
+        if (dLat != null && dLng != null) distances.push(haversineMiles(driverLat, driverLng, dLat, dLng));
+        const closest = Math.min(...distances);
+        if (closest > GEOFENCE_MILES) {
+          return res.status(403).json({
+            code: "OUT_OF_GEOFENCE",
+            message: `You're ${closest.toFixed(1)} miles from the job site. Clock-in is allowed within ${GEOFENCE_MILES} miles.`,
+            distanceMiles: Math.round(closest * 10) / 10,
+            geofenceMiles: GEOFENCE_MILES,
+          });
+        }
+      }
+
       const runId = require("crypto").randomUUID();
       const vehicleFromBody = req.body?.vehicle_id || req.body?.vehicleId || null;
       let vehicleId = vehicleFromBody;
@@ -1135,10 +1247,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
         vehicleId = vRes.rows[0]?.vehicle_id || null;
       }
-      const customTime = req.body?.custom_time || req.body?.customTime || null;
-      const startedAt = customTime ? new Date(customTime) : new Date();
-      const startLat = req.body?.lat || req.body?.start_lat || null;
-      const startLng = req.body?.lng || req.body?.start_lng || null;
       await pool.query(
         `INSERT INTO job_runs (id, job_id, driver_id, vehicle_id, status, started_at, start_lat, start_lng, created_at) VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, NOW())`,
         [runId, req.params.id, auth.userId, vehicleId, startedAt, startLat, startLng]
