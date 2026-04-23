@@ -559,13 +559,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/jobs/:id/unarchive", requireAuth, async (req: Request, res: Response) => {
     try {
-      await pool.query(`UPDATE jobs SET archived_at = NULL, status = 'open', cancelled_at = NULL WHERE id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: { archived_at: null, status: 'open', cancelled_at: null } }).catch(() => {});
+      const upd = await pool.query(
+        `UPDATE jobs SET archived_at = NULL, status = 'open', cancelled_at = NULL
+         WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2) RETURNING id`,
+        [req.params.id, auth.userId]
+      );
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
+      pushToWebsite(`/api/jobs/${req.params.id}/unarchive`, auth, { method: "POST", body: {} }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Unarchive job error:", e.message);
       return res.status(500).json({ message: "Failed to unarchive job" });
+    }
+  });
+
+  app.post("/api/jobs/:id/cancel", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const reason = (req.body?.reason || '').toString();
+      const upd = await pool.query(
+        `UPDATE jobs SET status = 'cancelled', cancelled_at = NOW()
+         WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2) RETURNING id`,
+        [req.params.id, auth.userId]
+      );
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
+      pushToWebsite(`/api/jobs/${req.params.id}/cancel`, auth, { method: "POST", body: reason ? { reason } : {} }).catch(() => {});
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Cancel job error:", e.message);
+      return res.status(500).json({ message: "Failed to cancel job" });
+    }
+  });
+
+  app.post("/api/jobs/:id/archive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const upd = await pool.query(
+        `UPDATE jobs SET archived_at = NOW()
+         WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2) RETURNING id`,
+        [req.params.id, auth.userId]
+      );
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
+      pushToWebsite(`/api/jobs/${req.params.id}/archive`, auth, { method: "POST", body: {} }).catch(() => {});
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Archive job error:", e.message);
+      return res.status(500).json({ message: "Failed to archive job" });
     }
   });
 
@@ -728,10 +768,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
-      const now = new Date().toISOString();
-      await pool.query(`UPDATE jobs SET status = 'cancelled', cancelled_at = NOW(), archived_at = NOW() WHERE id = $1`, [req.params.id]);
       const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: { archived_at: now, status: 'cancelled', cancelled_at: now } }).catch(() => {});
+      const existing = await pool.query(
+        `SELECT status FROM jobs WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (existing.rowCount === 0) return res.status(404).json({ message: "Job not found" });
+      const wasOpen = existing.rows[0]?.status && !['in_progress', 'completed'].includes(existing.rows[0].status);
+      await pool.query(
+        `UPDATE jobs SET status = 'cancelled', cancelled_at = NOW(), archived_at = NOW()
+         WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (wasOpen) {
+        pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
+      } else {
+        pushToWebsite(`/api/jobs/${req.params.id}/cancel`, auth, { method: "POST", body: {} }).catch(() => {});
+        pushToWebsite(`/api/jobs/${req.params.id}/archive`, auth, { method: "POST", body: {} }).catch(() => {});
+      }
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -2507,12 +2561,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
     try {
-      await pool.query(
-        `UPDATE contractor_projects SET deleted_at = NOW() WHERE id = $1`,
-        [req.params.id]
-      );
       const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/projects/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
+      const upd = await pool.query(
+        `UPDATE contractor_projects SET deleted_at = NOW()
+         WHERE id = $1 AND contractor_id::text = $2 RETURNING id`,
+        [req.params.id, auth.userId]
+      );
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });

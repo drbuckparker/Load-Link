@@ -1,7 +1,7 @@
 import { fetch as expoFetch } from "expo/fetch";
-import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { QueryClient, QueryFunction, focusManager } from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Platform } from "react-native";
+import { AppState, AppStateStatus, Platform } from "react-native";
 
 const nativeFetch = globalThis.fetch;
 const safeFetch = Platform.OS === 'web' ? nativeFetch : expoFetch;
@@ -166,8 +166,10 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
-      refetchInterval: false,
-      refetchOnWindowFocus: false,
+      refetchInterval: 60000,
+      refetchIntervalInBackground: false,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
       staleTime: 30000,
       retry: 1,
       retryDelay: 1000,
@@ -177,3 +179,9 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+if (Platform.OS !== 'web') {
+  AppState.addEventListener('change', (status: AppStateStatus) => {
+    focusManager.setFocused(status === 'active');
+  });
+}

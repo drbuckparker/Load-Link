@@ -255,6 +255,44 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
     }
 
     const count = await upsertMany("jobs", deduped);
+
+    try {
+      const websiteIds = new Set<string>(jobs.map((j: any) => String(j.id)));
+      const dedupedToOriginalIds = new Set<string>(Object.values(websiteIdToLocalId));
+      const reconcileResult = await pool.query(
+        `SELECT id FROM jobs
+         WHERE (contractor_id = $1 OR driver_id = $1)
+           AND archived_at IS NULL
+           AND status NOT IN ('completed', 'cancelled')
+           AND created_at < NOW() - INTERVAL '5 minutes'
+           AND id NOT IN (
+             SELECT (body->>'id')::text FROM sync_queue
+             WHERE user_id = $2 AND succeeded_at IS NULL AND body ? 'id'
+             UNION
+             SELECT regexp_replace(path, '^/api/jobs/([^/]+).*$', '\\1') FROM sync_queue
+             WHERE user_id = $2 AND succeeded_at IS NULL AND path ~ '^/api/jobs/[^/]+'
+           )`,
+        [auth.userId, auth.userId]
+      );
+      const removedIds: string[] = [];
+      for (const row of reconcileResult.rows) {
+        const lid = String(row.id);
+        if (!websiteIds.has(lid) && !dedupedToOriginalIds.has(lid)) {
+          removedIds.push(lid);
+        }
+      }
+      if (removedIds.length > 0) {
+        console.log(`[syncJobs reconcile] cancelling ${removedIds.length} local jobs missing from website:`, removedIds);
+        await pool.query(
+          `UPDATE jobs SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, NOW()), archived_at = COALESCE(archived_at, NOW())
+           WHERE id = ANY($1::varchar[])`,
+          [removedIds]
+        );
+      }
+    } catch (e: any) {
+      console.error("syncJobs reconcile error:", e.message);
+    }
+
     await updateSyncTime("jobs", auth.userId);
     return count;
   } catch (e: any) {
@@ -267,12 +305,45 @@ export async function syncProjects(auth: SyncAuth, cachedJobs?: any[]): Promise<
   if (jobSyncPaused) return 0;
   try {
     const websiteProjects = await websiteFetchSync("/api/projects", { jwt: auth.jwt });
-    if (!Array.isArray(websiteProjects) || websiteProjects.length === 0) {
+    if (!Array.isArray(websiteProjects)) {
       await updateSyncTime("projects", auth.userId);
       return 0;
     }
 
-    const count = await upsertMany("contractor_projects", websiteProjects);
+    const count = websiteProjects.length > 0 ? await upsertMany("contractor_projects", websiteProjects) : 0;
+
+    try {
+      const websiteIds = new Set<string>(websiteProjects.map((p: any) => String(p.id)));
+      const reconcileResult = await pool.query(
+        `SELECT id FROM contractor_projects
+         WHERE contractor_id = $1
+           AND deleted_at IS NULL
+           AND created_at < NOW() - INTERVAL '5 minutes'
+           AND id NOT IN (
+             SELECT (body->>'id')::text FROM sync_queue
+             WHERE user_id = $2 AND succeeded_at IS NULL AND body ? 'id'
+             UNION
+             SELECT regexp_replace(path, '^/api/(contractor-projects|projects)/([^/]+).*$', '\\2') FROM sync_queue
+             WHERE user_id = $2 AND succeeded_at IS NULL AND path ~ '^/api/(contractor-projects|projects)/[^/]+'
+           )`,
+        [auth.userId, auth.userId]
+      );
+      const removedIds: string[] = [];
+      for (const row of reconcileResult.rows) {
+        const lid = String(row.id);
+        if (!websiteIds.has(lid)) removedIds.push(lid);
+      }
+      if (removedIds.length > 0) {
+        console.log(`[syncProjects reconcile] soft-deleting ${removedIds.length} local projects missing from website:`, removedIds);
+        await pool.query(
+          `UPDATE contractor_projects SET deleted_at = NOW() WHERE id = ANY($1::varchar[])`,
+          [removedIds]
+        );
+      }
+    } catch (e: any) {
+      console.error("syncProjects reconcile error:", e.message);
+    }
+
     await updateSyncTime("projects", auth.userId);
     return count;
   } catch (e: any) {
@@ -382,8 +453,7 @@ export async function fullSync(auth: SyncAuth): Promise<{ jobs: number; projects
     if (!jobSyncPaused) {
       const allJobs = await websiteFetchSync("/api/jobs", { jwt: auth.jwt });
       jobsList = Array.isArray(allJobs) ? allJobs.filter((j: any) => j.id && !hiddenJobIds.has(j.id)) : [];
-      jobCount = await upsertMany("jobs", jobsList);
-      await updateSyncTime("jobs", auth.userId);
+      jobCount = await syncJobs(auth, jobsList);
     }
 
     const [projects, assignments, vehicles] = await Promise.allSettled([

@@ -1,0 +1,68 @@
+Feature: Bidirectional delete/cancel sync between mobile app and LoadLink website
+
+Right now if a user deletes a project or cancels a job in the mobile app, that change isn't being pushed to the LoadLink server, so the website still shows the item. Same problem the other direction — if the user (or another device) deletes/cancels something on the website, the mobile app doesn't know about it.
+
+Auth reminder for all calls below:
+Every request needs both headers:
+
+X-API-Key: <COMPANION_API_KEY>
+Authorization: Bearer <JWT from /api/companion/auth/login>
+The server derives the user from the JWT — never send userId or contractorId in the body.
+
+App → Website (mobile app initiates the delete/cancel)
+
+Wire the mobile app's delete/cancel actions to the existing LoadLink endpoints:
+
+Soft-delete a project (when the user removes a project in the app):
+
+DELETE /api/contractor-projects/:projectId
+
+Marks the project's deleted_at so it disappears from the website. Use the project's UUID.
+
+Cancel a job (when the user cancels a load in the app):
+
+POST /api/jobs/:jobId/cancel
+Body: { "reason": "<optional cancellation reason>" }
+
+Sets the job to cancelled status. Allowed for the contractor who owns the job.
+
+Archive a job (when the user wants to remove a completed/cancelled job from active lists):
+
+POST /api/jobs/:jobId/archive
+
+Soft-archives the job (sets archived_at). Reverse: POST /api/jobs/:jobId/unarchive.
+
+Hard-delete an open job (only if the job has never been started):
+
+DELETE /api/jobs/:jobId
+
+The server rejects this if the job is already in_progress.
+
+For each action, retry on network failure and queue offline. Don't update the local UI to "deleted" until you've received a 2xx from the server (or queued the operation for guaranteed retry) — otherwise you'll get the same drift problem we just had with project creation.
+
+Website → App (website initiates the delete/cancel, app needs to detect it)
+
+The website doesn't push events to the app today, so the app must pull. Two acceptable approaches — pick one:
+
+Refresh-on-focus + periodic poll (simplest):
+
+When the app comes into the foreground, refetch projects + jobs.
+While in the foreground, refetch every 30–60 seconds.
+On each fetch, reconcile: any local project/job that the server no longer returns should be removed from local state.
+WebSocket subscription (better UX, more work):
+
+The LoadLink server already runs a WebSocket manager (wsManager) used for GPS broadcasts. Adding project_deleted / job_cancelled / job_deleted broadcast events server-side and subscribing to them from the mobile app would give you real-time sync. This requires a small server-side addition — flag this back to me if you want to go this route and I'll add the broadcasts on the website side.
+Recommended: ship Option 1 first (refresh-on-focus + 60s poll). It's robust, requires no server changes, and covers 95% of the use cases. Add Option 2 later if real-time matters.
+
+Reconciliation rules for the local cache when refetching:
+
+Project returned by server with deleted_at != null OR not present at all → remove from local state and from any project pickers.
+Job returned with status = "cancelled" or archived_at != null → move to the "Cancelled/Archived" view, do not show in active lists.
+If a job's local state is "in_progress" but the server returns it as "open" or "accepted" (because nobody's actually clocked in), trust the server.
+Test plan once implemented:
+
+Create a project + a job on the mobile app → confirm it appears on loadlinklive.com.
+Cancel that job from the mobile app → confirm website moves it to Cancelled within seconds.
+Soft-delete the project from the mobile app → confirm website's project list no longer shows it.
+Create a new project + job from the website → confirm app picks it up on next refresh.
+Cancel a job from the website → confirm app removes it from active lists on next refresh.
