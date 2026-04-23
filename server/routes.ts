@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pool } from "./db";
-import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments } from "./sync";
+import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
@@ -1453,7 +1453,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
          VALUES ($1, $2, $3::truck_type, $4, $5, $6, $7, $8, $9, $10, $11, $12, true, NOW(), NOW())`,
         [id, auth.userId, truckType, b.make, b.model, b.year, licensePlate, vinNumber, truckNumber, capacity, assignedDriverId, hasTarp]
       );
-      pushToWebsite("/api/vehicles", auth, { method: "POST", body: req.body }).catch(() => {});
+      pushToWebsite("/api/vehicles", auth, { method: "POST", body: { ...req.body, id } }).catch(() => {});
       const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [id]);
       return res.status(201).json(addDualKeys(result.rows[0]));
     } catch (e: any) {
@@ -1625,6 +1625,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       console.error("POST availability error:", e.message);
       return res.status(500).json({ message: "Failed to set availability" });
+    }
+  });
+
+  app.get("/api/sync-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const status = await getSyncQueueStatus(auth.userId);
+      return res.json(status);
+    } catch {
+      return res.json({ pending: 0, failed: 0 });
+    }
+  });
+
+  app.post("/api/sync-status/retry", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      await backfillUserEntities(auth, true);
+      const result = await drainSyncQueue(auth, 200);
+      const status = await getSyncQueueStatus(auth.userId);
+      return res.json({ ...result, ...status });
+    } catch (e: any) {
+      return res.status(500).json({ message: e.message });
     }
   });
 

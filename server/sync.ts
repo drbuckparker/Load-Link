@@ -11,10 +11,10 @@ interface SyncAuth {
   user: any;
 }
 
-async function websiteFetchSync(
+async function websiteFetchWithStatus(
   path: string,
   options: { method?: string; body?: any; jwt?: string; query?: Record<string, string> } = {}
-): Promise<any> {
+): Promise<{ ok: boolean; status: number; data: any; errorText?: string }> {
   const url = new URL(path, WEBSITE_API_URL);
   if (options.query) {
     for (const [k, v] of Object.entries(options.query)) {
@@ -32,16 +32,24 @@ async function websiteFetchSync(
   if (options.body && options.method !== "GET") fetchOpts.body = JSON.stringify(options.body);
 
   const res = await fetch(url.toString(), fetchOpts);
-  if (!res.ok) {
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("application/json")) {
-      return null;
-    }
-    return null;
-  }
   const ct = res.headers.get("content-type") || "";
-  if (!ct.includes("application/json")) return null;
-  return res.json();
+  let data: any = null;
+  let errorText: string | undefined;
+  if (ct.includes("application/json")) {
+    try { data = await res.json(); } catch { data = null; }
+  } else if (!res.ok) {
+    try { errorText = (await res.text()).slice(0, 500); } catch {}
+  }
+  return { ok: res.ok, status: res.status, data, errorText };
+}
+
+async function websiteFetchSync(
+  path: string,
+  options: { method?: string; body?: any; jwt?: string; query?: Record<string, string> } = {}
+): Promise<any> {
+  const r = await websiteFetchWithStatus(path, options);
+  if (!r.ok) return null;
+  return r.data;
 }
 
 const hiddenJobIds = new Set([
@@ -384,10 +392,13 @@ export async function fullSync(auth: SyncAuth): Promise<{ jobs: number; projects
       syncVehicles(auth),
     ]);
 
+    backfillUserEntities(auth).catch(() => {});
+
     Promise.allSettled([
       syncAvailability(auth),
       syncInvoices(auth),
       syncNotifications(auth),
+      drainSyncQueue(auth),
     ]).catch(() => {});
 
     const result = {
@@ -404,22 +415,250 @@ export async function fullSync(auth: SyncAuth): Promise<{ jobs: number; projects
   }
 }
 
+let _syncQueueReady = false;
+async function ensureSyncQueueTable(): Promise<void> {
+  if (_syncQueueReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sync_queue (
+      id SERIAL PRIMARY KEY,
+      user_id VARCHAR NOT NULL,
+      path VARCHAR NOT NULL,
+      method VARCHAR NOT NULL,
+      body JSONB,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      last_status INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      last_attempted_at TIMESTAMP,
+      succeeded_at TIMESTAMP,
+      dedupe_key VARCHAR UNIQUE NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS sync_queue_user_pending_idx
+      ON sync_queue(user_id, id) WHERE succeeded_at IS NULL;
+  `);
+  _syncQueueReady = true;
+}
+
+const MAX_SYNC_ATTEMPTS = 15;
+
+function buildDedupeKey(userId: string, method: string, path: string, body: any): string {
+  const bodyId = body && typeof body === "object" ? (body.id || body.ID) : undefined;
+  const idPart = bodyId || "_";
+  return `${userId}|${method}|${path}|${idPart}`;
+}
+
+async function attemptQueuedPush(rowId: number, auth: SyncAuth): Promise<any> {
+  const r = await pool.query(`SELECT * FROM sync_queue WHERE id = $1`, [rowId]);
+  const row = r.rows[0];
+  if (!row || row.succeeded_at) return null;
+  try {
+    const result = await websiteFetchWithStatus(row.path, {
+      method: row.method,
+      body: row.body,
+      jwt: auth.jwt,
+    });
+    if (result.ok) {
+      await pool.query(
+        `UPDATE sync_queue SET succeeded_at = NOW(), last_attempted_at = NOW(), attempts = attempts + 1, last_status = $1, last_error = NULL WHERE id = $2`,
+        [result.status, rowId]
+      );
+      return result.data;
+    } else {
+      const errSnippet = (result.errorText || (result.data && JSON.stringify(result.data))) || "";
+      const errMsg = `HTTP ${result.status}${errSnippet ? `: ${String(errSnippet).slice(0, 300)}` : ""}`;
+      const TERMINAL_STATUSES = new Set([400, 404, 410, 415, 422]);
+      const terminal = TERMINAL_STATUSES.has(result.status);
+      const newAttempts = terminal ? MAX_SYNC_ATTEMPTS : null;
+      if (terminal) {
+        await pool.query(
+          `UPDATE sync_queue SET attempts = $1, last_attempted_at = NOW(), last_status = $2, last_error = $3 WHERE id = $4`,
+          [newAttempts, result.status, errMsg, rowId]
+        );
+      } else {
+        await pool.query(
+          `UPDATE sync_queue SET attempts = attempts + 1, last_attempted_at = NOW(), last_status = $1, last_error = $2 WHERE id = $3`,
+          [result.status, errMsg, rowId]
+        );
+      }
+      console.error(`[Sync] Push ${row.method} ${row.path} failed: ${errMsg}${terminal ? " (terminal)" : ""}`);
+      return null;
+    }
+  } catch (e: any) {
+    const errMsg = e?.message?.slice(0, 500) || "unknown error";
+    await pool.query(
+      `UPDATE sync_queue SET attempts = attempts + 1, last_attempted_at = NOW(), last_error = $1 WHERE id = $2`,
+      [errMsg, rowId]
+    );
+    console.error(`[Sync] Push ${row.method} ${row.path} threw: ${errMsg}`);
+    return null;
+  }
+}
+
 export async function pushToWebsite(
   path: string,
   auth: SyncAuth,
   options: { method?: string; body?: any } = {}
 ): Promise<any> {
   try {
-    const result = await websiteFetchSync(path, {
-      method: options.method || "POST",
-      body: options.body,
-      jwt: auth.jwt,
-    });
-    return result;
+    await ensureSyncQueueTable();
+    const method = options.method || "POST";
+    const body = options.body ?? null;
+    const dedupeKey = buildDedupeKey(auth.userId, method, path, body);
+
+    const ins = await pool.query(
+      `INSERT INTO sync_queue (user_id, path, method, body, dedupe_key)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (dedupe_key) DO UPDATE
+         SET body = EXCLUDED.body,
+             succeeded_at = NULL,
+             attempts = 0,
+             last_error = NULL,
+             last_status = NULL
+       RETURNING id`,
+      [auth.userId, path, method, body ? JSON.stringify(body) : null, dedupeKey]
+    );
+    const rowId = ins.rows[0].id;
+    return await attemptQueuedPush(rowId, auth);
   } catch (e: any) {
-    console.error(`[Sync] Push to website failed: ${path}`, e.message);
+    console.error(`[Sync] pushToWebsite enqueue failed for ${path}:`, e.message);
     return null;
   }
+}
+
+export async function drainSyncQueue(auth: SyncAuth, limit = 50): Promise<{ attempted: number; succeeded: number; failed: number }> {
+  await ensureSyncQueueTable();
+  const result = await pool.query(
+    `SELECT id FROM sync_queue
+     WHERE user_id = $1 AND succeeded_at IS NULL AND attempts < $2
+     ORDER BY id ASC LIMIT $3`,
+    [auth.userId, MAX_SYNC_ATTEMPTS, limit]
+  );
+  let succeeded = 0, failed = 0;
+  for (const row of result.rows) {
+    const r = await attemptQueuedPush(row.id, auth);
+    if (r !== null) succeeded++; else failed++;
+  }
+  if (result.rows.length > 0) {
+    console.log(`[Sync] drainSyncQueue user=${auth.userId} attempted=${result.rows.length} succeeded=${succeeded} failed=${failed}`);
+  }
+  return { attempted: result.rows.length, succeeded, failed };
+}
+
+export async function getSyncQueueStatus(userId: string): Promise<{ pending: number; failed: number }> {
+  try {
+    await ensureSyncQueueTable();
+    const r = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE succeeded_at IS NULL AND attempts < $2)::int AS pending,
+         COUNT(*) FILTER (WHERE succeeded_at IS NULL AND attempts >= $2)::int AS failed
+       FROM sync_queue WHERE user_id = $1`,
+      [userId, MAX_SYNC_ATTEMPTS]
+    );
+    return { pending: r.rows[0].pending || 0, failed: r.rows[0].failed || 0 };
+  } catch {
+    return { pending: 0, failed: 0 };
+  }
+}
+
+export async function enqueueExistingVehicles(auth: SyncAuth): Promise<number> {
+  await ensureSyncQueueTable();
+  const result = await pool.query(
+    `SELECT id, truck_type, make, model, year, license_plate, vin_number, truck_number,
+            capacity, assigned_driver_id, has_tarp, color
+     FROM trucks
+     WHERE (trucking_company_id = $1 OR assigned_driver_id = $1) AND archived_at IS NULL`,
+    [auth.userId]
+  );
+  let queued = 0;
+  for (const t of result.rows) {
+    const dedupeKey = buildDedupeKey(auth.userId, "POST", "/api/vehicles", { id: t.id });
+    const exists = await pool.query(
+      `SELECT id, succeeded_at FROM sync_queue WHERE dedupe_key = $1`,
+      [dedupeKey]
+    );
+    if (exists.rows[0]?.succeeded_at) continue;
+    const body = {
+      id: t.id,
+      truckType: t.truck_type,
+      make: t.make,
+      model: t.model,
+      year: t.year,
+      licensePlate: t.license_plate,
+      vinNumber: t.vin_number,
+      truckNumber: t.truck_number,
+      maxCapacityTons: t.capacity,
+      assignedDriverId: t.assigned_driver_id,
+      hasTarp: t.has_tarp,
+      color: t.color,
+    };
+    await pool.query(
+      `INSERT INTO sync_queue (user_id, path, method, body, dedupe_key)
+       VALUES ($1, '/api/vehicles', 'POST', $2, $3)
+       ON CONFLICT (dedupe_key) DO UPDATE
+         SET body = EXCLUDED.body, attempts = 0, last_error = NULL, last_status = NULL`,
+      [auth.userId, JSON.stringify(body), dedupeKey]
+    );
+    queued++;
+  }
+  return queued;
+}
+
+const _backfilledUsers = new Set<string>();
+export async function backfillUserEntities(auth: SyncAuth, force = false): Promise<{ projects: number; vehicles: number }> {
+  if (!force && _backfilledUsers.has(auth.userId)) return { projects: 0, vehicles: 0 };
+  _backfilledUsers.add(auth.userId);
+  try {
+    const projects = await enqueueExistingProjects(auth);
+    const vehicles = await enqueueExistingVehicles(auth);
+    if (projects > 0 || vehicles > 0) {
+      console.log(`[Sync] Backfilled user=${auth.userId} projects=${projects} vehicles=${vehicles}`);
+    }
+    return { projects, vehicles };
+  } catch (e: any) {
+    _backfilledUsers.delete(auth.userId);
+    console.error(`[Sync] Backfill failed for ${auth.userId}:`, e.message);
+    return { projects: 0, vehicles: 0 };
+  }
+}
+
+export async function enqueueExistingProjects(auth: SyncAuth, projectIds?: string[]): Promise<number> {
+  await ensureSyncQueueTable();
+  let query = `SELECT id, name, job_number, site_address, site_lat, site_lng, notes, status
+               FROM contractor_projects WHERE contractor_id = $1 AND deleted_at IS NULL`;
+  const params: any[] = [auth.userId];
+  if (projectIds && projectIds.length > 0) {
+    query += ` AND id = ANY($2::varchar[])`;
+    params.push(projectIds);
+  }
+  const result = await pool.query(query, params);
+  let queued = 0;
+  for (const p of result.rows) {
+    const dedupeKey = buildDedupeKey(auth.userId, "POST", "/api/projects", { id: p.id });
+    const exists = await pool.query(
+      `SELECT id, succeeded_at FROM sync_queue WHERE dedupe_key = $1`,
+      [dedupeKey]
+    );
+    if (exists.rows[0]?.succeeded_at) continue;
+    const body = {
+      id: p.id,
+      name: p.name,
+      jobNumber: p.job_number,
+      siteAddress: p.site_address,
+      siteLat: p.site_lat,
+      siteLng: p.site_lng,
+      notes: p.notes,
+      status: p.status,
+    };
+    await pool.query(
+      `INSERT INTO sync_queue (user_id, path, method, body, dedupe_key)
+       VALUES ($1, '/api/projects', 'POST', $2, $3)
+       ON CONFLICT (dedupe_key) DO UPDATE
+         SET body = EXCLUDED.body, attempts = 0, last_error = NULL, last_status = NULL`,
+      [auth.userId, JSON.stringify(body), dedupeKey]
+    );
+    queued++;
+  }
+  return queued;
 }
 
 const _syncTimers = new Map<string, NodeJS.Timeout>();

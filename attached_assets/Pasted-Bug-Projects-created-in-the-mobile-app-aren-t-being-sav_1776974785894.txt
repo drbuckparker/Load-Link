@@ -1,0 +1,40 @@
+Bug: Projects created in the mobile app aren't being saved to the production database
+
+When a user creates a new project in the mobile app, the project name shows up in the app's project list immediately (because it's stored in local state), but the project is never actually written to the LoadLink production database. As a result, when the user posts a job under that project, the job DOES get saved to the database — but its projectId field references a project ID that doesn't exist on the server. On the LoadLink website those jobs then appear with no project name attached, and the projects themselves never appear in the project list.
+
+Evidence from the production database (user: Joey Parker, contractor_id 50758407):
+
+The user has 8 jobs in the jobs table. 4 of them reference project IDs that do NOT exist in the contractor_projects table:
+
+Job 4a2d8904… (multi_day, open, created 2026-04-22) → project 0f0740b8-a0cf-4dad-83ba-fec1133a18d5 ❌ missing
+Job 0418bd90… (multi_day, open, created 2026-04-22) → project 0f0740b8-a0cf-4dad-83ba-fec1133a18d5 ❌ missing
+Job f641b12e… (multi_day, cancelled, created 2026-04-22) → project 066bfddb-d9be-4a8c-811a-d1513c6e5396 ❌ missing
+Job 36413ead… (multi_day, cancelled, created 2026-04-22) → project 6aafd6d6-7905-4ec8-8785-4fb7bffb11c7 ❌ missing
+Job 87515c69… (multi_day, cancelled, created 2026-04-22) → project 3427e064-d940-4aab-86bd-3c47099ef854 ❌ missing
+The other 3 jobs (Deer Dr, Moose, Shooting Star) reference project IDs that DO exist, so those work correctly. This confirms the project-create call to the server is failing or being skipped only for newer projects.
+
+The LoadLink web API endpoint for creating a project:
+
+POST /api/contractor-projects
+Headers:
+  X-API-Key: <COMPANION_API_KEY>
+  Authorization: Bearer <JWT from /api/companion/auth/login>
+  Content-Type: application/json
+Body:
+  {
+    "id": "<client-supplied UUID>",   // optional but recommended for local-first sync
+    "name": "<project name>",
+    "siteAddress": "<address>",       // plus any other fields from insertContractorProjectSchema
+    ...
+  }
+
+The endpoint already supports client-supplied UUIDs (so the mobile app can generate the ID locally and pass it in the body as id). On success it returns 201 with the project. If the same id is posted again by the same user it returns 200 with the existing record (idempotent). The contractorId is set automatically from the JWT — do NOT send it in the body.
+
+What I need fixed in the mobile app:
+
+When the user creates a project in the app, immediately POST /api/contractor-projects with the locally generated UUID as id. Do NOT proceed to job creation until this call returns 201 or 200.
+If the project POST fails (network error, validation error, 4xx, 5xx), queue it for retry and surface a sync indicator to the user — do not silently move on and let the user post jobs against a project that was never saved.
+When the user creates a job, only allow selecting projects that have been confirmed-saved on the server (i.e. the project POST returned 2xx). If the project is still pending sync, either block job creation or queue the job to send only after the project sync succeeds.
+Add a one-time backfill: on app startup, scan local projects, and for each one that has no server-confirmed save, retry POST /api/contractor-projects with its local UUID. Then for Joey specifically, please retry creating the 4 missing projects above so his website data matches the app — IDs and names: 0f0740b8-a0cf-4dad-83ba-fec1133a18d5, 066bfddb-d9be-4a8c-811a-d1513c6e5396, 6aafd6d6-7905-4ec8-8785-4fb7bffb11c7, 3427e064-d940-4aab-86bd-3c47099ef854 (use the names that appear in his app for each).
+Same review needed for trucks, vehicles, and bids — the website POST endpoints for those also support client-supplied UUIDs, so the mobile app should follow the same "create on server first, then reference" pattern for all entities.
+Auth reminder: All companion calls need both the X-API-Key header (the static COMPANION_API_KEY) and the Authorization: Bearer <JWT> header from POST /api/companion/auth/login. The JWT carries the user ID, so don't send userId or contractorId in any request body — the server derives it from the token.
