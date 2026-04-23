@@ -263,9 +263,16 @@ export default function JobsBrowseScreen() {
 
   const handleDeleteProject = useCallback(() => {
     if (!editingProject) return;
+    const message = `Are you sure you want to delete "${editingProject.name}"? All jobs in this project will be cancelled. You can restore it later from the Archived section.`;
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(message)) {
+        deleteProjectMutation.mutate(String(editingProject.id));
+      }
+      return;
+    }
     Alert.alert(
       'Delete Project',
-      `Are you sure you want to delete "${editingProject.name}"? All jobs in this project will be cancelled. You can restore it later from the Archived section.`,
+      message,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -275,7 +282,7 @@ export default function JobsBrowseScreen() {
         },
       ]
     );
-  }, [editingProject]);
+  }, [editingProject, deleteProjectMutation]);
 
   function openEditProject(project: ProjectItem) {
     setEditingProject(project);
