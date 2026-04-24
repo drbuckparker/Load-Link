@@ -55,7 +55,7 @@ html,body,#map{margin:0;padding:0;width:100%;height:100%;background:#161a22;}
 </div>
 <script>
 var map=L.map('map',{attributionControl:false}).setView([${lat},${lng}],13);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
 
 var orangeIcon=L.divIcon({
   html:'<div style="width:24px;height:24px;background:#FF9900;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.5);"></div>',

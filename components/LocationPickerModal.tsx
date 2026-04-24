@@ -45,7 +45,7 @@ export default function LocationPickerModal({
     longitudeDelta: 0.15,
   });
   const [searchResults, setSearchResults] = useState<LocationResult[]>([]);
-  const [lightMap, setLightMap] = useState(false);
+  const [lightMap, setLightMap] = useState(true);
   const [showResults, setShowResults] = useState(false);
 
   useEffect(() => {
