@@ -328,15 +328,19 @@ export default function JobsBrowseScreen() {
     if (!isContractor && searchRadius != null && radiusOriginCoord) {
       const R = 3958.8;
       const { lat: oLat, lng: oLng } = radiusOriginCoord;
-      mapped = mapped.filter((j) => {
-        const lat = j.originLat || j.destinationLat;
-        const lng = j.originLng || j.destinationLng;
-        if (!lat || !lng) return false;
+      const milesTo = (lat: number, lng: number) => {
         const dLat = (lat - oLat) * Math.PI / 180;
         const dLng = (lng - oLng) * Math.PI / 180;
         const a = Math.sin(dLat / 2) ** 2 + Math.cos(oLat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-        const miles = 2 * R * Math.asin(Math.sqrt(a));
-        return miles <= searchRadius;
+        return 2 * R * Math.asin(Math.sqrt(a));
+      };
+      mapped = mapped.filter((j) => {
+        const hasOrigin = !!(j.originLat && j.originLng);
+        const hasDest = !!(j.destinationLat && j.destinationLng);
+        if (!hasOrigin && !hasDest) return false;
+        if (hasOrigin && milesTo(j.originLat, j.originLng) <= searchRadius) return true;
+        if (hasDest && milesTo(j.destinationLat, j.destinationLng) <= searchRadius) return true;
+        return false;
       });
     }
     if (activeFilter === 'Open') {
