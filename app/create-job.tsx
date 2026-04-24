@@ -507,8 +507,10 @@ export default function CreateJobScreen() {
             description: addr || p.name,
             saved: true,
             savedType: 'project',
-            savedLat: lat != null ? Number(lat) : null,
-            savedLng: lng != null ? Number(lng) : null,
+            savedLat: lat != null && lat !== '' ? Number(lat) : null,
+            savedLng: lng != null && lng !== '' ? Number(lng) : null,
+            savedAddress: addr || null,
+            projectName: p.name,
             structured: {
               main_text: p.name,
               secondary_text: addr || 'Project (no address set)',
@@ -617,7 +619,7 @@ export default function CreateJobScreen() {
       if (destGeoRef.current) clearTimeout(destGeoRef.current);
     }
 
-    if (suggestion?.saved && suggestion.savedLat && suggestion.savedLng) {
+    if (suggestion?.saved && suggestion.savedLat != null && suggestion.savedLng != null) {
       if (target === 'origin') {
         setOriginLat(suggestion.savedLat);
         setOriginLng(suggestion.savedLng);
@@ -628,8 +630,23 @@ export default function CreateJobScreen() {
       return;
     }
 
-    if (suggestion?.saved && (!suggestion.savedLat || !suggestion.savedLng)) {
-      geocodeAddress(description, target);
+    if (suggestion?.saved) {
+      if (suggestion.savedType === 'project' && !suggestion.savedAddress) {
+        const projName = suggestion.projectName || suggestion.structured?.main_text || 'This project';
+        if (target === 'origin') { setOriginAddress(''); setOriginLat(null); setOriginLng(null); }
+        else { setDestinationAddress(''); setDestLat(null); setDestLng(null); }
+        Alert.alert(
+          'No saved location',
+          `"${projName}" doesn't have an address or pinned location yet. Drop a pin on the map to set one.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Drop Pin', onPress: () => openMapPicker(target) },
+          ]
+        );
+        return;
+      }
+      const addrToGeocode = suggestion.savedAddress || description;
+      geocodeAddress(addrToGeocode, target);
       return;
     }
 
