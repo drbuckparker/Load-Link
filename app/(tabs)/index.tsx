@@ -393,7 +393,10 @@ export default function DashboardScreen() {
             <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
           </Pressable>
         ) : !contractor ? (
-          <View style={styles.quickJobCard}>
+          <Pressable
+            style={styles.quickJobCard}
+            onPress={() => router.push('/jobs-browse' as any)}
+          >
             <View style={styles.quickJobIcon}>
               <Ionicons name="flash" size={22} color={Colors.primary} />
             </View>
@@ -401,7 +404,8 @@ export default function DashboardScreen() {
               <Text style={styles.quickJobTitle}>QUICK JOB</Text>
               <Text style={styles.quickJobText}>No open jobs nearby right now</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+          </Pressable>
         ) : null}
 
         {!contractor && !dashboard?.activeRun && !(dashboard?.fleetActiveRuns?.length) && (
