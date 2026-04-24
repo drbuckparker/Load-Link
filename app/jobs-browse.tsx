@@ -366,8 +366,45 @@ export default function JobsBrowseScreen() {
         return endStr >= todayStr;
       });
     }
+    if (dateFilter) {
+      mapped = mapped.filter(j => {
+        if (!j.scheduledDate) return false;
+        const raw = String(j.scheduledDate);
+        const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
+        return dateStr === dateFilter;
+      });
+    }
     return mapped;
-  }, [rawJobs, activeFilter]);
+  }, [rawJobs, activeFilter, dateFilter, isContractor, searchRadius, radiusOriginCoord]);
+
+  const spanningHints = useMemo(() => {
+    if (!dateFilter || !rawJobs) return [] as { startDate: string; count: number }[];
+    const list = Array.isArray(rawJobs) ? rawJobs : [];
+    const counts = new Map<string, number>();
+    for (const raw of list) {
+      const j = mapDbJob(raw);
+      if (!j.scheduledDate) continue;
+      const rawDate = String(j.scheduledDate);
+      const startStr = rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate;
+      if (startStr >= dateFilter) continue;
+      const days = parseFloat(String(j.estimatedDays || '1')) || 1;
+      if (days <= 1) continue;
+      const [sy, sm, sd] = startStr.split('-').map(Number);
+      const start = new Date(sy, sm - 1, sd);
+      let added = 0;
+      const cur = new Date(start);
+      while (added < days - 1) {
+        cur.setDate(cur.getDate() + 1);
+        if (cur.getDay() !== 0 && cur.getDay() !== 6) added++;
+      }
+      const endStr = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
+      if (endStr < dateFilter) continue;
+      counts.set(startStr, (counts.get(startStr) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([startDate, count]) => ({ startDate, count }))
+      .sort((a, b) => b.startDate.localeCompare(a.startDate));
+  }, [rawJobs, dateFilter]);
 
   const jobsListData = useMemo(() => {
     const sortPending = (list: Job[]) => {
@@ -890,16 +927,46 @@ export default function JobsBrowseScreen() {
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color={Colors.primary} />
             </View>
-          ) : jobs.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
-              <Text style={styles.emptyTitle}>No jobs found</Text>
-              <Text style={styles.emptySubtitle}>
-                {selectedProjectFilter ? 'No jobs in this project yet. Tap + to add one.' :
-                  search ? 'Try adjusting your search or filters' : 'Check back later for new opportunities'}
-              </Text>
-            </View>
           ) : (
+            <>
+              {dateFilter && spanningHints.length > 0 && (
+                <View style={styles.spanningHintGroup}>
+                  {spanningHints.map((h) => {
+                    const [hy, hm, hd] = h.startDate.split('-').map(Number);
+                    const startLabel = new Date(hy, hm - 1, hd).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+                    return (
+                      <Pressable
+                        key={h.startDate}
+                        style={styles.spanningHintCard}
+                        onPress={() => setDateFilter(h.startDate)}
+                      >
+                        <Ionicons name="information-circle" size={18} color={Colors.primary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.spanningHintTitle}>
+                            {h.count} multi-day job{h.count > 1 ? 's' : ''} run{h.count === 1 ? 's' : ''} through this day
+                          </Text>
+                          <Text style={styles.spanningHintSubtitle}>
+                            Started {startLabel} — tap to view
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={16} color={Colors.primary} />
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+              {jobs.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
+                  <Text style={styles.emptyTitle}>No jobs found</Text>
+                  <Text style={styles.emptySubtitle}>
+                    {selectedProjectFilter ? 'No jobs in this project yet. Tap + to add one.' :
+                      search ? 'Try adjusting your search or filters' :
+                      dateFilter && spanningHints.length > 0 ? 'No jobs start on this day, but the ones above are still running.' :
+                      'Check back later for new opportunities'}
+                  </Text>
+                </View>
+              ) : (
             <FlatList
               data={jobsListData}
               keyExtractor={(item: any) => item.id}
@@ -1508,6 +1575,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
     gap: 12,
+  },
+  spanningHintGroup: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    gap: 8,
+  },
+  spanningHintCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Colors.primaryLight,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  spanningHintTitle: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    color: Colors.text,
+  },
+  spanningHintSubtitle: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
   },
   emptyTitle: {
     fontFamily: 'Inter_600SemiBold',

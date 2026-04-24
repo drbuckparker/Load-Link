@@ -459,7 +459,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const singleDate = req.query.date as string | undefined;
       if (singleDate) {
-        query += ` AND j.scheduled_date::date = $${paramIdx}::date`;
+        query += ` AND (
+          j.scheduled_date::date = $${paramIdx}::date
+          OR (
+            j.scheduled_date::date < $${paramIdx}::date
+            AND COALESCE(j.estimated_days, 1)::numeric > 1
+            AND (j.scheduled_date::date + (CEIL(COALESCE(j.estimated_days, 1)::numeric * 2)::int) * INTERVAL '1 day')::date >= $${paramIdx}::date
+          )
+        )`;
         params.push(singleDate);
         paramIdx++;
       }
@@ -1955,7 +1962,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const singleDate = req.query.date as string | undefined;
       if (singleDate) {
-        query += ` AND j.scheduled_date::date = $${paramIdx}::date`;
+        query += ` AND (
+          j.scheduled_date::date = $${paramIdx}::date
+          OR (
+            j.scheduled_date::date < $${paramIdx}::date
+            AND COALESCE(j.estimated_days, 1)::numeric > 1
+            AND (j.scheduled_date::date + (CEIL(COALESCE(j.estimated_days, 1)::numeric * 2)::int) * INTERVAL '1 day')::date >= $${paramIdx}::date
+          )
+        )`;
         params.push(singleDate);
         paramIdx++;
       }
