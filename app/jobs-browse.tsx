@@ -109,6 +109,8 @@ export default function JobsBrowseScreen() {
   const [search, setSearch] = useState('');
   const [showTruckFilter, setShowTruckFilter] = useState(false);
   const [selectedTruckType, setSelectedTruckType] = useState<string | null>(null);
+  const [searchRadius, setSearchRadius] = useState<number | null>(null);
+  const [userCoord, setUserCoord] = useState<{ lat: number; lng: number } | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectJobNumber, setNewProjectJobNumber] = useState('');
@@ -143,11 +145,21 @@ export default function JobsBrowseScreen() {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          userLocationRef.current = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+          const c = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+          userLocationRef.current = c;
+          setUserCoord(c);
         }
       } catch {}
     })();
   }, []);
+
+  const radiusOriginCoord = useMemo<{ lat: number; lng: number } | null>(() => {
+    if (userCoord) return userCoord;
+    const lat = Number(user?.secondaryLocationLat || user?.primaryLocationLat || 0);
+    const lng = Number(user?.secondaryLocationLng || user?.primaryLocationLng || 0);
+    if (lat && lng) return { lat, lng };
+    return null;
+  }, [userCoord, user?.secondaryLocationLat, user?.secondaryLocationLng, user?.primaryLocationLat, user?.primaryLocationLng]);
 
   const statusParam = useMemo(() => {
     if (activeFilter === 'All') return undefined;
@@ -313,6 +325,20 @@ export default function JobsBrowseScreen() {
     if (!rawJobs) return [];
     const list = Array.isArray(rawJobs) ? rawJobs : [];
     let mapped = list.map(mapDbJob);
+    if (!isContractor && searchRadius != null && radiusOriginCoord) {
+      const R = 3958.8;
+      const { lat: oLat, lng: oLng } = radiusOriginCoord;
+      mapped = mapped.filter((j) => {
+        const lat = j.originLat || j.destinationLat;
+        const lng = j.originLng || j.destinationLng;
+        if (!lat || !lng) return false;
+        const dLat = (lat - oLat) * Math.PI / 180;
+        const dLng = (lng - oLng) * Math.PI / 180;
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(oLat * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+        const miles = 2 * R * Math.asin(Math.sqrt(a));
+        return miles <= searchRadius;
+      });
+    }
     if (activeFilter === 'Open') {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -817,6 +843,38 @@ export default function JobsBrowseScreen() {
                   );
                 })}
               </View>
+              {!isContractor && (
+                <>
+                  <Text style={[styles.truckFilterLabel, { marginTop: 14 }]}>Distance</Text>
+                  <View style={styles.truckFilterRow}>
+                    <Pressable
+                      style={[styles.truckChip, searchRadius == null && styles.truckChipActive]}
+                      onPress={() => setSearchRadius(null)}
+                    >
+                      <Text style={[styles.truckChipText, searchRadius == null && styles.truckChipTextActive]}>Any</Text>
+                    </Pressable>
+                    {[25, 50, 100, 250].map((mi) => {
+                      const isActive = searchRadius === mi;
+                      return (
+                        <Pressable
+                          key={mi}
+                          style={[styles.truckChip, isActive && styles.truckChipActive]}
+                          onPress={() => setSearchRadius(isActive ? null : mi)}
+                          disabled={!radiusOriginCoord}
+                        >
+                          <Ionicons name="location-outline" size={14} color={isActive ? Colors.primary : Colors.textSecondary} />
+                          <Text style={[styles.truckChipText, isActive && styles.truckChipTextActive]}>{mi} mi</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  {!radiusOriginCoord && (
+                    <Text style={{ color: Colors.textMuted, fontSize: 12, marginTop: 6, fontFamily: 'Inter_400Regular' }}>
+                      Enable location to filter by distance
+                    </Text>
+                  )}
+                </>
+              )}
             </View>
           )}
 
