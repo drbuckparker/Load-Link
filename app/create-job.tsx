@@ -285,7 +285,8 @@ export default function CreateJobScreen() {
     setProjectName(name);
     setShowProjectDropdown(false);
     const proj = projects.find((p: any) => String(p.id) === id);
-    if (proj?.site_address) {
+    const hasLoc = !!(proj?.site_address || (proj?.site_lat && proj?.site_lng));
+    if (hasLoc) {
       setPendingProject(proj);
       setShowHaulDirectionModal(true);
     }
