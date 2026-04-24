@@ -315,7 +315,10 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
 export async function syncProjects(auth: SyncAuth, cachedJobs?: any[]): Promise<number> {
   if (jobSyncPaused) return 0;
   try {
-    const websiteProjects = await websiteFetchSync("/api/projects", { jwt: auth.jwt });
+    const websiteProjects = await websiteFetchSync("/api/contractor-projects", {
+      jwt: auth.jwt,
+      query: { contractorId: auth.userId },
+    });
     if (!Array.isArray(websiteProjects)) {
       await updateSyncTime("projects", auth.userId);
       return 0;
