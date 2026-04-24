@@ -48,7 +48,10 @@ async function websiteFetchSync(
   options: { method?: string; body?: any; jwt?: string; query?: Record<string, string> } = {}
 ): Promise<any> {
   const r = await websiteFetchWithStatus(path, options);
-  if (!r.ok) return null;
+  if (!r.ok) {
+    console.warn(`[websiteFetchSync] ${options.method || "GET"} ${path} failed: ${r.status} ${r.errorText?.slice(0, 200) || ""}`);
+    return null;
+  }
   return r.data;
 }
 
@@ -506,6 +509,23 @@ async function ensureSyncQueueTable(): Promise<void> {
     CREATE INDEX IF NOT EXISTS sync_queue_user_pending_idx
       ON sync_queue(user_id, id) WHERE succeeded_at IS NULL;
   `);
+
+  const fksToDrop: Array<[string, string]> = [
+    ["jobs", "jobs_project_id_fkey"],
+    ["jobs", "jobs_contractor_id_users_id_fk"],
+    ["jobs", "jobs_driver_id_users_id_fk"],
+    ["trucks", "trucks_trucking_company_id_fkey"],
+    ["trucks", "trucks_assigned_driver_id_fkey"],
+    ["contractor_projects", "contractor_projects_contractor_id_fkey"],
+  ];
+  for (const [table, fk] of fksToDrop) {
+    try {
+      await pool.query(`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${fk}`);
+    } catch (e: any) {
+      console.warn(`[Sync] Failed to drop FK ${fk}:`, e.message);
+    }
+  }
+
   _syncQueueReady = true;
 }
 
@@ -536,7 +556,7 @@ async function attemptQueuedPush(rowId: number, auth: SyncAuth): Promise<any> {
     } else {
       const errSnippet = (result.errorText || (result.data && JSON.stringify(result.data))) || "";
       const errMsg = `HTTP ${result.status}${errSnippet ? `: ${String(errSnippet).slice(0, 300)}` : ""}`;
-      const TERMINAL_STATUSES = new Set([400, 404, 410, 415, 422]);
+      const TERMINAL_STATUSES = new Set([400, 403, 404, 410, 415, 422]);
       const terminal = TERMINAL_STATUSES.has(result.status);
       const newAttempts = terminal ? MAX_SYNC_ATTEMPTS : null;
       if (terminal) {

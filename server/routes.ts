@@ -2976,15 +2976,11 @@ function initMap(){
   });
 
   startPeriodicSync(() => {
-    const seen = new Set<string>();
-    const auths: { jwt: string; userId: string; user: any }[] = [];
+    const latestPerUser = new Map<string, { jwt: string; userId: string; user: any }>();
     for (const [, auth] of tokenToJwt) {
-      if (!seen.has(auth.userId)) {
-        seen.add(auth.userId);
-        auths.push(auth);
-      }
+      latestPerUser.set(auth.userId, auth);
     }
-    return auths;
+    return Array.from(latestPerUser.values());
   }, 120000);
 
   const httpServer = createServer(app);
