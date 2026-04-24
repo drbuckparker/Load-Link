@@ -858,11 +858,23 @@ export default function CreateJobScreen() {
       let resolvedProjectId: string | undefined = projectId || undefined;
 
       if (!resolvedProjectId && projectName.trim()) {
+        let inferredAddr = projectSiteAddress.trim();
+        let inferredLat: number | null = projectSiteLat;
+        let inferredLng: number | null = projectSiteLng;
+        if (inferredLat == null || inferredLng == null) {
+          if (destLat != null && destLng != null) {
+            inferredLat = destLat; inferredLng = destLng;
+            if (!inferredAddr) inferredAddr = destinationAddress.trim();
+          } else if (originLat != null && originLng != null) {
+            inferredLat = originLat; inferredLng = originLng;
+            if (!inferredAddr) inferredAddr = originAddress.trim();
+          }
+        }
         const newProject = await apiRequest('POST', '/api/projects', {
           name: projectName.trim(),
-          ...(projectSiteAddress.trim() ? { siteAddress: projectSiteAddress.trim() } : {}),
-          ...(projectSiteLat != null ? { siteLat: String(projectSiteLat) } : {}),
-          ...(projectSiteLng != null ? { siteLng: String(projectSiteLng) } : {}),
+          ...(inferredAddr ? { siteAddress: inferredAddr } : {}),
+          ...(inferredLat != null ? { siteLat: String(inferredLat) } : {}),
+          ...(inferredLng != null ? { siteLng: String(inferredLng) } : {}),
         });
         const proj = await newProject.json();
         resolvedProjectId = proj.id;
