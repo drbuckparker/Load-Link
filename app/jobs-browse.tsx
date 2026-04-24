@@ -432,6 +432,11 @@ export default function JobsBrowseScreen() {
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderLeft}>
             <Text style={styles.cardMaterial} numberOfLines={1}>{item.material}</Text>
+          </View>
+          <Text style={styles.cardRate}>{formatRate(item.rate, item.rateType)}</Text>
+        </View>
+        {(item.requiresTarp || item.requiresWeightTickets || item.urgent) && (
+          <View style={styles.requirementsRow}>
             {item.requiresTarp && (
               <View style={styles.urgentBadge}>
                 <Ionicons name="shield-checkmark" size={10} color={Colors.primary} />
@@ -451,8 +456,7 @@ export default function JobsBrowseScreen() {
               </View>
             )}
           </View>
-          <Text style={styles.cardRate}>{formatRate(item.rate, item.rateType)}</Text>
-        </View>
+        )}
 
         <View style={styles.badgeRow}>
           <View style={[styles.badge, { backgroundColor: statusColor.bg }]}>
@@ -1547,13 +1551,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
+    gap: 10,
   },
   cardHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     flex: 1,
+    minWidth: 0,
+  },
+  requirementsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
   },
   cardProjectName: {
     fontFamily: 'ChakraPetch_700Bold',
