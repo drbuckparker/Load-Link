@@ -160,6 +160,7 @@ export default function CreateJobScreen() {
   const [paperworkDescription, setPaperworkDescription] = useState('');
   const [showHaulDirectionModal, setShowHaulDirectionModal] = useState(false);
   const [pendingProject, setPendingProject] = useState<any>(null);
+  const [pinProjectTarget, setPinProjectTarget] = useState<{ projectId: string; projectName: string; target: 'origin' | 'destination' } | null>(null);
 
   const { data: _projects } = useQuery<any[]>({
     queryKey: ['/api/projects'],
@@ -379,9 +380,44 @@ export default function CreateJobScreen() {
       setProjectSiteLng(mapPin.longitude);
     }
 
+    const pinTarget = pinProjectTarget;
+    const finalLat = mapPin.latitude;
+    const finalLng = mapPin.longitude;
+    const finalAddress = address;
+
     setReversingGeocode(false);
     setMapPickerTarget(null);
     setMapPin(null);
+
+    if (pinTarget && pinTarget.target === mapPickerTarget) {
+      setPinProjectTarget(null);
+      Alert.alert(
+        'Save to project?',
+        `Save this location to "${pinTarget.projectName}" so it's ready next time?`,
+        [
+          { text: 'Not now', style: 'cancel' },
+          {
+            text: 'Save',
+            onPress: async () => {
+              try {
+                await apiRequest('PUT', `/api/projects/${pinTarget.projectId}`, {
+                  siteLat: finalLat,
+                  siteLng: finalLng,
+                  siteAddress: finalAddress,
+                });
+                queryClient.invalidateQueries({
+                  predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')),
+                });
+              } catch (e: any) {
+                Alert.alert('Could not save', e?.message || 'Failed to save pin to project. It will still apply to this job.');
+              }
+            },
+          },
+        ]
+      );
+    } else if (pinTarget) {
+      setPinProjectTarget(null);
+    }
   }
 
   function formatSavedItem(loc: any, i: number) {
@@ -633,6 +669,7 @@ export default function CreateJobScreen() {
     if (suggestion?.saved) {
       if (suggestion.savedType === 'project' && !suggestion.savedAddress) {
         const projName = suggestion.projectName || suggestion.structured?.main_text || 'This project';
+        const projId = (suggestion.place_id || '').replace(/^project_/, '').replace(/_\d+$/, '');
         if (target === 'origin') { setOriginAddress(''); setOriginLat(null); setOriginLng(null); }
         else { setDestinationAddress(''); setDestLat(null); setDestLng(null); }
         Alert.alert(
@@ -640,7 +677,13 @@ export default function CreateJobScreen() {
           `"${projName}" doesn't have an address or pinned location yet. Drop a pin on the map to set one.`,
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Drop Pin', onPress: () => openMapPicker(target) },
+            {
+              text: 'Drop Pin',
+              onPress: () => {
+                if (projId) setPinProjectTarget({ projectId: projId, projectName: projName, target });
+                openMapPicker(target);
+              },
+            },
           ]
         );
         return;
