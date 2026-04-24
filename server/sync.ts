@@ -35,12 +35,20 @@ async function websiteFetchWithStatus(
   const ct = res.headers.get("content-type") || "";
   let data: any = null;
   let errorText: string | undefined;
+  let ok = res.ok;
   if (ct.includes("application/json")) {
     try { data = await res.json(); } catch { data = null; }
-  } else if (!res.ok) {
-    try { errorText = (await res.text()).slice(0, 500); } catch {}
+  } else {
+    try {
+      const txt = await res.text();
+      errorText = txt.slice(0, 500);
+      if (ok && /^\s*<!doctype\s+html|<html/i.test(txt)) {
+        ok = false;
+        errorText = `Endpoint returned HTML SPA shell (likely missing API route): ${path}`;
+      }
+    } catch {}
   }
-  return { ok: res.ok, status: res.status, data, errorText };
+  return { ok, status: res.status, data, errorText };
 }
 
 async function websiteFetchSync(

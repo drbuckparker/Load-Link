@@ -2505,7 +2505,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [id]);
       const project = result.rows[0];
 
-      pushToWebsite("/api/projects", auth, { method: "POST", body: { ...req.body, id } }).catch(() => {});
+      pushToWebsite("/api/contractor-projects", auth, { method: "POST", body: { ...req.body, id, contractorId: auth.userId } }).catch(() => {});
 
       return res.status(201).json(addDualKeys(project));
     } catch (e: any) {
@@ -2550,7 +2550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [req.params.id]);
       const project = result.rows[0] || { id: req.params.id, status: 'active' };
 
-      pushToWebsite(`/api/projects/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
 
       return res.json(addDualKeys(project));
     } catch (e: any) {
