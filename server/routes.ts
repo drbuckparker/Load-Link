@@ -662,7 +662,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const columns = ['id', 'contractor_id', 'material', 'origin_address', 'destination_address', 'rate', 'rate_type',
         'truck_type', 'status', 'scheduled_date', 'project_id', 'trucks_needed', 'estimated_days', 'includes_weekends', 'includes_saturday', 'includes_sunday',
         'estimated_cost', 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng', 'job_type',
-        'requires_weight_tickets', 'requires_tarp', 'urgent', 'created_at', 'updated_at',
+        'requires_weight_tickets', 'requires_tarp', 'urgent', 'paperwork_description', 'created_at', 'updated_at',
         'capacity_needed', 'total_tons_needed', 'total_amount_unit', 'pickup_time', 'estimated_trips'];
 
       const snakeBody: Record<string, any> = {};
