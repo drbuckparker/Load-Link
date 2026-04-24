@@ -341,6 +341,18 @@ export default function CreateJobScreen() {
     }
     setMapPin(initialPin);
     setMapPickerTarget(target);
+
+    if (projectId && !pinProjectTarget) {
+      const proj = projects.find((p: any) => String(p.id) === projectId);
+      const projHasLoc = !!(proj?.site_address || (proj?.site_lat && proj?.site_lng));
+      if (proj && !projHasLoc) {
+        setPinProjectTarget({
+          projectId: String(proj.id),
+          projectName: proj.name || 'this project',
+          target,
+        });
+      }
+    }
   }
 
   function handleMapPress(e: any) {
