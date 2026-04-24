@@ -990,6 +990,8 @@ export default function JobsBrowseScreen() {
               onRefresh={refetch}
               refreshing={false}
             />
+              )}
+            </>
           )}
         </>
       )}
