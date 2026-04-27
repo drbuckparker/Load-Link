@@ -503,7 +503,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paramIdx++;
       }
       // Hide jobs from Find Jobs when they're no longer truly available to apply to.
-      // Conditions for hiding (when caller is NOT the job's contractor):
+      // Conditions for hiding (apply to everyone, including the job's contractor —
+      // a fully-crewed job belongs in Active/All, not in Open):
       //   a) Fully crewed: approved trucks >= trucks_needed
       //   b) Application cap hit: (pending+approved) >= cap AND caller hasn't applied
       //      Cap by trucks_needed: 1 -> 5, 2 -> 8, 3+ -> 3 * trucks_needed
@@ -511,7 +512,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       //      calendar now, not in Find Jobs.
       query += ` AND NOT (
         j.status::text IN ('open', 'accepted', 'pending')
-        AND j.contractor_id <> $${paramIdx}
         AND (
           (SELECT COUNT(*) FROM job_assignments ja
             WHERE ja.job_id = j.id AND ja.status::text = 'approved')
