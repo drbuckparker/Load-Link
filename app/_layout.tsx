@@ -13,6 +13,16 @@ import { useFonts, ChakraPetch_600SemiBold, ChakraPetch_700Bold } from "@expo-go
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
 import { playNotificationSound } from "@/lib/sounds";
 
+if (Platform.OS === 'web' && typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason: any = event.reason;
+    const msg: string = (reason && (reason.message || String(reason))) || '';
+    if (/ms timeout exceeded/i.test(msg) || /fontfaceobserver/i.test(msg)) {
+      event.preventDefault();
+    }
+  });
+}
+
 SplashScreen.preventAutoHideAsync();
 
 function RootLayoutNav() {
