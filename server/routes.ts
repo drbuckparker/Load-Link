@@ -805,6 +805,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { vehicleIds } = req.body || {};
       const crypto = require("crypto");
 
+      // Look up the job + caller's favorite status BEFORE writing any assignments,
+      // so we can enforce the auto-approval truck cap.
+      const jobRow = await pool.query(
+        `SELECT contractor_id, COALESCE(trucks_needed, 1)::int AS trucks_needed FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      const contractorId = jobRow.rows[0]?.contractor_id;
+      const trucksNeeded = Number(jobRow.rows[0]?.trucks_needed) || 1;
+
+      let isAutoApprove = false;
+      if (contractorId) {
+        const userRow = await pool.query(`SELECT company FROM users WHERE id::text = $1`, [auth.userId]);
+        const driverCompany = userRow.rows[0]?.company || '';
+        const favCheck = await pool.query(
+          `SELECT id FROM contractor_favorites WHERE contractor_id = $1 AND (
+            (favorite_type = 'driver' AND favorite_driver_id = $2)
+            OR (favorite_type = 'company' AND favorite_company_name = $3 AND $3 != '')
+          ) LIMIT 1`,
+          [contractorId, auth.userId, driverCompany]
+        );
+        isAutoApprove = favCheck.rows.length > 0;
+      }
+
+      // Auto-approval cap: an auto-approved driver cannot push the approved truck
+      // count over `trucks_needed`. Existing pending applications by this same
+      // driver also count, because the auto-approve sweep below will flip them.
+      const requestedCount = (vehicleIds && Array.isArray(vehicleIds) && vehicleIds.length > 0)
+        ? vehicleIds.length
+        : 1;
+      if (isAutoApprove) {
+        const approvedRow = await pool.query(
+          `SELECT COUNT(*)::int AS c FROM job_assignments WHERE job_id = $1 AND status::text = 'approved'`,
+          [req.params.id]
+        );
+        const myPendingRow = await pool.query(
+          `SELECT COUNT(*)::int AS c FROM job_assignments WHERE job_id = $1 AND driver_id = $2 AND status::text = 'pending'`,
+          [req.params.id, auth.userId]
+        );
+        const approvedCount = approvedRow.rows[0]?.c || 0;
+        const myPendingCount = myPendingRow.rows[0]?.c || 0;
+        const slotsLeft = Math.max(0, trucksNeeded - approvedCount - myPendingCount);
+        if (slotsLeft === 0) {
+          return res.status(400).json({
+            message: `This job is already fully staffed (${approvedCount + myPendingCount}/${trucksNeeded} trucks).`,
+          });
+        }
+        if (requestedCount > slotsLeft) {
+          return res.status(400).json({
+            message: `This job only has ${slotsLeft} truck slot${slotsLeft === 1 ? '' : 's'} left for auto-approval. You're trying to book ${requestedCount}.`,
+          });
+        }
+      }
+
       await pool.query(`UPDATE jobs SET status = 'pending', updated_at = NOW() WHERE id = $1`, [req.params.id]);
 
       if (vehicleIds && Array.isArray(vehicleIds) && vehicleIds.length > 0) {
@@ -827,27 +880,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       }
 
-      const jobRow = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [req.params.id]);
-      const contractorId = jobRow.rows[0]?.contractor_id;
       let autoApproved = false;
-      if (contractorId) {
-        const userRow = await pool.query(`SELECT company FROM users WHERE id::text = $1`, [auth.userId]);
-        const driverCompany = userRow.rows[0]?.company || '';
-        const favCheck = await pool.query(
-          `SELECT id FROM contractor_favorites WHERE contractor_id = $1 AND (
-            (favorite_type = 'driver' AND favorite_driver_id = $2)
-            OR (favorite_type = 'company' AND favorite_company_name = $3 AND $3 != '')
-          ) LIMIT 1`,
-          [contractorId, auth.userId, driverCompany]
+      if (isAutoApprove) {
+        await pool.query(
+          `UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE job_id = $1 AND driver_id = $2 AND status::text = 'pending'`,
+          [req.params.id, auth.userId]
         );
-        if (favCheck.rows.length > 0) {
-          await pool.query(
-            `UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE job_id = $1 AND driver_id = $2 AND status::text = 'pending'`,
-            [req.params.id, auth.userId]
-          );
-          await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
-          autoApproved = true;
-        }
+        await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+        autoApproved = true;
       }
 
       pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {});
