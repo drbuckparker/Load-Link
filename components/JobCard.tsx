@@ -20,6 +20,40 @@ export default function JobCard({ job, onPress, showStatus = false }: JobCardPro
     onPress();
   }
 
+  const inProgress = (() => {
+    if (!job.scheduledDate) return null;
+    const raw = String(job.scheduledDate);
+    const startStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
+    const totalDays = parseFloat(String(job.estimatedDays || '1')) || 1;
+    if (totalDays <= 1) return null;
+    const [sy, sm, sd] = startStr.split('-').map(Number);
+    if (!sy || !sm || !sd) return null;
+    const start = new Date(sy, sm - 1, sd);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (today.getTime() < start.getTime()) return null;
+    const end = new Date(start);
+    let added = 0;
+    while (added < totalDays - 1) {
+      end.setDate(end.getDate() + 1);
+      if (end.getDay() !== 0 && end.getDay() !== 6) added++;
+    }
+    if (today.getTime() > end.getTime()) return null;
+    let elapsed = 0;
+    const cur = new Date(start);
+    while (cur.getTime() < today.getTime()) {
+      cur.setDate(cur.getDate() + 1);
+      if (cur.getDay() !== 0 && cur.getDay() !== 6) elapsed++;
+    }
+    const totalDaysDisplay = Math.max(1, Math.ceil(totalDays));
+    const dayOf = Math.min(totalDaysDisplay, elapsed + 1);
+    const daysLeft = Math.max(0, totalDaysDisplay - dayOf);
+    const filled = Number(job.approvedAssignments) || 0;
+    const requested = Number(job.trucksNeeded) || 0;
+    const understaffed = requested > 0 && filled < requested;
+    return { dayOf, totalDays: totalDaysDisplay, daysLeft, filled, requested, understaffed };
+  })();
+
   return (
     <Pressable
       style={({ pressed }) => [styles.container, pressed && styles.pressed]}
@@ -29,6 +63,28 @@ export default function JobCard({ job, onPress, showStatus = false }: JobCardPro
         <View style={styles.weekendBanner} testID="weekend-banner">
           <Ionicons name="warning" size={12} color="#001a00" />
           <Text style={styles.weekendBannerText}>WEEKEND WORK INCLUDED</Text>
+        </View>
+      ) : null}
+
+      {inProgress ? (
+        <View style={styles.inProgressBanner} testID="in-progress-banner">
+          <Ionicons name="time" size={12} color={Colors.primary} />
+          <Text style={styles.inProgressTitle}>
+            IN PROGRESS · DAY {inProgress.dayOf}/{inProgress.totalDays}
+          </Text>
+          <View style={styles.inProgressDot} />
+          <Text style={styles.inProgressMeta}>
+            {inProgress.requested > 0
+              ? `${inProgress.filled}/${inProgress.requested} trucks`
+              : `${inProgress.filled} trucks`}
+          </Text>
+          <View style={styles.inProgressDot} />
+          <Text style={styles.inProgressMeta}>
+            {inProgress.daysLeft} day{inProgress.daysLeft === 1 ? '' : 's'} left
+          </Text>
+          {inProgress.understaffed ? (
+            <Text style={styles.inProgressNeed}> · NEEDS TRUCKS</Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -150,6 +206,43 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 16,
     color: Colors.text,
+  },
+  inProgressBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    backgroundColor: Colors.primaryLight,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginBottom: 10,
+  },
+  inProgressTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    letterSpacing: 0.8,
+    color: Colors.primary,
+  },
+  inProgressMeta: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    color: Colors.textSecondary,
+  },
+  inProgressNeed: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    letterSpacing: 0.8,
+    color: Colors.primary,
+  },
+  inProgressDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: Colors.textMuted,
+    opacity: 0.6,
   },
   weekendBanner: {
     flexDirection: 'row',

@@ -347,6 +347,13 @@ export default function JobsBrowseScreen() {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       mapped = mapped.filter(j => {
+        const status = String(j.status || '').toLowerCase();
+        if (status === 'completed' || status === 'cancelled' || status === 'canceled' || status === 'expired' || status === 'closed') return false;
+        if (!isContractor) {
+          const requested = Number(j.trucksNeeded) || 0;
+          const assigned = Number(j.approvedAssignments) || 0;
+          if (requested > 0 && assigned >= requested) return false;
+        }
         if (!j.scheduledDate) return true;
         const raw = String(j.scheduledDate);
         const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
