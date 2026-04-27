@@ -918,7 +918,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `SELECT ja.*, j.scheduled_date, j.estimated_days, j.material as job_material FROM job_assignments ja
          JOIN jobs j ON ja.job_id = j.id
          WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
-         AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
+         AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')
+         AND ja.status::text NOT IN ('withdrawn', 'rejected', 'cancelled', 'expired')`,
         [req.params.id]
       );
 
