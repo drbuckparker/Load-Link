@@ -1758,6 +1758,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.delete("/api/vehicles/:id/permanent", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const owned = await pool.query(
+        `SELECT id, archived_at FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) {
+        return res.status(404).json({ message: "Vehicle not found" });
+      }
+      if (!owned.rows[0].archived_at) {
+        return res.status(400).json({ message: "Archive the vehicle before deleting it permanently" });
+      }
+      await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
+      await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
+      await pool.query(`DELETE FROM trucks WHERE id = $1`, [req.params.id]);
+      deletedVehicleIds.add(req.params.id);
+      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" })
+        .catch((err) => { console.error("pushToWebsite delete vehicle error:", err.message); });
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Permanent delete vehicle error:", e.message);
+      return res.status(500).json({ message: "Failed to delete vehicle" });
+    }
+  });
+
   app.post("/api/vehicles/:id/unarchive", requireAuth, async (req: Request, res: Response) => {
     try {
       deletedVehicleIds.delete(req.params.id);

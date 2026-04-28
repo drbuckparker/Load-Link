@@ -132,6 +132,15 @@ export default function VehiclesScreen() {
     },
   });
 
+  const permanentDeleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest('DELETE', `/api/vehicles/${id}/permanent`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/vehicles/archived'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+    },
+  });
+
   const { data: _archivedVehicles } = useQuery<Vehicle[]>({
     queryKey: ['/api/vehicles/archived'],
     enabled: showArchived,
@@ -196,6 +205,20 @@ export default function VehiclesScreen() {
     Alert.alert('Restore Vehicle', 'Restore this vehicle to active duty?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Restore', onPress: () => unarchiveMutation.mutate(id) },
+    ]);
+  }
+
+  function handlePermanentDelete(id: string, label: string) {
+    const msg = `Permanently delete ${label}?\n\nThis cannot be undone. The truck will be removed from your fleet and from any past assignments.`;
+    if (Platform.OS === 'web') {
+      if (window.confirm(msg)) {
+        permanentDeleteMutation.mutate(id);
+      }
+      return;
+    }
+    Alert.alert('Delete Permanently', msg, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => permanentDeleteMutation.mutate(id) },
     ]);
   }
 
@@ -498,21 +521,36 @@ export default function VehiclesScreen() {
                   <Text style={styles.archivedEmptyText}>No archived vehicles</Text>
                 </View>
               ) : (
-                archivedVehicles.map((item) => (
+                archivedVehicles.map((item) => {
+                  const label = `${item.truck_number ? '#' + item.truck_number + ' ' : ''}${item.year || ''} ${item.make || ''} ${item.model || ''}`.trim() || 'this vehicle';
+                  return (
                   <View key={String(item.id)} style={[styles.vehicleCard, { opacity: 0.7 }]}>
                     <View style={styles.vehicleHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.vehicleName}>{item.year} {item.make} {item.model}</Text>
+                        <Text style={styles.vehicleName}>
+                          {item.truck_number ? `#${item.truck_number} ` : ''}{item.year} {item.make} {item.model}
+                        </Text>
                         <Text style={styles.vehicleType}>{TRUCK_TYPE_LABELS[item.truck_type] || item.truck_type}</Text>
                       </View>
-                      <Pressable
-                        onPress={() => handleUnarchive(String(item.id))}
-                        style={styles.restoreBtn}
-                        hitSlop={8}
-                      >
-                        <Ionicons name="refresh-outline" size={16} color={Colors.success} />
-                        <Text style={styles.restoreBtnText}>Restore</Text>
-                      </Pressable>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <Pressable
+                          onPress={() => handleUnarchive(String(item.id))}
+                          style={styles.restoreBtn}
+                          hitSlop={8}
+                        >
+                          <Ionicons name="refresh-outline" size={16} color={Colors.success} />
+                          <Text style={styles.restoreBtnText}>Restore</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => handlePermanentDelete(String(item.id), label)}
+                          style={styles.deleteBtn}
+                          hitSlop={8}
+                          disabled={permanentDeleteMutation.isPending}
+                        >
+                          <Ionicons name="trash-outline" size={16} color={Colors.destructive} />
+                          <Text style={styles.deleteBtnText}>Delete</Text>
+                        </Pressable>
+                      </View>
                     </View>
                     <View style={styles.vehicleDetails}>
                       <View style={styles.detailItem}>
@@ -521,7 +559,8 @@ export default function VehiclesScreen() {
                       </View>
                     </View>
                   </View>
-                ))
+                  );
+                })
               )
             )}
           </View>
@@ -854,5 +893,19 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
     color: Colors.success,
+  },
+  deleteBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    backgroundColor: Colors.destructive + '15',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  deleteBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.destructive,
   },
 });
