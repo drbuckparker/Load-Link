@@ -2001,6 +2001,145 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Build the next-7-day upcoming-jobs widget data.
+      // Truck-centric view: for each day, list the user's trucks and which ones
+      // are booked on which approved job (so they can drill in). Users with
+      // zero trucks (e.g. pure drivers) get an empty `trucks` array and the
+      // client falls back to its existing "Available / OPEN" rendering.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const horizonDays = 7;
+      const lastDay = new Date(today);
+      lastDay.setDate(today.getDate() + horizonDays - 1);
+      const fmtDate = (d: Date) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const startDateStr = fmtDate(today);
+      const endDateStr = fmtDate(lastDay);
+
+      let userTrucks: any[] = [];
+      let truckAssignments: any[] = [];
+      try {
+        const trucksRes = await pool.query(
+          `SELECT id, truck_number, year, make, model
+             FROM trucks
+            WHERE trucking_company_id = $1 AND archived_at IS NULL
+            ORDER BY NULLIF(regexp_replace(COALESCE(truck_number, ''), '[^0-9]', '', 'g'), '')::int NULLS LAST,
+                     truck_number`,
+          [userId]
+        );
+        userTrucks = trucksRes.rows;
+      } catch {}
+
+      if (userTrucks.length > 0) {
+        try {
+          const asmtRes = await pool.query(
+            `SELECT
+               ja.vehicle_id, ja.job_id, ja.driver_id,
+               j.scheduled_date::date AS scheduled_date,
+               COALESCE(j.estimated_days, 1)::numeric AS estimated_days,
+               j.material, j.status::text AS job_status, j.contractor_id,
+               contractor.full_name AS contractor_name,
+               contractor.company   AS contractor_company,
+               cp.name AS project_name
+             FROM job_assignments ja
+             JOIN trucks t ON ja.vehicle_id = t.id
+             JOIN jobs   j ON ja.job_id     = j.id
+             LEFT JOIN users               contractor ON j.contractor_id = contractor.id
+             LEFT JOIN contractor_projects cp         ON j.project_id    = cp.id
+             WHERE t.trucking_company_id = $1
+               AND t.archived_at IS NULL
+               AND ja.status::text = 'approved'
+               AND j.archived_at IS NULL
+               AND j.status::text NOT IN ('cancelled', 'completed')
+               AND j.scheduled_date::date <= $3::date
+               AND (
+                 j.scheduled_date::date >= $2::date
+                 OR (
+                   COALESCE(j.estimated_days, 1)::numeric > 1
+                   AND (j.scheduled_date::date
+                        + (CEIL(COALESCE(j.estimated_days, 1)::numeric * 2)::int) * INTERVAL '1 day'
+                       )::date >= $2::date
+                 )
+               )`,
+            [userId, startDateStr, endDateStr]
+          );
+          truckAssignments = asmtRes.rows;
+        } catch (e: any) {
+          console.error("Upcoming-days assignments query error:", e.message);
+        }
+      }
+
+      const isBusinessDay = (d: Date) => d.getDay() !== 0 && d.getDay() !== 6;
+      const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+      const upcomingDays: any[] = [];
+      for (let i = 0; i < horizonDays; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + i);
+        const dDateStr = fmtDate(d);
+
+        // Approved assignments whose date span covers this day.
+        // Mirrors /api/contractor/jobs single-date rule: a job covers `d` iff
+        //   d == scheduled_date, OR
+        //   estimated_days > 1 AND d is within scheduled_date + ceil(days*2)
+        const dayAssignments = truckAssignments.filter((a: any) => {
+          const start = new Date(a.scheduled_date);
+          start.setHours(0, 0, 0, 0);
+          if (d.getTime() === start.getTime()) return true;
+          const days = Number(a.estimated_days || 1);
+          if (days <= 1) return false;
+          const span = Math.ceil(days * 2);
+          const end = new Date(start);
+          end.setDate(start.getDate() + span);
+          return d.getTime() > start.getTime() && d.getTime() <= end.getTime();
+        });
+
+        const trucksRendered = userTrucks.map((t: any) => {
+          const a = dayAssignments.find((x: any) => x.vehicle_id === t.id);
+          const base = {
+            id: t.id,
+            truckNumber: t.truck_number,
+            vehicleDesc: [t.year, t.make, t.model].filter(Boolean).join(' '),
+          };
+          if (!a) return { ...base, booked: false };
+          return {
+            ...base,
+            booked: true,
+            jobId: a.job_id,
+            jobMaterial: a.material,
+            jobStatus: a.job_status,
+            contractorName: a.contractor_name,
+            contractorCompany: a.contractor_company,
+            projectName: a.project_name,
+          };
+        });
+
+        const trucksBooked = trucksRendered.filter(t => t.booked).length;
+        const trucksTotal = userTrucks.length;
+        const trucksAvailable = trucksTotal - trucksBooked;
+
+        upcomingDays.push({
+          date: dDateStr,
+          dayName: dayNames[d.getDay()],
+          dayNum: d.getDate(),
+          isBusinessDay: isBusinessDay(d),
+          status: trucksBooked > 0 ? 'booked' : 'available',
+          trucksTotal,
+          trucksBooked,
+          trucksAvailable,
+          trucks: trucksRendered,
+          jobs: dayAssignments.map((a: any) => ({
+            id: a.job_id,
+            material: a.material,
+            projectName: a.project_name || '',
+            contractorName: a.contractor_name || '',
+            trucksNeeded: 1,
+            assigned: 1,
+            status: a.job_status,
+            assignmentStatus: 'approved',
+          })),
+        });
+      }
+
       const dashboard = {
         openJobs, activeJobs, completedJobs, pendingApplications,
         totalJobs: jobs.length,
@@ -2015,6 +2154,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           address: user?.primary_location_address || user?.address,
         },
         status: user?.is_connected ? 'online' : 'offline',
+        upcomingDays,
         activeFleetRuns,
         fleetActiveRuns: activeFleetRuns,
       };

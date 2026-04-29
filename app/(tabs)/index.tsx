@@ -57,7 +57,17 @@ interface DashboardData {
   fleetActiveRuns?: FleetActiveRun[];
   earnings: { total: number; awaiting: number; thisMonth: number; thisWeek: number };
   location: { lat: number | null; lng: number | null; address: string | null };
-  upcomingDays: { date: string; dayName: string; dayNum: number; status: string; jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[] }[];
+  upcomingDays: {
+    date: string; dayName: string; dayNum: number; status: string;
+    isBusinessDay?: boolean;
+    trucksTotal?: number; trucksBooked?: number; trucksAvailable?: number;
+    trucks?: {
+      id: string; truckNumber?: string; vehicleDesc?: string; booked: boolean;
+      jobId?: string; jobMaterial?: string; jobStatus?: string;
+      contractorName?: string; contractorCompany?: string; projectName?: string;
+    }[];
+    jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[];
+  }[];
   recentActivity: { id: string; type: string; title: string; message: string; createdAt: string; isRead: boolean }[];
 }
 
@@ -83,6 +93,7 @@ export default function DashboardScreen() {
 
   const [switchingRole, setSwitchingRole] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [expandedDay, setExpandedDay] = useState<string | null>(null);
   const [activeElapsed, setActiveElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [deviceLat, setDeviceLat] = useState<number | null>(null);
@@ -485,14 +496,23 @@ export default function DashboardScreen() {
           </View>
 
           {(dashboard?.upcomingDays || getDefaultDays()).map((day, i) => {
-            const hasJobs = day.jobs && day.jobs.length > 0;
+            const hasTrucks = !!(day.trucks && day.trucksTotal && day.trucksTotal > 0);
+            const hasJobs = !!(day.jobs && day.jobs.length > 0);
+            const trucksBooked = day.trucksBooked || 0;
+            const trucksAvailable = day.trucksAvailable || 0;
+            const trucksTotal = day.trucksTotal || 0;
+            const isExpanded = expandedDay === day.date;
+            const canExpand = hasTrucks;
+
             return (
               <View key={i}>
                 <Pressable
                   style={styles.upcomingRow}
                   onPress={() => {
                     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    if (hasJobs) {
+                    if (canExpand) {
+                      setExpandedDay(isExpanded ? null : day.date);
+                    } else if (hasJobs) {
                       router.push('/(tabs)/calendar');
                     } else if (day.status === 'available' || day.status === 'unavailable') {
                       router.push('/(tabs)/calendar');
@@ -505,7 +525,34 @@ export default function DashboardScreen() {
                     <Text style={styles.dateDay}>{day.dayName}</Text>
                     <Text style={styles.dateNum}>{day.dayNum}</Text>
                   </View>
-                  {!hasJobs ? (
+
+                  {hasTrucks ? (
+                    <>
+                      <View style={{ flex: 1 }}>
+                        {trucksBooked > 0 ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <View style={[styles.weekJobStatusBadge, { backgroundColor: Colors.infoBg }]}>
+                              <Text style={[styles.weekJobStatusText, { color: Colors.info }]}>
+                                {trucksBooked} BOOKED
+                              </Text>
+                            </View>
+                            <Text style={styles.upcomingStatus}>
+                              {trucksAvailable} available
+                            </Text>
+                          </View>
+                        ) : (
+                          <Text style={styles.upcomingStatus}>
+                            {trucksTotal} {trucksTotal === 1 ? 'truck' : 'trucks'} available
+                          </Text>
+                        )}
+                      </View>
+                      <Ionicons
+                        name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={16}
+                        color={Colors.textMuted}
+                      />
+                    </>
+                  ) : !hasJobs ? (
                     <>
                       <Text style={styles.upcomingStatus}>
                         {day.status === 'available' ? 'Available' : day.status === 'unavailable' ? 'Unavailable' : day.status}
@@ -584,6 +631,51 @@ export default function DashboardScreen() {
                     </View>
                   )}
                 </Pressable>
+
+                {hasTrucks && isExpanded && (
+                  <View style={styles.truckList}>
+                    {day.trucks!.map((t) => (
+                      <Pressable
+                        key={`${day.date}-${t.id}`}
+                        style={styles.truckRow}
+                        disabled={!t.booked}
+                        onPress={() => {
+                          if (!t.booked || !t.jobId) return;
+                          if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          router.push(`/job/${t.jobId}` as any);
+                        }}
+                      >
+                        <TruckIcon size={14} color={t.booked ? Colors.info : Colors.textMuted} />
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Text style={styles.truckLabel}>
+                              Truck {t.truckNumber ? `#${t.truckNumber}` : '—'}
+                            </Text>
+                            {t.vehicleDesc ? (
+                              <Text style={styles.truckDesc} numberOfLines={1}>{t.vehicleDesc}</Text>
+                            ) : null}
+                          </View>
+                          {t.booked ? (
+                            <Text style={styles.truckJobLine} numberOfLines={1}>
+                              {(t.jobMaterial || 'Job').toString().toUpperCase()}
+                              {t.contractorCompany ? ` · ${t.contractorCompany}` : t.contractorName ? ` · ${t.contractorName}` : ''}
+                            </Text>
+                          ) : (
+                            <Text style={styles.truckAvailLine}>Available</Text>
+                          )}
+                        </View>
+                        {t.booked ? (
+                          <View style={[styles.weekJobStatusBadge, { backgroundColor: Colors.infoBg }]}>
+                            <Text style={[styles.weekJobStatusText, { color: Colors.info }]}>BOOKED</Text>
+                          </View>
+                        ) : null}
+                        {t.booked ? (
+                          <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                        ) : null}
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
               </View>
             );
           })}
@@ -1044,6 +1136,48 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 9,
     letterSpacing: 0.3,
+  },
+  truckList: {
+    marginTop: -4,
+    marginBottom: 8,
+    marginLeft: 60,
+    marginRight: 4,
+    paddingTop: 4,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+    gap: 2,
+  },
+  truckRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  truckLabel: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.text,
+    letterSpacing: 0.4,
+  },
+  truckDesc: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    flex: 1,
+  },
+  truckJobLine: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    color: Colors.info,
+    marginTop: 1,
+  },
+  truckAvailLine: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
   },
   weekJobStat: {
     fontFamily: 'Inter_400Regular',
