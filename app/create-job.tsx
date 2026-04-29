@@ -285,8 +285,7 @@ export default function CreateJobScreen() {
     setProjectName(name);
     setShowProjectDropdown(false);
     const proj = projects.find((p: any) => String(p.id) === id);
-    const hasLoc = !!(proj?.site_address || (proj?.site_lat && proj?.site_lng));
-    if (hasLoc) {
+    if (proj) {
       setPendingProject(proj);
       setShowHaulDirectionModal(true);
     }
@@ -297,14 +296,23 @@ export default function CreateJobScreen() {
     const addr = pendingProject.site_address || '';
     const lat = pendingProject.site_lat ? Number(pendingProject.site_lat) : null;
     const lng = pendingProject.site_lng ? Number(pendingProject.site_lng) : null;
-    if (direction === 'to') {
-      setDestinationAddress(addr);
-      setDestLat(lat);
-      setDestLng(lng);
+    const target: 'origin' | 'destination' = direction === 'to' ? 'destination' : 'origin';
+    if (addr) {
+      if (target === 'destination') {
+        setDestinationAddress(addr);
+        setDestLat(lat);
+        setDestLng(lng);
+      } else {
+        setOriginAddress(addr);
+        setOriginLat(lat);
+        setOriginLng(lng);
+      }
     } else {
-      setOriginAddress(addr);
-      setOriginLat(lat);
-      setOriginLng(lng);
+      setPinProjectTarget({
+        projectId: String(pendingProject.id),
+        projectName: pendingProject.name || 'this project',
+        target,
+      });
     }
     setShowHaulDirectionModal(false);
     setPendingProject(null);
@@ -318,7 +326,13 @@ export default function CreateJobScreen() {
       const match = projects.find(
         (p: any) => (p.name || '').toLowerCase() === text.trim().toLowerCase()
       );
-      setProjectId(match ? String(match.id) : '');
+      const matchedId = match ? String(match.id) : '';
+      const wasNewMatch = matchedId && matchedId !== projectId;
+      setProjectId(matchedId);
+      if (wasNewMatch && match) {
+        setPendingProject(match);
+        setShowHaulDirectionModal(true);
+      }
     }
     if (!showProjectDropdown && text.trim()) {
       setShowProjectDropdown(true);
@@ -1737,7 +1751,9 @@ export default function CreateJobScreen() {
           <View style={styles.haulDirectionModal}>
             <Text style={styles.haulDirectionTitle}>Haul Direction</Text>
             <Text style={styles.haulDirectionSubtitle}>
-              {pendingProject?.site_address}
+              {pendingProject?.site_address
+                ? pendingProject.site_address
+                : `${pendingProject?.name || 'This project'} has no saved address yet — pick a side and the address you set will be saved to the project.`}
             </Text>
             <View style={styles.haulDirectionButtons}>
               <Pressable
@@ -1746,7 +1762,9 @@ export default function CreateJobScreen() {
               >
                 <Ionicons name="arrow-forward-circle" size={28} color={Colors.primary} />
                 <Text style={styles.haulDirectionBtnText}>Haul to Job</Text>
-                <Text style={styles.haulDirectionBtnHint}>Auto-fill dropoff</Text>
+                <Text style={styles.haulDirectionBtnHint}>
+                  {pendingProject?.site_address ? 'Auto-fill dropoff' : 'Project = dropoff'}
+                </Text>
               </Pressable>
               <Pressable
                 style={styles.haulDirectionBtn}
@@ -1754,7 +1772,9 @@ export default function CreateJobScreen() {
               >
                 <Ionicons name="arrow-back-circle" size={28} color={Colors.primary} />
                 <Text style={styles.haulDirectionBtnText}>Haul from Job</Text>
-                <Text style={styles.haulDirectionBtnHint}>Auto-fill pickup</Text>
+                <Text style={styles.haulDirectionBtnHint}>
+                  {pendingProject?.site_address ? 'Auto-fill pickup' : 'Project = pickup'}
+                </Text>
               </Pressable>
             </View>
             <Pressable
