@@ -2035,8 +2035,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const asmtRes = await pool.query(
             `SELECT
                ja.vehicle_id, ja.job_id, ja.driver_id,
-               j.scheduled_date::date AS scheduled_date,
+               j.scheduled_date,
                COALESCE(j.estimated_days, 1)::numeric AS estimated_days,
+               COALESCE(j.includes_weekends, false) AS includes_weekends,
+               COALESCE(j.includes_saturday, true)  AS includes_saturday,
+               COALESCE(j.includes_sunday, true)    AS includes_sunday,
                j.material, j.status::text AS job_status, j.contractor_id,
                contractor.full_name AS contractor_name,
                contractor.company   AS contractor_company,
@@ -2063,7 +2066,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
                )`,
             [userId, startDateStr, endDateStr]
           );
-          truckAssignments = asmtRes.rows;
+          // Pre-compute the precise set of working dates for each assignment
+          // using the same calendar-aware helper used elsewhere (respects
+          // includes_weekends / includes_saturday / includes_sunday).
+          truckAssignments = asmtRes.rows.map((row: any) => ({
+            ...row,
+            workingDates: new Set(
+              getJobDateRange(
+                typeof row.scheduled_date === 'string'
+                  ? row.scheduled_date
+                  : (row.scheduled_date as Date)?.toISOString?.() || String(row.scheduled_date),
+                Number(row.estimated_days || 1),
+                !!row.includes_weekends,
+                row.includes_saturday !== false,
+                row.includes_sunday !== false
+              )
+            ),
+          }));
         } catch (e: any) {
           console.error("Upcoming-days assignments query error:", e.message);
         }
@@ -2077,21 +2096,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         d.setDate(today.getDate() + i);
         const dDateStr = fmtDate(d);
 
-        // Approved assignments whose date span covers this day.
-        // Mirrors /api/contractor/jobs single-date rule: a job covers `d` iff
-        //   d == scheduled_date, OR
-        //   estimated_days > 1 AND d is within scheduled_date + ceil(days*2)
-        const dayAssignments = truckAssignments.filter((a: any) => {
-          const start = new Date(a.scheduled_date);
-          start.setHours(0, 0, 0, 0);
-          if (d.getTime() === start.getTime()) return true;
-          const days = Number(a.estimated_days || 1);
-          if (days <= 1) return false;
-          const span = Math.ceil(days * 2);
-          const end = new Date(start);
-          end.setDate(start.getDate() + span);
-          return d.getTime() > start.getTime() && d.getTime() <= end.getTime();
-        });
+        // A truck is booked on `d` only if `d` is one of the job's actual
+        // working dates (which already accounts for includes_weekends /
+        // includes_saturday / includes_sunday).
+        const dayAssignments = truckAssignments.filter((a: any) =>
+          a.workingDates && a.workingDates.has(dDateStr)
+        );
 
         const trucksRendered = userTrucks.map((t: any) => {
           const a = dayAssignments.find((x: any) => x.vehicle_id === t.id);
