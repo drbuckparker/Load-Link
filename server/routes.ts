@@ -2811,9 +2811,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [req.params.id]);
       const project = result.rows[0] || { id: req.params.id, status: 'active' };
 
+      const addressChanged =
+        req.body.siteAddress !== undefined || req.body.site_address !== undefined ||
+        req.body.siteLat !== undefined     || req.body.site_lat !== undefined ||
+        req.body.siteLng !== undefined     || req.body.site_lng !== undefined;
+
+      let cascaded = 0;
+      if (addressChanged && project && project.site_address) {
+        const role = (project.site_address_type || 'dropoff') === 'pickup' ? 'pickup' : 'dropoff';
+        const addrCol = role === 'pickup' ? 'origin_address'   : 'destination_address';
+        const latCol  = role === 'pickup' ? 'origin_lat'       : 'destination_lat';
+        const lngCol  = role === 'pickup' ? 'origin_lng'       : 'destination_lng';
+        const upd = await pool.query(
+          `UPDATE jobs
+              SET ${addrCol} = $1,
+                  ${latCol}  = $2,
+                  ${lngCol}  = $3,
+                  updated_at = NOW()
+            WHERE project_id = $4
+              AND archived_at IS NULL
+              AND status NOT IN ('completed','cancelled')`,
+          [project.site_address, project.site_lat, project.site_lng, req.params.id]
+        );
+        cascaded = upd.rowCount || 0;
+        if (cascaded > 0) {
+          console.log(`PUT /api/projects/${req.params.id} cascaded address to ${cascaded} job(s) (${role})`);
+        }
+      }
+
       pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
 
-      return res.json(addDualKeys(project));
+      return res.json({ ...addDualKeys(project), cascadedJobs: cascaded });
     } catch (e: any) {
       console.error("PUT /api/projects error:", e.message);
       return res.status(500).json({ message: "Failed to update project" });
