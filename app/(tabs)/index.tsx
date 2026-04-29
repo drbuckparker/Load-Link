@@ -93,7 +93,6 @@ export default function DashboardScreen() {
 
   const [switchingRole, setSwitchingRole] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [expandedDay, setExpandedDay] = useState<string | null>(null);
   const [activeElapsed, setActiveElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [deviceLat, setDeviceLat] = useState<number | null>(null);
@@ -501,8 +500,6 @@ export default function DashboardScreen() {
             const trucksBooked = day.trucksBooked || 0;
             const trucksAvailable = day.trucksAvailable || 0;
             const trucksTotal = day.trucksTotal || 0;
-            const isExpanded = expandedDay === day.date;
-            const canExpand = hasTrucks;
 
             return (
               <View key={i}>
@@ -510,15 +507,11 @@ export default function DashboardScreen() {
                   style={styles.upcomingRow}
                   onPress={() => {
                     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    if (canExpand) {
-                      setExpandedDay(isExpanded ? null : day.date);
-                    } else if (hasJobs) {
-                      router.push('/(tabs)/calendar');
-                    } else if (day.status === 'available' || day.status === 'unavailable') {
-                      router.push('/(tabs)/calendar');
-                    } else {
-                      router.push('/jobs-browse' as any);
-                    }
+                    // Always route to the calendar tab focused on this date.
+                    // The calendar screen has the per-day breakdown UI (jobs
+                    // booked, fleet status, search jobs CTA), and a second
+                    // tap from there leads to the job details.
+                    router.push({ pathname: '/(tabs)/calendar', params: { date: day.date } } as any);
                   }}
                 >
                   <View style={styles.dateBox}>
@@ -546,11 +539,7 @@ export default function DashboardScreen() {
                           </Text>
                         )}
                       </View>
-                      <Ionicons
-                        name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                        size={16}
-                        color={Colors.textMuted}
-                      />
+                      <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
                     </>
                   ) : !hasJobs ? (
                     <>
@@ -631,51 +620,6 @@ export default function DashboardScreen() {
                     </View>
                   )}
                 </Pressable>
-
-                {hasTrucks && isExpanded && (
-                  <View style={styles.truckList}>
-                    {day.trucks!.map((t) => (
-                      <Pressable
-                        key={`${day.date}-${t.id}`}
-                        style={styles.truckRow}
-                        disabled={!t.booked}
-                        onPress={() => {
-                          if (!t.booked || !t.jobId) return;
-                          if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          router.push(`/job/${t.jobId}` as any);
-                        }}
-                      >
-                        <TruckIcon size={14} color={t.booked ? Colors.info : Colors.textMuted} />
-                        <View style={{ flex: 1 }}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                            <Text style={styles.truckLabel}>
-                              Truck {t.truckNumber ? `#${t.truckNumber}` : '—'}
-                            </Text>
-                            {t.vehicleDesc ? (
-                              <Text style={styles.truckDesc} numberOfLines={1}>{t.vehicleDesc}</Text>
-                            ) : null}
-                          </View>
-                          {t.booked ? (
-                            <Text style={styles.truckJobLine} numberOfLines={1}>
-                              {(t.jobMaterial || 'Job').toString().toUpperCase()}
-                              {t.contractorCompany ? ` · ${t.contractorCompany}` : t.contractorName ? ` · ${t.contractorName}` : ''}
-                            </Text>
-                          ) : (
-                            <Text style={styles.truckAvailLine}>Available</Text>
-                          )}
-                        </View>
-                        {t.booked ? (
-                          <View style={[styles.weekJobStatusBadge, { backgroundColor: Colors.infoBg }]}>
-                            <Text style={[styles.weekJobStatusText, { color: Colors.info }]}>BOOKED</Text>
-                          </View>
-                        ) : null}
-                        {t.booked ? (
-                          <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
-                        ) : null}
-                      </Pressable>
-                    ))}
-                  </View>
-                )}
               </View>
             );
           })}
@@ -704,7 +648,7 @@ export default function DashboardScreen() {
   );
 }
 
-function getDefaultDays() {
+function getDefaultDays(): DashboardData['upcomingDays'] {
   const days = [];
   const now = new Date();
   const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -1136,48 +1080,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 9,
     letterSpacing: 0.3,
-  },
-  truckList: {
-    marginTop: -4,
-    marginBottom: 8,
-    marginLeft: 60,
-    marginRight: 4,
-    paddingTop: 4,
-    paddingBottom: 4,
-    borderTopWidth: 1,
-    borderTopColor: Colors.borderLight,
-    gap: 2,
-  },
-  truckRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  truckLabel: {
-    fontFamily: 'ChakraPetch_700Bold',
-    fontSize: 13,
-    color: Colors.text,
-    letterSpacing: 0.4,
-  },
-  truckDesc: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-    color: Colors.textMuted,
-    flex: 1,
-  },
-  truckJobLine: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 11,
-    color: Colors.info,
-    marginTop: 1,
-  },
-  truckAvailLine: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-    color: Colors.textMuted,
-    marginTop: 1,
   },
   weekJobStat: {
     fontFamily: 'Inter_400Regular',

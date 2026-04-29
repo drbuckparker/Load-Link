@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/lib/query-client';
@@ -314,7 +314,22 @@ export default function CalendarScreen() {
   }, [availQuery.data]);
 
   const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const [selectedDate, setSelectedDate] = useState<string | null>(todayKey);
+  const params = useLocalSearchParams<{ date?: string }>();
+  const initialDateParam = typeof params.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : null;
+  const [selectedDate, setSelectedDate] = useState<string | null>(initialDateParam || todayKey);
+  // If we navigate to the calendar with a new date param (e.g. tapping a
+  // different day on the dashboard), respect it.
+  useEffect(() => {
+    if (initialDateParam && initialDateParam !== selectedDate) {
+      setSelectedDate(initialDateParam);
+      const [yy, mm] = initialDateParam.split('-').map(n => parseInt(n, 10));
+      if (!Number.isNaN(yy) && !Number.isNaN(mm)) {
+        setCurrentMonth(mm - 1);
+        setCurrentYear(yy);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDateParam]);
 
   const calendarJobsQuery = useQuery<{
     dailyJobs: Record<string, {
