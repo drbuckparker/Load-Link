@@ -1293,7 +1293,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Rule: must be within 15 miles of job site (origin or destination)
+      // Rule: must be within 15 miles of pickup, dropoff, or anywhere along the line between them
       const startLat = req.body?.lat ?? req.body?.start_lat ?? null;
       const startLng = req.body?.lng ?? req.body?.start_lng ?? null;
       const GEOFENCE_MILES = 15;
@@ -1305,6 +1305,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const a = Math.sin(dLat / 2) ** 2 +
           Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
         return 2 * R * Math.asin(Math.sqrt(a));
+      };
+      // Distance from a point to the closest point on the line segment A->B.
+      // Equirectangular projection — accurate for distances up to a few hundred miles.
+      const distanceToSegmentMiles = (
+        pLat: number, pLng: number,
+        aLat: number, aLng: number,
+        bLat: number, bLng: number,
+      ): number => {
+        const meanLatRad = ((aLat + bLat) / 2) * Math.PI / 180;
+        const milesPerDegLat = 69.0;
+        const milesPerDegLng = 69.0 * Math.cos(meanLatRad);
+        const ax = aLng * milesPerDegLng, ay = aLat * milesPerDegLat;
+        const bx = bLng * milesPerDegLng, by = bLat * milesPerDegLat;
+        const px = pLng * milesPerDegLng, py = pLat * milesPerDegLat;
+        const dx = bx - ax, dy = by - ay;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+        let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        const cx = ax + t * dx, cy = ay + t * dy;
+        return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
       };
 
       const oLat = job.origin_lat ? Number(job.origin_lat) : null;
@@ -1325,14 +1346,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (isNaN(driverLat) || isNaN(driverLng)) {
           return res.status(400).json({ code: "LOCATION_REQUIRED", message: "Invalid location data." });
         }
-        const distances: number[] = [];
-        if (oLat != null && oLng != null) distances.push(haversineMiles(driverLat, driverLng, oLat, oLng));
-        if (dLat != null && dLng != null) distances.push(haversineMiles(driverLat, driverLng, dLat, dLng));
-        const closest = Math.min(...distances);
+        let closest: number;
+        if (oLat != null && oLng != null && dLat != null && dLng != null) {
+          // Both endpoints known — accept anywhere along the pickup→dropoff line
+          closest = distanceToSegmentMiles(driverLat, driverLng, oLat, oLng, dLat, dLng);
+        } else if (oLat != null && oLng != null) {
+          closest = haversineMiles(driverLat, driverLng, oLat, oLng);
+        } else {
+          closest = haversineMiles(driverLat, driverLng, dLat as number, dLng as number);
+        }
         if (closest > GEOFENCE_MILES) {
+          const target = (oLat != null && oLng != null && dLat != null && dLng != null) ? "job route" : "job site";
           return res.status(403).json({
             code: "OUT_OF_GEOFENCE",
-            message: `You're ${closest.toFixed(1)} miles from the job site. Clock-in is allowed within ${GEOFENCE_MILES} miles.`,
+            message: `You're ${closest.toFixed(1)} miles from the ${target}. Clock-in is allowed within ${GEOFENCE_MILES} miles of pickup, dropoff, or anywhere along the route.`,
             distanceMiles: Math.round(closest * 10) / 10,
             geofenceMiles: GEOFENCE_MILES,
           });
