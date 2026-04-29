@@ -9,9 +9,10 @@ interface JobCardProps {
   job: Job;
   onPress: () => void;
   showStatus?: boolean;
+  isOwnPosting?: boolean;
 }
 
-export default function JobCard({ job, onPress, showStatus = false }: JobCardProps) {
+export default function JobCard({ job, onPress, showStatus = false, isOwnPosting = false }: JobCardProps) {
   const statusColor = getStatusColor(job.status);
   const jobTypeColor = getJobTypeColor(job.jobType);
 
@@ -114,6 +115,12 @@ export default function JobCard({ job, onPress, showStatus = false }: JobCardPro
       </View>
 
       <View style={styles.badgeRow}>
+        {isOwnPosting && (
+          <View style={styles.ownBadge} testID="your-posting-badge">
+            <Ionicons name="megaphone" size={10} color={Colors.primary} />
+            <Text style={styles.ownBadgeText}>YOUR POSTING</Text>
+          </View>
+        )}
         <View style={[styles.badge, { backgroundColor: jobTypeColor.bg }]}>
           <Text style={[styles.badgeText, { color: jobTypeColor.text }]}>{formatJobType(job.jobType, job.estimatedDays)}</Text>
         </View>
@@ -303,6 +310,23 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
     color: Colors.textSecondary,
+  },
+  ownBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 165, 0, 0.15)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 165, 0, 0.4)',
+  },
+  ownBadgeText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+    color: Colors.primary,
+    letterSpacing: 0.5,
   },
   locationRow: {
     flexDirection: 'row',

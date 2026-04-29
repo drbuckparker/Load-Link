@@ -346,12 +346,15 @@ export default function JobsBrowseScreen() {
     if (activeFilter === 'Open') {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const callerId = user?.id ? String(user.id) : null;
       mapped = mapped.filter(j => {
         const status = String(j.status || '').toLowerCase();
         if (status === 'completed' || status === 'cancelled' || status === 'canceled' || status === 'expired' || status === 'closed') return false;
         const requested = Number(j.trucksNeeded) || 0;
         const assigned = Number(j.approvedAssignments) || 0;
-        if (requested > 0 && assigned >= requested) return false;
+        const isOwn = !!callerId && String(j.contractorId) === callerId;
+        // Always show your own postings on Open, even when fully crewed.
+        if (!isOwn && requested > 0 && assigned >= requested) return false;
         if (!j.scheduledDate) return true;
         const raw = String(j.scheduledDate);
         const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
@@ -565,11 +568,13 @@ export default function JobsBrowseScreen() {
   }
 
   function renderDriverCard({ item }: { item: Job }) {
+    const isOwnPosting = !!user?.id && String(item.contractorId) === String(user.id);
     return (
       <JobCard
         job={item}
         onPress={() => router.push(`/job/${item.id}`)}
         showStatus={activeFilter === 'My Jobs' || activeFilter === 'Completed'}
+        isOwnPosting={isOwnPosting}
       />
     );
   }
