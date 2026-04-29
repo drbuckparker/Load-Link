@@ -92,6 +92,12 @@ export default function JobCard({ job, onPress, showStatus = false, isOwnPosting
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.material} numberOfLines={1}>{job.material}</Text>
+        </View>
+        <Text style={styles.rate}>{formatRate(job.rate, job.rateType)}</Text>
+      </View>
+
+      {(job.requiresTarp || job.requiresWeightTickets || job.urgent) && (
+        <View style={styles.requirementsRow}>
           {job.requiresTarp && (
             <View style={styles.urgentBadge}>
               <Ionicons name="shield-checkmark" size={10} color={Colors.primary} />
@@ -111,8 +117,7 @@ export default function JobCard({ job, onPress, showStatus = false, isOwnPosting
             </View>
           )}
         </View>
-        <Text style={styles.rate}>{formatRate(job.rate, job.rateType)}</Text>
-      </View>
+      )}
 
       <View style={styles.badgeRow}>
         {isOwnPosting && (
@@ -270,6 +275,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 1,
     color: '#001a00',
+  },
+  requirementsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+    marginTop: -4,
   },
   urgentBadge: {
     flexDirection: 'row',
