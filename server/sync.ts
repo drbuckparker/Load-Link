@@ -2,7 +2,7 @@ import { db } from "./db";
 import { pool } from "./db";
 import { deletedVehicleIds, jobSyncPaused } from "./deleted-vehicles";
 
-const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
+const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
 
 interface SyncAuth {

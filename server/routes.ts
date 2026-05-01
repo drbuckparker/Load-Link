@@ -6,7 +6,7 @@ import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
 
-const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlink.replit.app";
+const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
 
 const DATA_DIR = join(process.cwd(), ".data");
@@ -244,7 +244,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!websiteRes.ok) {
         if (websiteRes.status === 404 || (data.message && data.message.toLowerCase().includes("not found"))) {
           return res.status(404).json({
-            message: "No LoadLink account found with this email. Please sign up first on loadlink.replit.app",
+            message: "No LoadLink account found with this email. Please sign up first on loadlinklive.com",
             email: verifiedEmail,
           });
         }

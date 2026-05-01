@@ -43,7 +43,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - `shared/schema.ts` — Drizzle schema definitions for all tables
 - **Authentication flow**:
     1. Frontend sends `POST /api/auth/login` with `{email, password}`
-    2. Express forwards email to `POST https://loadlink.replit.app/api/companion/auth/login` with `X-API-Key` header (password not sent — API key establishes trust)
+    2. Express forwards email to `POST https://loadlinklive.com/api/companion/auth/login` with `X-API-Key` header (password not sent — API key establishes trust)
     3. Website returns a JWT + user object
     4. Express generates a local token, maps it to the website JWT in `tokenToJwt` Map (persisted to `.data/sessions.json`)
     5. Frontend stores local token in AsyncStorage, sends via `Authorization: Bearer` header
@@ -60,7 +60,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Database enums**: The local PostgreSQL DB uses custom enums: `job_status` (open, accepted, pending, in_progress, completed, cancelled), `invoice_status` (open, issued, payment_sent, payment_received, void), `job_assignment_status` (pending, approved, rejected, withdrawn). SQL queries must use valid enum values — e.g., use `status::text IN ('open', 'issued')` for unpaid invoices (NOT 'pending'), and `status::text = 'payment_received'` for paid invoices (NOT 'paid').
 - **Environment variables**:
     - `WEBSITE_API_KEY` — API key for authenticating with the LoadLink website API
-    - `WEBSITE_API_URL` — Base URL of the LoadLink website (default: `https://loadlink.replit.app`)
+    - `WEBSITE_API_URL` — Base URL of the LoadLink website (default: `https://loadlinklive.com`)
     - `GOOGLE_MAPS_API_KEY` — Google Maps/Places API key
     - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` — Google OAuth Client ID for social sign-in
 - **Google Maps API note**: The Google Geocoding API is not enabled on the project. The `/api/places/geocode` route uses Google's "Find Place from Text" API instead.
