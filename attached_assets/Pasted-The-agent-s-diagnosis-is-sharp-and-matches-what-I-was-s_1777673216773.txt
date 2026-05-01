@@ -1,0 +1,38 @@
+The agent's diagnosis is sharp and matches what I was suspecting. Here's my read on what to do.
+
+My recommendation: audit first, then choose between B and C. Skip A.
+Why skip Path A (separate mirror DB + real sync)
+This sounds principled but it doesn't actually buy you anything in your situation:
+
+The companion server runs on Replit, not on the driver's device. So when a driver is in a cell dead zone, both loadlinklive.com and the companion API are equally unreachable — having a "local-first" mirror DB on Replit doesn't help.
+Bidirectional sync is genuinely hard. Conflict resolution, soft-delete reconciliation, eventual consistency, idempotency for retries. The agent noted sync.ts has never actually run against two distinct DBs, so it's untested in its real role. That's months of work and a constant source of "why did this row get overwritten" bugs.
+Joey is one person maintaining this. Adding a second database with a sync layer doubles the surface area he has to debug.
+Path A makes sense only if you have a hard requirement that the companion server keeps working when the website's DB is down — and even then, you'd want a different solution (read replicas, cached responses) rather than full bidirectional sync.
+
+Why I'm split between B and C, and what to do first
+Both Path B (companion stays as a thin proxy) and Path C (collapse the companion server entirely) are reasonable end states. The decision depends on what the companion server actually does that the website doesn't.
+
+If most of the companion's value is just "a different shape of API for mobile clients" — same data, slightly different routes — then you're paying the cost of two backends for a thin shim. Path C wins.
+
+If the companion has meaningful mobile-specific logic (dashboard widget computation, calendar cascade, push-notification scheduling, anything that genuinely lives better near the mobile contract) and there are good reasons not to push that into the website routes, then Path B is fine.
+
+One audit task to ask the agent for first
+Before deciding, I'd ask the agent to do a no-changes inventory pass and report back. Here's the message I'd send:
+
+Architecture diagnosis received — picking between Path B and Path C, but I need an inventory first. No code changes yet, just a written report.
+
+Please run an audit and answer these four questions in writing:
+
+Every caller of pushToWebsite. For each, list: which companion route calls it, which website endpoint it pushes to, and what side-effects the website endpoint has that the companion route doesn't (notifications, audit log writes, Resend emails, Twilio sends, Stripe calls, websocket broadcasts, anything). This tells us what we'd lose if we just deleted the double-write.
+
+Companion-only routes that have no website equivalent. List each route, what it does, and whether it's mobile-specific business logic (e.g., dashboard widget queries) or just a different shape of an existing website endpoint. This tells us how much would have to move to the website under Path C.
+
+Anything the companion server does at startup or on a timer besides sync.ts. Cron jobs, queue workers, push-notification scheduling, etc. This tells us what infrastructure pieces would need a new home under Path C.
+
+Auth flow comparison. Does the companion server validate JWTs the same way the website does, or differently? Do mobile clients have a Replit Auth session, the Companion API JWT, both, or something else? This tells us whether collapsing servers is mostly a routes-move or also an auth-rewrite.
+
+Once those four answers are written down, we can decide B vs C with eyes open. Lean toward whichever path leaves Joey with less to maintain.
+
+That gives the agent a concrete, scoped task that doesn't change anything yet, and the four answers will make the architecture call obvious.
+
+Want me to refine that further, or send as is? And do you have any gut sense yet on B vs C — i.e., does the companion app feel like "a slightly different mobile API" or "a meaningfully different mobile backend"?
