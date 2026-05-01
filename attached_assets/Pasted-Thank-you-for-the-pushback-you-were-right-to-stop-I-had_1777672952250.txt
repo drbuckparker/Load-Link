@@ -1,0 +1,23 @@
+Thank you for the pushback — you were right to stop. I had misread the architecture (assumed the mobile binary bundled DATABASE_URL, when it's actually a server-side env var for your Express backend). The migration task is cancelled. Don't tear anything down.
+
+One clarifying question before we move on, because something I noticed during the diagnostic doesn't fit the description.
+
+Context from my side: Earlier in this session I queried the database that the website's production server connects to. It returned:
+
+host: ep-quiet-moon-a59bvzdf.us-east-2.aws.neon.tech
+database: neondb
+user: neondb_owner
+That string is identical to the DATABASE_URL shown in your project's Configurations panel. So the companion-side Express server and the website's production server are pointed at the same physical Neon database, not at separate databases.
+
+My question: When replit.md and your earlier message describe the architecture as "local Postgres mirror, background sync to/from website API," what is the intended setup?
+
+Two possibilities I can think of:
+
+(a) The mirror is supposed to be a separate database. A dedicated Postgres instance for the companion server that holds its own copy of the data, and the background sync job pushes/pulls changes between it and the website's prod DB. If that's the design, then the current DATABASE_URL is misconfigured — it's pointing the "mirror" at the source of truth, which means the sync logic is essentially writing to itself, and any sync conflicts/race conditions in that code are masked because there's only one DB.
+
+(b) Sharing the prod DB is intentional. The "local-first" framing refers to something else — maybe device-side caching via SQLite/AsyncStorage, or a request queue for offline writes — and the Express server itself was always meant to talk directly to the production DB. In that case the DATABASE_URL is correct, and the "background sync" is operating on the device side, not server-to-server.
+
+Could you confirm which one it is? If (a), I'd want to provision a separate Neon DB for the companion's mirror and update the connection string. If (b), no action needed and I'll close this out.
+
+No code changes from you — just the architecture answer is enough.
+
