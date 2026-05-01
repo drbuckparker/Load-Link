@@ -1,0 +1,76 @@
+Task: Migrate the companion app off direct database access onto the existing Companion REST API.
+
+Context
+The mobile app currently bundles a Postgres DATABASE_URL and connects directly to the production database from the client. This is a security problem (the DB password ships in the binary) and prevents a dev/prod split. The web project already exposes a Companion API for this exact purpose, and it has been verified working end-to-end against both the dev server and production. The user has already provisioned the required server-side secrets.
+
+Target architecture
+Mobile app talks ONLY to the web project over HTTPS. No pg, no drizzle-orm, no Postgres connection in the mobile codebase.
+Auth flow:
+On app start (or login), call POST {API_BASE}/api/companion/auth/login with header X-API-Key: <COMPANION_API_KEY> and JSON body {"email": "<user_email>"} (password optional for social-login users). Response: { token, user } where token is a JWT.
+Store token in expo-secure-store.
+On every subsequent request, send headers X-API-Key: <COMPANION_API_KEY> AND Authorization: Bearer <token>.
+On any 401, clear the stored token and re-run login.
+Health check endpoint for diagnostics: GET {API_BASE}/api/companion/health (only needs X-API-Key). Returns {"status":"ok","timestamp":"..."}.
+All other routes the mobile app needs are the same routes the website uses (e.g., /api/jobs, /api/profile, /api/dashboard, /api/calendar/jobs, etc.). Just call them with the two auth headers and you'll be authenticated as the user whose JWT you sent.
+Required environment variables (set per build profile, NOT bundled as constants)
+EXPO_PUBLIC_API_BASE_URL
+Production builds → https://loadlinklive.com (verified working)
+Development builds → the user's dev Replit workspace URL (ends in .spock.replit.dev). Ask the user for the exact URL if it's not already configured.
+EXPO_PUBLIC_COMPANION_API_KEY — value will be provided by the user; same value for dev and prod is fine.
+Configure these per build profile in eas.json:
+
+{
+  "build": {
+    "development": {
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "<dev_replit_url>",
+        "EXPO_PUBLIC_COMPANION_API_KEY": "<dev_key>"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://loadlinklive.com",
+        "EXPO_PUBLIC_COMPANION_API_KEY": "<prod_key>"
+      }
+    }
+  }
+}
+
+Steps
+Build a single API client module (~50 lines) that handles login, JWT storage in expo-secure-store, header injection on every request, and 401-retry that re-runs login once.
+Find every direct DB call in the codebase. Search for: pg, Pool, postgres://, drizzle, drizzle-orm, DATABASE_URL. For each one, replace with an apiClient.get/post/... call to the equivalent web route. If a needed route doesn't exist on the web side, list it and stop — do not bypass.
+Remove pg, drizzle-orm, and any other direct-DB dependencies from package.json. Run npm install and confirm the lockfile updates.
+Delete DATABASE_URL from the Expo / EAS Configurations panel entirely. Confirm with the user before deleting if there's any uncertainty.
+Verify zero remaining hits: rg -n "DATABASE_URL|pg\.|Pool|drizzle|postgres://" in the mobile app source should return zero matches in app code (test/script files in a separate folder don't count if you confirm with the user).
+Run a development build (eas build --profile development or expo start against the dev URL) and verify login + at least one data screen works end-to-end against the dev server.
+Update the README with the new env-var setup.
+Smoke test (proves your API client works before you start the bigger refactor)
+Once you've built the API client in step 1, run this from the device or expo start console BEFORE replacing any DB calls. The web side has been verified working — if this fails, the bug is in your client code, not the server.
+
+// 1. Health check
+fetch("https://loadlinklive.com/api/companion/health", {
+  headers: { "X-API-Key": process.env.EXPO_PUBLIC_COMPANION_API_KEY }
+}).then(r => r.json()).then(console.log)
+// expect: { status: "ok", timestamp: "..." }
+// 2. Login (use the user's real email)
+fetch("https://loadlinklive.com/api/companion/auth/login", {
+  method: "POST",
+  headers: {
+    "X-API-Key": process.env.EXPO_PUBLIC_COMPANION_API_KEY,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({ email: "<the_test_user_email>" })
+}).then(r => r.json()).then(console.log)
+// expect: { token: "eyJ...", user: { id, email, role, ... } }
+
+Done criteria
+package.json contains no Postgres driver.
+Codebase has zero references to DATABASE_URL, pg., Pool, or drizzle outside of removed dependencies.
+App successfully logs in via /api/companion/auth/login and fetches the user's jobs over HTTPS.
+Both development and production build profiles in eas.json have their own EXPO_PUBLIC_API_BASE_URL.
+The production build points at https://loadlinklive.com.
+Things NOT to do
+Do not add a new direct DB connection "just for one screen."
+Do not hardcode the API key in source — only env vars.
+Do not modify the website project (it's done; just consume it).
+If a needed endpoint is missing on the web side, stop and report the gap. The user will add it on the web side and resume.
