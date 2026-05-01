@@ -1,0 +1,52 @@
+Audit results — going with Path B. Here's the work list.
+
+The website-side audit of all 22 unique endpoints behind your 31 pushToWebsite callers is done. Summary: side-effects concentrate in 6 endpoints; the other 16 are pure CRUD. No Email, no SMS, no Stripe touched anywhere in this set. Path B wins.
+
+Path B = keep companion as proxy, but trim pushToWebsite aggressively + fix broken paths.
+
+Three things to do, in order:
+
+1. Fix the 7 path mismatches — these are silently failing every double-write today, so the website DB is already out of sync for any user who's hit them. Update sync.ts mappings:
+
+Companion path (current, broken)	Website path (correct)
+POST /api/jobs/:id/clock-in	POST /api/jobs/:id/start
+POST /api/jobs/:id/counter-bid	POST /api/jobs/:id/bids
+POST /api/favorites/:driverId	POST /api/driver-favorites (body {driverId, autoApprove})
+POST /api/notifications/mark-read	PUT /api/notifications/:id/read (single) or PUT /api/notifications/read-all (bulk)
+PUT /api/invoices/:id/status	POST /api/invoices/:id/status (method change)
+POST /api/assignments/:aid/...	POST /api/job-assignments/:id/...
+POST /api/reviews	no website endpoint exists — drop the pushToWebsite and treat reviews as companion-only state until the website ships the feature
+After fixing, run drainSyncQueue once to push everything that's been failing.
+
+2. KEEP pushToWebsite for these 6 endpoints — they have irreplaceable side-effects on the website that you should NOT try to duplicate locally:
+
+POST /api/jobs — radius push fanout + per-driver in-app notifs (notifyDriversOfNewJob)
+PUT /api/jobs/:id — only when scheduledDate changes; cascades truck-availability rebalancing, substitute-truck logic, rejects, and per-company notifications
+POST /api/job-assignments/:id/approve — push + notif + truck_availability upsert + auto-rejects siblings
+POST /api/job-assignments/:id/reject — push + notif + clears truck_availability
+POST /api/job-assignments/:id/withdraw — push + notif + re-runs the radius fanout when job reopens
+POST /api/job-assignments/:id/cancel — push + notif + clears truck + driver availability
+POST /api/jobs/:id/start and POST /api/jobs/:id/end — WebSocket driver_location broadcasts + job_run lifecycle
+(That's 8, not 6. The "6 hot spots" from the audit grouped start/end and approve/reject/withdraw/cancel.)
+
+3. DELETE pushToWebsite from these 16 pure-CRUD callers — DB-only on the website, no notifications/audit/push/email. Local-first wins, double-write is pure waste:
+
+POST /api/jobs/:id/accept — wait, this one DOES have auditLog('job_accepted') + creates driver_availability + cancelJobNotifications. Keep this one too. (Updated count: 9 keepers, 15 deletions.)
+DELETE /api/jobs/:id
+POST /api/jobs/:id/archive and /unarchive
+POST /api/jobs/:id/bids (only side-effect is in-app notif to contractor — your call whether that's worth keeping; I'd keep it, it's cheap)
+POST /api/contractor-projects
+PUT /api/contractor-projects/:id — caveat: cascades site-address into active jobs when address changes. If your local copies need to stay in sync, keep pushToWebsite here OR replicate the cascade locally. Your call.
+DELETE /api/contractor-projects/:id
+POST /api/vehicles, PUT /api/vehicles/:id, DELETE /api/vehicles/:id
+PUT /api/users/:id (audit log only, low value)
+POST /api/driver-favorites
+POST /api/push/subscribe
+PATCH /api/me/availability/:id, DELETE /api/me/availability/:id
+PUT /api/notifications/:id/read, PUT /api/notifications/read-all
+Effort estimate: 1–2 days. Mostly mechanical deletions in sync.ts plus the 7 path fixes.
+
+Out-of-scope but file for later: Apple Sign-In JWT signature is not verified against Apple JWKS — only iss is checked from the decoded payload. Add to the next companion hardening pass.
+
+One question back at me: confirm the website endpoint list above matches what you're actually calling (especially the project address cascade and the bids in-app notif), then start with the 7 path fixes since those are bleeding right now.
+

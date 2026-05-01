@@ -433,7 +433,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (pushToken) {
         await pool.query(`UPDATE users SET expo_push_token = $1 WHERE id = $2`, [pushToken, auth.userId]);
       }
-      pushToWebsite("/api/push/subscribe", auth, { method: "POST", body: req.body }).catch(() => {});
     } catch {}
     return res.json({ ok: true });
   });
@@ -576,7 +575,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [req.params.id, auth.userId]
       );
       if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
-      pushToWebsite(`/api/jobs/${req.params.id}/unarchive`, auth, { method: "POST", body: {} }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Unarchive job error:", e.message);
@@ -611,7 +609,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [req.params.id, auth.userId]
       );
       if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
-      pushToWebsite(`/api/jobs/${req.params.id}/archive`, auth, { method: "POST", body: {} }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Archive job error:", e.message);
@@ -768,7 +765,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
-      pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      if (dateChanged) {
+        pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      }
       return res.json(addDualKeys(result.rows[0] || { id: req.params.id }));
     } catch (e: any) {
       console.error("PUT /api/jobs error:", e.message);
@@ -779,23 +778,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const existing = await pool.query(
-        `SELECT status FROM jobs WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2)`,
-        [req.params.id, auth.userId]
-      );
-      if (existing.rowCount === 0) return res.status(404).json({ message: "Job not found" });
-      const wasOpen = existing.rows[0]?.status && !['in_progress', 'completed'].includes(existing.rows[0].status);
-      await pool.query(
+      const upd = await pool.query(
         `UPDATE jobs SET status = 'cancelled', cancelled_at = NOW(), archived_at = NOW()
-         WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2)`,
+         WHERE id = $1 AND (contractor_id::text = $2 OR driver_id::text = $2) RETURNING id`,
         [req.params.id, auth.userId]
       );
-      if (wasOpen) {
-        pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
-      } else {
-        pushToWebsite(`/api/jobs/${req.params.id}/cancel`, auth, { method: "POST", body: {} }).catch(() => {});
-        pushToWebsite(`/api/jobs/${req.params.id}/archive`, auth, { method: "POST", body: {} }).catch(() => {});
-      }
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -1036,7 +1024,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
          VALUES ($1, $2, $3, 'counter_bid', $4, $5, NOW()) ON CONFLICT DO NOTHING`,
         [id, req.params.id, auth.userId, rate, note]
       );
-      pushToWebsite(`/api/jobs/${req.params.id}/counter-bid`, auth, { method: "POST", body: req.body }).catch(() => {});
+      pushToWebsite(`/api/jobs/${req.params.id}/bids`, auth, { method: "POST", body: req.body }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Counter bid error:", e.message);
@@ -1047,12 +1035,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs/:id/withdraw", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      const myAssignments = await pool.query(
+        `SELECT id FROM job_assignments WHERE job_id = $1 AND driver_id = $2`,
+        [req.params.id, auth.userId]
+      );
       await pool.query(`UPDATE job_assignments SET status = 'withdrawn' WHERE job_id = $1 AND driver_id = $2`, [req.params.id, auth.userId]);
       const remaining = await pool.query(`SELECT COUNT(*) FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`, [req.params.id]);
       if (parseInt(remaining.rows[0]?.count || '0') === 0) {
         await pool.query(`UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       }
-      pushToWebsite(`/api/jobs/${req.params.id}/withdraw`, auth, { method: "POST" }).catch(() => {});
+      for (const a of myAssignments.rows) {
+        pushToWebsite(`/api/job-assignments/${a.id}/withdraw`, auth, { method: "POST" }).catch(() => {});
+      }
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -1068,7 +1062,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (remainingCount === 0) {
         await pool.query(`UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       }
-      pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}`, auth, { method: "DELETE" }).catch(() => {});
+      pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/cancel`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true, remainingAssignments: remainingCount });
     } catch {
       return res.json({ ok: true });
@@ -1131,7 +1125,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
       await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
-      pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {});
+      pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Approve assignment error:", e.message);
@@ -1147,7 +1141,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Not authorized" });
       }
       await pool.query(`UPDATE job_assignments SET status = 'rejected' WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
-      pushToWebsite(`/api/jobs/${req.params.id}/assignments/${req.params.assignmentId}/reject`, auth, { method: "POST" }).catch(() => {});
+      pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/reject`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -1212,7 +1206,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { vehicleId, vehicle_id } = req.body;
       const vid = vehicleId || vehicle_id;
       await pool.query(`UPDATE job_assignments SET vehicle_id = $1 WHERE id = $2`, [vid, req.params.assignmentId]);
-      pushToWebsite(`/api/assignments/${req.params.assignmentId}/vehicle`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/vehicle`, auth, { method: "PUT", body: req.body }).catch(() => {});
       return res.json({ ok: true });
     } catch {
       return res.status(500).json({ message: "Failed to assign vehicle" });
@@ -1384,7 +1378,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [runId, req.params.id, auth.userId, vehicleId, startedAt, startLat, startLng]
       );
       await pool.query(`UPDATE jobs SET status = 'in_progress', updated_at = NOW() WHERE id = $1`, [req.params.id]);
-      pushToWebsite(`/api/jobs/${req.params.id}/clock-in`, auth, { method: "POST", body: req.body }).catch(() => {});
+      pushToWebsite(`/api/jobs/${req.params.id}/start`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [runId]);
       return res.json(addDualKeys(result.rows[0]));
     } catch (e: any) {
@@ -1396,8 +1390,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      const runRow = await pool.query(`SELECT job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      const jobIdForEnd = runRow.rows[0]?.job_id;
       await pool.query(`UPDATE job_runs SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE id = $1`, [req.params.runId]);
-      pushToWebsite(`/api/job-runs/${req.params.runId}/clock-out`, auth, { method: "POST", body: req.body }).catch(() => {});
+      if (jobIdForEnd) {
+        pushToWebsite(`/api/jobs/${jobIdForEnd}/end`, auth, { method: "POST", body: { ...(req.body || {}), runId: req.params.runId } }).catch(() => {});
+      }
       const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [req.params.runId]);
       return res.json(addDualKeys(result.rows[0] || { id: req.params.runId }));
     } catch (e: any) {
@@ -1607,7 +1605,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       console.log("Profile update DB error:", e?.message);
     }
-    pushToWebsite("/api/users/" + auth.userId, auth, { method: "PUT", body: req.body }).catch(() => {});
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) { tokenToJwt.set(localToken, auth); saveJsonMap("sessions.json", tokenToJwt); }
     return res.json(addDualKeys(auth.user));
@@ -1623,7 +1620,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       await pool.query(`UPDATE users SET is_connected = $1, updated_at = NOW() WHERE id = $2`, [newStatus, auth.userId]);
     } catch {}
-    pushToWebsite("/api/users/" + auth.userId, auth, { method: "PUT", body: { is_connected: newStatus } }).catch(() => {});
     return res.json(addDualKeys(auth.user));
   });
 
@@ -1636,7 +1632,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
       } catch {}
-      pushToWebsite("/api/users/" + auth.userId, auth, { method: "PUT", body: { role } }).catch(() => {});
     }
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) {
@@ -1693,7 +1688,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
          VALUES ($1, $2, $3::truck_type, $4, $5, $6, $7, $8, $9, $10, $11, $12, true, NOW(), NOW())`,
         [id, auth.userId, truckType, b.make, b.model, b.year, licensePlate, vinNumber, truckNumber, capacity, assignedDriverId, hasTarp]
       );
-      pushToWebsite("/api/vehicles", auth, { method: "POST", body: { ...req.body, id } }).catch(() => {});
       const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [id]);
       return res.status(201).json(addDualKeys(result.rows[0]));
     } catch (e: any) {
@@ -1704,7 +1698,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getWebsiteAuth(req)!;
       const fieldMap: Record<string, string> = {
         truck_type: 'truck_type',
         truckType: 'truck_type',
@@ -1750,7 +1743,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         values.push(req.params.id);
         await pool.query(`UPDATE trucks SET ${updates.join(', ')} WHERE id = $${idx}`, values);
       }
-      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [req.params.id]);
       return res.json(addDualKeys(result.rows[0] || {}));
     } catch (e: any) {
@@ -1762,13 +1754,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       deletedVehicleIds.add(req.params.id);
-      const now = new Date().toISOString();
       await pool.query(`UPDATE trucks SET archived_at = NOW(), is_active = false WHERE id = $1`, [req.params.id]);
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
-      const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "PUT", body: { archived_at: now, is_active: false } })
-        .catch((err) => { console.error("pushToWebsite archive vehicle error:", err.message); });
     } catch (e: any) {
       console.error("Archive vehicle error:", e.message);
     }
@@ -1805,8 +1793,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
       await pool.query(`DELETE FROM trucks WHERE id = $1`, [req.params.id]);
       deletedVehicleIds.add(req.params.id);
-      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "DELETE" })
-        .catch((err) => { console.error("pushToWebsite delete vehicle error:", err.message); });
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Permanent delete vehicle error:", e.message);
@@ -1818,8 +1804,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       deletedVehicleIds.delete(req.params.id);
       await pool.query(`UPDATE trucks SET archived_at = NULL, is_active = true WHERE id = $1`, [req.params.id]);
-      const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/vehicles/${req.params.id}`, auth, { method: "PUT", body: { archived_at: null, is_active: true } }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Unarchive vehicle error:", e.message);
@@ -1933,7 +1917,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       await pool.query(`UPDATE notifications SET is_read = true WHERE user_id = $1`, [auth.userId]);
-      pushToWebsite("/api/notifications/mark-read", auth, { method: "POST" }).catch(() => {});
     } catch {}
     return res.json({ ok: true });
   });
@@ -2683,7 +2666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const { status } = req.body;
       await pool.query(`UPDATE monthly_invoices SET status = $1, updated_at = NOW() WHERE id = $2`, [status, req.params.id]);
-      pushToWebsite(`/api/invoices/${req.params.id}/status`, auth, { method: "PUT", body: req.body }).catch(() => {});
+      pushToWebsite(`/api/invoices/${req.params.id}/status`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM monthly_invoices WHERE id = $1`, [req.params.id]);
       return res.json(addDualKeys(result.rows[0] || {}));
     } catch {
@@ -2766,8 +2749,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [id]);
       const project = result.rows[0];
 
-      pushToWebsite("/api/contractor-projects", auth, { method: "POST", body: { ...req.body, id, contractorId: auth.userId } }).catch(() => {});
-
       return res.status(201).json(addDualKeys(project));
     } catch (e: any) {
       console.error("POST /api/projects error:", e.message);
@@ -2839,8 +2820,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
-
       return res.json({ ...addDualKeys(project), cascadedJobs: cascaded });
     } catch (e: any) {
       console.error("PUT /api/projects error:", e.message);
@@ -2857,7 +2836,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [req.params.id, auth.userId]
       );
       if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
-      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, { method: "DELETE" }).catch(() => {});
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -2915,7 +2893,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
         [id, b.jobId || b.job_id, auth.userId, b.revieweeId || b.reviewee_id, b.rating, b.comment, b.reviewerRole || b.reviewer_role || auth.user?.role]
       );
-      pushToWebsite("/api/reviews", auth, { method: "POST", body: req.body }).catch(() => {});
       return res.status(201).json({ ok: true, id });
     } catch (e: any) {
       console.error("POST review error:", e.message);
@@ -2978,7 +2955,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         const id = require("crypto").randomUUID();
         await pool.query(`INSERT INTO driver_favorites (id, contractor_id, driver_id, created_at) VALUES ($1, $2, $3, NOW())`, [id, auth.userId, req.params.driverId]);
-        pushToWebsite(`/api/favorites/${req.params.driverId}`, auth, { method: "POST" }).catch(() => {});
         return res.json({ isFavorite: true });
       }
     } catch {

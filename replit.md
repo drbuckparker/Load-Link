@@ -106,3 +106,23 @@ Endpoint mappings (mobile app path → website path):
 - `/api/messages/unread-count` → `/api/notifications/unread-count`
 - `/api/calendar/jobs` → built locally from `fetchAllJobsCached()` (filtered by driver, month/year, active status; multi-day expansion uses `getJobDateRange()` which skips weekends unless `includesWeekends` is true)
 - `/api/contractor/calendar-capacity` → built locally from `fetchAllJobsCached()` (filtered by contractor, month/year, active status; computes dailyCapacity/dailyJobs/fleetSize; multi-day expansion uses same weekend-aware `getJobDateRange()`)
+
+## pushToWebsite Audit (May 2026)
+After joint audit with the website agent, the companion shares the website's Neon DB directly (not a local DB). pushToWebsite is a fire-and-forget hook for triggering server-side side-effects (audit logs, broadcast WebSockets, radius notifications) — NOT for data persistence. Trimmed from 31 → 22 callers:
+
+**Path/method fixes applied:**
+- `/api/jobs/:id/counter-bid` → `/api/jobs/:id/bids`
+- `/api/jobs/:id/withdraw` → `/api/job-assignments/:aid/withdraw` (loops over driver's assignments)
+- `/api/jobs/:id/clock-in` → `/api/jobs/:id/start`
+- `/api/job-runs/:runId/clock-out` → `/api/jobs/:jobId/end` (looks up jobId from job_runs, sends runId in body)
+- `/api/jobs/:id/assignments/:aid` (DELETE) → `/api/job-assignments/:aid/cancel` (POST)
+- `/api/jobs/:id/assignments/:aid/{approve,reject}` → `/api/job-assignments/:aid/{approve,reject}`
+- `/api/assignments/:aid/vehicle` → `/api/job-assignments/:aid/vehicle`
+- `/api/invoices/:id/status` method PUT → POST
+- `PUT /api/jobs/:id` push gated behind `dateChanged` (only when `scheduledDate` actually moves)
+
+**Removed (pure CRUD double-writes — local DB write is sufficient):**
+- push/register, vehicle CRUD (POST/PUT/DELETE/archive/unarchive), profile/status/role updates, contractor-projects POST/PUT/DELETE, notifications mark-read, favorites, reviews, job archive/unarchive, DELETE /api/jobs/:id sub-pushes
+
+**Kept (have side-effects on website that companion can't replicate):**
+POST /api/jobs (radius fanout + driver notifications), POST /api/jobs/:id/cancel, POST /api/jobs/:id/accept (audit log + availability), assignment approve/reject/withdraw/cancel/vehicle, job start/end (WebSocket broadcasts), counter-bid, invoice status, conversations archive/unarchive/delete, message send, availability POST, job-run patch/delete/weight-tickets.
