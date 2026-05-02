@@ -1406,7 +1406,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getWebsiteAuth(req)!;
       const updates: string[] = [];
       const values: any[] = [];
       let idx = 1;
@@ -1422,7 +1421,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         values.push(req.params.runId);
         await pool.query(`UPDATE job_runs SET ${updates.join(', ')} WHERE id = $${idx}`, values);
       }
-      pushToWebsite(`/api/job-runs/${req.params.runId}`, auth, { method: "PATCH", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [req.params.runId]);
       return res.json(addDualKeys(result.rows[0] || { id: req.params.runId }));
     } catch {
@@ -1432,9 +1430,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getWebsiteAuth(req)!;
       await pool.query(`DELETE FROM job_runs WHERE id = $1`, [req.params.runId]);
-      pushToWebsite(`/api/job-runs/${req.params.runId}`, auth, { method: "DELETE" }).catch(() => {});
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -1452,7 +1448,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
         [id, req.params.runId, jobId, auth.userId, req.body.weightValue || req.body.weight_value, req.body.notes, req.body.imageData || req.body.image_data]
       );
-      pushToWebsite(`/api/job-runs/${req.params.runId}/weight-tickets`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM weight_tickets WHERE id = $1`, [id]);
       return res.status(201).json(addDualKeys(result.rows[0]));
     } catch (e: any) {
@@ -1507,23 +1502,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json([]);
   });
 
-  app.post("/api/conversations/:jobId/archive", requireAuth, async (req: Request, res: Response) => {
-    const auth = getWebsiteAuth(req)!;
-    pushToWebsite(`/api/conversations/${req.params.jobId}/archive`, auth, { method: "POST" }).catch(() => {});
+  app.post("/api/conversations/:jobId/archive", requireAuth, async (_req: Request, res: Response) => {
     return res.json({ ok: true });
   });
 
-  app.post("/api/conversations/:jobId/unarchive", requireAuth, async (req: Request, res: Response) => {
-    const auth = getWebsiteAuth(req)!;
-    pushToWebsite(`/api/conversations/${req.params.jobId}/unarchive`, auth, { method: "POST" }).catch(() => {});
+  app.post("/api/conversations/:jobId/unarchive", requireAuth, async (_req: Request, res: Response) => {
     return res.json({ ok: true });
   });
 
   app.post("/api/conversations/:jobId/delete", requireAuth, async (req: Request, res: Response) => {
     try {
       await pool.query(`DELETE FROM job_messages WHERE job_id = $1`, [req.params.jobId]);
-      const auth = getWebsiteAuth(req)!;
-      pushToWebsite(`/api/conversations/${req.params.jobId}/delete`, auth, { method: "POST" }).catch(() => {});
     } catch {}
     return res.json({ ok: true });
   });
@@ -1567,7 +1556,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `INSERT INTO job_messages (id, job_id, sender_id, body, read, created_at) VALUES ($1, $2, $3, $4, false, NOW())`,
         [id, req.params.jobId, auth.userId, body]
       );
-      pushToWebsite(`/api/messages/${req.params.jobId}`, auth, { method: "POST", body: req.body }).catch(() => {});
+      pushToWebsite(`/api/jobs/${req.params.jobId}/messages`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM job_messages WHERE id = $1`, [id]);
       return res.status(201).json(addDualKeys(result.rows[0]));
     } catch (e: any) {

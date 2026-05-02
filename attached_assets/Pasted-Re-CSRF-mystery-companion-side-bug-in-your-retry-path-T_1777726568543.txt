@@ -1,0 +1,28 @@
+Re: CSRF mystery — companion-side bug in your retry path
+
+The website's CSRF middleware (server/replitAuth.ts:354) skips validation when isCompanionApiRequest(req) === true, which is just req.headers['x-api-key'] === process.env.COMPANION_API_KEY. That's why your fresh pushes succeed (they include the header) and your retries fail (they don't).
+
+Look in server/sync.ts at drainSyncQueue — whatever helper it uses to replay queued entries is not attaching X-API-Key (and probably not Authorization: Bearer <jwt> either, but CSRF blocks first so we can't see). Compare it to your live pushToWebsite and unify the headers. Once that's fixed, drain again and the 6 dead entries should clear (the 5x accept and 1x cancel are all real keepers — accept fires auditLog('job_accepted') + creates driver_availability + cancelJobNotifications; cancel fires push + in-app + clears truck/driver availability).
+
+The website is correct. No CSRF change needed here.
+
+Re: Spot-check verdicts on the 8 unaudited routes
+
+I read every match in our server/routes.ts. Verdicts:
+
+Companion path	Website route exists?	Side-effects on website	Verdict
+POST /api/conversations/:jobId/archive	No	n/a — silent 404	DROP (companion-only state)
+POST /api/conversations/:jobId/unarchive	No	n/a — silent 404	DROP
+POST /api/conversations/:jobId/delete	No	n/a — silent 404	DROP
+POST /api/messages/:jobId	No — path mismatch. Real route is POST /api/jobs/:id/messages	wsManager.notifyNewMessage (WS broadcast). No in-app notif, no push. (Correction to my earlier note — I overstated this; only WS.)	KEEP, fix path
+POST /api/me/availability	Yes (line 7967)	Real cascade: deletes overlapping non-recurring slots, removes prior unavailable entries when flipping to available, conflict-checks against weekly recurrences. More than a plain insert.	KEEP
+PATCH /api/job-runs/:runId	No	n/a — silent 404. Job runs are mutated only via /jobs/:id/start and /jobs/:id/end.	DROP
+DELETE /api/job-runs/:runId	No	n/a — silent 404	DROP
+POST /api/job-runs/:runId/weight-tickets	No	n/a — silent 404. The website doesn't know about weight tickets at all.	DROP (or open a website task to add the feature if mobile is generating tickets we're throwing away)
+Net result: drop 6 of the 8, keep 2. Active pushToWebsite count goes from 22 → 16, and you've found an 8th path mismatch (messages) that explains why job-chat from mobile probably isn't broadcasting on the website.
+
+One thing worth a quick check on your side before you drop the conversations routes: if those companion-only routes set archive/delete flags only in the companion's local DB, that flag will never propagate to the website. Confirm the conversations table on the website doesn't need an archivedAt / deletedAt column for parity, or that mobile users archiving on phone aren't expecting the web app to see it.
+
+Heads-up on weight tickets: if the mobile app is collecting weight ticket data per job-run and the website has no place to store it, that's a real data gap. Either the website needs the table + endpoint, or the data is purely operational for the driver and never reaches the office side. Worth raising as a separate discussion — not part of this audit.
+
+That should close out the audit. Once you fix the retry-headers bug and apply the 6 drops + 1 path fix, the companion is fully aligned with the website.
