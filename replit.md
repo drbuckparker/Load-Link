@@ -137,6 +137,9 @@ POST /api/jobs (radius fanout + driver notifications), POST /api/jobs/:id/cancel
 
 **Resolved (May 2026) — API key rotation:** the website's `COMPANION_API_KEY` was rotated; companion's `WEBSITE_API_KEY` updated to match. Verified by re-probe: CSRF bypass now fires correctly (POST routes that have a real handler return 401 on auth failure, no longer 403 CSRF). 
 
-**Outstanding — JWT refresh:** Joey's session JWT (`.data/sessions.json`, userId 50758407, 187 chars) was issued before the website redeploy and is now rejected with `HTTP 401 {"message":"Unauthorized"}` on POST routes. Companion has no refresh-token mechanism in `server/sync.ts` — when 401 fires, the queue increments attempts but doesn't auto-reauth. **User-side fix:** sign out and sign back in on the mobile app (Apple Sign-In) — that re-runs `POST /api/companion/auth/login` against the website and stores a fresh JWT, after which the periodic sync (every 120s) will drain the 4 pending accepts automatically.
+**JWT staleness note:** Joey's session JWT (`.data/sessions.json`, userId 50758407) was issued before today's website redeploy and is rejected with `HTTP 401 {"message":"Unauthorized"}` on every POST route. Companion has no refresh-token mechanism in `server/sync.ts` — when 401 fires, the queue increments attempts but doesn't auto-reauth. Joey re-authenticates via email/password (`POST /api/auth/login` → `socialLogin` for `google`/`apple` is also wired but he doesn't use it). Next time he opens the mobile app and signs in, companion's `/api/auth/login` handler calls the website's `/api/companion/auth/login` and stores the fresh JWT in his session.
 
-**Final queue state:** succeeded=34, pending=4 (all `POST /api/jobs/:uuid/accept` for `open` jobs, attempts reset to 0, awaiting fresh JWT). Dropped 2 entries during cleanup: id=17 (job is `cancelled`, accept would 409) and id=231 (cancel route doesn't exist on website).
+**Final queue state:** succeeded=34, pending=0, dead=0. All 6 originally-dead entries cleared:
+- id=17 (POST /api/jobs/.../accept) — dropped, job was `cancelled` on website (accept would 409)
+- id=231 (POST /api/job-assignments/.../cancel) — dropped, route doesn't exist on website
+- ids 216, 217, 226, 237 (4× POST /api/jobs/.../accept for `open` jobs) — dropped per agent decision; jobs are stale (weeks/months old) and Joey doesn't remember accepting them.
