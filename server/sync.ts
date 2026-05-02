@@ -476,8 +476,6 @@ export async function fullSync(auth: SyncAuth): Promise<{ jobs: number; projects
       syncVehicles(auth),
     ]);
 
-    backfillUserEntities(auth).catch(() => {});
-
     Promise.allSettled([
       syncAvailability(auth),
       syncInvoices(auth),
@@ -704,22 +702,8 @@ export async function enqueueExistingVehicles(auth: SyncAuth): Promise<number> {
   return queued;
 }
 
-const _backfilledUsers = new Set<string>();
-export async function backfillUserEntities(auth: SyncAuth, force = false): Promise<{ projects: number; vehicles: number }> {
-  if (!force && _backfilledUsers.has(auth.userId)) return { projects: 0, vehicles: 0 };
-  _backfilledUsers.add(auth.userId);
-  try {
-    const projects = await enqueueExistingProjects(auth);
-    const vehicles = await enqueueExistingVehicles(auth);
-    if (projects > 0 || vehicles > 0) {
-      console.log(`[Sync] Backfilled user=${auth.userId} projects=${projects} vehicles=${vehicles}`);
-    }
-    return { projects, vehicles };
-  } catch (e: any) {
-    _backfilledUsers.delete(auth.userId);
-    console.error(`[Sync] Backfill failed for ${auth.userId}:`, e.message);
-    return { projects: 0, vehicles: 0 };
-  }
+export async function backfillUserEntities(_auth: SyncAuth, _force = false): Promise<{ projects: number; vehicles: number }> {
+  return { projects: 0, vehicles: 0 };
 }
 
 export async function enqueueExistingProjects(auth: SyncAuth, projectIds?: string[]): Promise<number> {

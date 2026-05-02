@@ -1,0 +1,27 @@
+1. The stale queue at 15-attempt cap is a data-loss risk — how many entries, and on which endpoints?
+
+Those entries were enqueued under the broken paths, hit the cap, and now sit there frozen even though the mapping is fixed. They will never replay. That's fine for the pure-CRUD ones we're no longer pushing anyway (they were already redundant given the shared DB), but it is not fine for any notification-bearing ones. Specifically, if the stale queue contains:
+
+withdraw entries → the website never re-ran notifyNearbyDrivers, so the load reopened in the DB but no driver was ever pinged about it
+approve/reject/cancel entries → the assigned driver/company never got the push or in-app notification
+clock-in/clock-out (start/end) entries → no driver_location WebSocket broadcast, no job_run lifecycle, no mileage calc on the website side
+accept entries → no auditLog('job_accepted'), no cancelJobNotifications cleanup
+Pull a quick SELECT path, method, COUNT(*) FROM sync_queue WHERE attempts >= 15 AND succeeded_at IS NULL GROUP BY path, method; and report back. For any rows on the keeper list, rewrite the path/method columns to the corrected values and reset attempts = 0 so drainSyncQueue picks them up. For pure-CRUD ones, just delete them.
+
+2. The 22 remaining pushes include 6 endpoints I never audited — sanity-check needed.
+
+Of the 22 you kept, these weren't in my "keepers" list because I didn't look at them:
+
+conversation lifecycle (create / archive)
+message send
+availability POST (the create path — I only audited PATCH and DELETE on /me/availability/:id and both were DB-only)
+job-run patch, job-run delete, weight-tickets
+Quick principle to apply, given we share a Neon DB: a pushToWebsite is only worth keeping if the website's HTTP handler does work beyond the DB write itself — notifications, push, WebSocket broadcasts, audit log, cascades. If the website route is just await storage.update(...); res.json(...), the companion's local write already updated the same row and the push is pure waste.
+
+I'm fairly confident message send is a real keeper (the website broadcasts new messages over WebSocket and creates an in-app notification for the recipient). The other five I'd want you to spot-check by reading the website route in server/routes.ts and confirming there's something other than a pass-through. Drop any that turn out to be pass-throughs.
+
+3. PUT /api/jobs/:id gating on dateChanged — confirmed correct.
+
+Given the shared DB, the only thing the website handler adds on a job update is the truck-availability rebalancing cascade, and that only runs when scheduledDate moves. Non-date updates skipping the push is the right call.
+
+Net status: the architecture decision is settled and the bulk of the work is done well. The two remaining items above (queue cleanup + spot-check the 6 unaudited endpoints) close it out. Ping me when you have the queue counts.

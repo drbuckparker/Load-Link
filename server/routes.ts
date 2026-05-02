@@ -1891,7 +1891,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/sync-status/retry", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      await backfillUserEntities(auth, true);
       const result = await drainSyncQueue(auth, 200);
       const status = await getSyncQueueStatus(auth.userId);
       return res.json({ ...result, ...status });
