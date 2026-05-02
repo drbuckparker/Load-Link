@@ -1044,9 +1044,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (parseInt(remaining.rows[0]?.count || '0') === 0) {
         await pool.query(`UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       }
-      for (const a of myAssignments.rows) {
-        pushToWebsite(`/api/job-assignments/${a.id}/withdraw`, auth, { method: "POST" }).catch(() => {});
-      }
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -1055,14 +1052,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req: Request, res: Response) => {
     try {
-      const auth = getWebsiteAuth(req)!;
       await pool.query(`UPDATE job_assignments SET status = 'withdrawn' WHERE id = $1`, [req.params.assignmentId]);
       const remaining = await pool.query(`SELECT COUNT(*) FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`, [req.params.id]);
       const remainingCount = parseInt(remaining.rows[0]?.count || '0');
       if (remainingCount === 0) {
         await pool.query(`UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       }
-      pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/cancel`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true, remainingAssignments: remainingCount });
     } catch {
       return res.json({ ok: true });
