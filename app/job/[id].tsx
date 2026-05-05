@@ -446,7 +446,10 @@ export default function JobDetailScreen() {
   const jobTypeColor = getJobTypeColor(job.jobType);
   const isMyJob = job.driverId === user?.id || (myAssignment && myAssignment.status === 'approved');
   const canAccept = (jobStatus === 'open' || jobStatus === 'pending' || jobStatus === 'accepted') && !hasApplied && !isContractor;
-  const canStart = isMyJob && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
+  // Clock-in is a driver/fleet action — never expose it while the user is in
+  // contractor mode, even if they happen to also be the approved driver on
+  // the job (self-apply scenario where the same company posted and applied).
+  const canStart = isMyJob && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
 
   const clockInRestriction = (() => {
     if (!canStart || isRunning) return null;

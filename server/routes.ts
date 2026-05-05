@@ -1982,19 +1982,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const startDateStr = fmtDate(today);
       const endDateStr = fmtDate(lastDay);
 
+      // The upcoming-days widget shows two very different things depending on
+      // which role hat the user is currently wearing:
+      //
+      //   * Contractor mode  -> jobs THEY have posted, scheduled in the next
+      //     7 days, with truck-needed / booked / applied counts.
+      //   * Trucking / driver -> their own trucks, with which ones are booked
+      //     onto approved jobs that day (existing behaviour).
+      //
+      // Joey reported that toggling to "Construction Co" still showed the
+      // fleet-trucks view because we were unconditionally querying his
+      // trucks below. Branch the widget builder on the active role.
+      const isContractorOnly = role.includes('contractor') && role !== 'trucking_company';
+
       let userTrucks: any[] = [];
       let truckAssignments: any[] = [];
-      try {
-        const trucksRes = await pool.query(
-          `SELECT id, truck_number, year, make, model
-             FROM trucks
-            WHERE trucking_company_id = $1 AND archived_at IS NULL
-            ORDER BY NULLIF(regexp_replace(COALESCE(truck_number, ''), '[^0-9]', '', 'g'), '')::int NULLS LAST,
-                     truck_number`,
-          [userId]
-        );
-        userTrucks = trucksRes.rows;
-      } catch {}
+      let contractorJobsForDays: any[] = [];
+
+      if (isContractorOnly) {
+        try {
+          const cjRes = await pool.query(
+            `SELECT j.id,
+                    j.material,
+                    j.scheduled_date,
+                    COALESCE(j.estimated_days, 1)::numeric AS estimated_days,
+                    COALESCE(j.includes_weekends, false) AS includes_weekends,
+                    COALESCE(j.includes_saturday, true)  AS includes_saturday,
+                    COALESCE(j.includes_sunday, true)    AS includes_sunday,
+                    j.status::text AS job_status,
+                    COALESCE(j.trucks_needed, 1)::int AS trucks_needed,
+                    cp.name AS project_name,
+                    (SELECT COUNT(*)::int FROM job_assignments ja
+                       WHERE ja.job_id = j.id AND ja.status::text = 'approved') AS trucks_assigned,
+                    (SELECT COUNT(*)::int FROM job_assignments ja
+                       WHERE ja.job_id = j.id) AS applications_count
+               FROM jobs j
+               LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+              WHERE j.contractor_id = $1
+                AND j.archived_at IS NULL
+                AND j.status::text NOT IN ('cancelled', 'completed')
+                AND j.scheduled_date IS NOT NULL
+                AND j.scheduled_date::date <= $3::date
+                AND (
+                  j.scheduled_date::date >= $2::date
+                  OR (
+                    COALESCE(j.estimated_days, 1)::numeric > 1
+                    AND (j.scheduled_date::date
+                         + (CEIL(COALESCE(j.estimated_days, 1)::numeric * 2)::int) * INTERVAL '1 day'
+                        )::date >= $2::date
+                  )
+                )`,
+            [userId, startDateStr, endDateStr]
+          );
+          contractorJobsForDays = cjRes.rows.map((row: any) => ({
+            ...row,
+            workingDates: new Set(
+              getJobDateRange(
+                typeof row.scheduled_date === 'string'
+                  ? row.scheduled_date
+                  : (row.scheduled_date as Date)?.toISOString?.() || String(row.scheduled_date),
+                Number(row.estimated_days || 1),
+                !!row.includes_weekends,
+                row.includes_saturday !== false,
+                row.includes_sunday !== false
+              )
+            ),
+          }));
+        } catch (e: any) {
+          console.error("Upcoming-days contractor jobs query error:", e.message);
+        }
+      } else {
+        try {
+          const trucksRes = await pool.query(
+            `SELECT id, truck_number, year, make, model
+               FROM trucks
+              WHERE trucking_company_id = $1 AND archived_at IS NULL
+              ORDER BY NULLIF(regexp_replace(COALESCE(truck_number, ''), '[^0-9]', '', 'g'), '')::int NULLS LAST,
+                       truck_number`,
+            [userId]
+          );
+          userTrucks = trucksRes.rows;
+        } catch {}
+      }
 
       if (userTrucks.length > 0) {
         try {
@@ -2061,6 +2130,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const d = new Date(today);
         d.setDate(today.getDate() + i);
         const dDateStr = fmtDate(d);
+
+        if (isContractorOnly) {
+          // Contractor view: each day lists posted jobs working that day with
+          // truck-needed / booked / applied counts. No fleet-trucks UI.
+          const dayJobs = contractorJobsForDays.filter((j: any) =>
+            j.workingDates && j.workingDates.has(dDateStr)
+          );
+          upcomingDays.push({
+            date: dDateStr,
+            dayName: dayNames[d.getDay()],
+            dayNum: d.getDate(),
+            isBusinessDay: isBusinessDay(d),
+            status: dayJobs.length > 0 ? 'jobs' : 'available',
+            trucksTotal: 0,
+            trucksBooked: 0,
+            trucksAvailable: 0,
+            trucks: [],
+            jobs: dayJobs.map((j: any) => ({
+              id: j.id,
+              material: j.material,
+              projectName: j.project_name || '',
+              trucksNeeded: j.trucks_needed || 1,
+              assigned: j.trucks_assigned || 0,
+              applied: j.applications_count || 0,
+              status: j.job_status,
+            })),
+          });
+          continue;
+        }
 
         // A truck is booked on `d` only if `d` is one of the job's actual
         // working dates (which already accounts for includes_weekends /
