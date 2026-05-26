@@ -166,7 +166,7 @@ export default function LoginScreen() {
         end={{ x: 0.5, y: 0.4 }}
       />
 
-      <View style={styles.gridOverlay} pointerEvents="none">
+      <View style={[styles.gridOverlay, { pointerEvents: 'none' }]}>
         {Array.from({ length: 8 }).map((_, i) => (
           <View key={i} style={[styles.gridLine, { top: i * 40 }]} />
         ))}

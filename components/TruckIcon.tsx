@@ -14,12 +14,12 @@ export default function TruckIcon({ size, color, style }: TruckIconProps) {
     <Image
       source={truckImage}
       resizeMode="contain"
+      tintColor={color}
       style={[
         {
           width: size * 1.4,
           height: size,
         },
-        color ? { tintColor: color } : undefined,
         style,
       ]}
     />
