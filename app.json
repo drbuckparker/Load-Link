@@ -38,8 +38,7 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store",
-      "expo-apple-authentication"
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

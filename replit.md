@@ -25,7 +25,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Accessibility**: Minimum 44pt touch targets for gloved hands.
     - **Interactive Elements**: Liquid glass tab bar on iOS 26+ with BlurView fallback.
     - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
-- **Social Sign-In**: Google (via `expo-auth-session` with in-app browser sheet) and Apple (via `expo-apple-authentication`, iOS native). Both use the Expo auth proxy in development and native redirects in production builds.
+- **Social Sign-In**: Google (via `expo-auth-session` with in-app browser sheet). Uses the Expo auth proxy in development and native redirect in production builds.
 
 ### Backend (Local DB + Website Sync)
 - **Technology**: Express.js with local PostgreSQL database and background sync to the LoadLink website API.
@@ -137,7 +137,7 @@ POST /api/jobs (radius fanout + driver notifications), POST /api/jobs/:id/cancel
 
 **Resolved (May 2026) — API key rotation:** the website's `COMPANION_API_KEY` was rotated; companion's `WEBSITE_API_KEY` updated to match. Verified by re-probe: CSRF bypass now fires correctly (POST routes that have a real handler return 401 on auth failure, no longer 403 CSRF). 
 
-**JWT staleness note:** Joey's session JWT (`.data/sessions.json`, userId 50758407) was issued before today's website redeploy and is rejected with `HTTP 401 {"message":"Unauthorized"}` on every POST route. Companion has no refresh-token mechanism in `server/sync.ts` — when 401 fires, the queue increments attempts but doesn't auto-reauth. Joey re-authenticates via email/password (`POST /api/auth/login` → `socialLogin` for `google`/`apple` is also wired but he doesn't use it). Next time he opens the mobile app and signs in, companion's `/api/auth/login` handler calls the website's `/api/companion/auth/login` and stores the fresh JWT in his session.
+**JWT staleness note:** Joey's session JWT (`.data/sessions.json`, userId 50758407) was issued before today's website redeploy and is rejected with `HTTP 401 {"message":"Unauthorized"}` on every POST route. Companion has no refresh-token mechanism in `server/sync.ts` — when 401 fires, the queue increments attempts but doesn't auto-reauth. Joey re-authenticates via email/password (`POST /api/auth/login` → `socialLogin` for `google` is also wired but he doesn't use it). Next time he opens the mobile app and signs in, companion's `/api/auth/login` handler calls the website's `/api/companion/auth/login` and stores the fresh JWT in his session.
 
 **Final queue state:** succeeded=34, pending=0, dead=0. All 6 originally-dead entries cleared:
 - id=17 (POST /api/jobs/.../accept) — dropped, job was `cancelled` on website (accept would 409)

@@ -213,21 +213,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch (e: any) {
           console.error("Google token verification failed:", e.message);
         }
-      } else if (provider === "apple") {
-        try {
-          const parts = token.split(".");
-          if (parts.length === 3) {
-            const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
-            if (payload.iss === "https://appleid.apple.com" && payload.email) {
-              verifiedEmail = payload.email;
-            }
-          }
-        } catch (e: any) {
-          console.error("Apple token decode failed:", e.message);
-        }
-        if (!verifiedEmail && clientEmail) {
-          verifiedEmail = clientEmail;
-        }
       }
 
       if (!verifiedEmail) {
