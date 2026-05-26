@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform, Keyboard, TouchableWithoutFeedback } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform, Keyboard, TouchableWithoutFeedback, Image } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -182,9 +182,11 @@ export default function LoginScreen() {
         <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss} accessible={false}>
           <View>
         <View style={styles.logoSection}>
-          <View style={styles.logoContainer}>
-            <Ionicons name="cube" size={32} color={Colors.primary} />
-          </View>
+          <Image
+            source={require('@/assets/images/icon.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
           <Text style={styles.logoText}>LOADLINK</Text>
           <Text style={styles.tagline}>Built for Construction Hauls</Text>
         </View>
@@ -385,6 +387,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 12,
+  },
+  logoImage: {
+    width: 72,
+    height: 72,
+    borderRadius: 16,
     marginBottom: 12,
   },
   logoText: {
