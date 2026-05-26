@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform, Keyboard, TouchableWithoutFeedback } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,7 @@ import Constants from 'expo-constants';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/lib/query-client';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 
 try {
   const WebBrowser = require('expo-web-browser');
@@ -165,13 +166,21 @@ export default function LoginScreen() {
         end={{ x: 0.5, y: 0.4 }}
       />
 
-      <View style={styles.gridOverlay}>
+      <View style={styles.gridOverlay} pointerEvents="none">
         {Array.from({ length: 8 }).map((_, i) => (
           <View key={i} style={[styles.gridLine, { top: i * 40 }]} />
         ))}
       </View>
 
-      <View style={styles.content}>
+      <KeyboardAwareScrollViewCompat
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+        bottomOffset={24}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
+        <TouchableWithoutFeedback onPress={Platform.OS === 'web' ? undefined : Keyboard.dismiss} accessible={false}>
+          <View>
         <View style={styles.logoSection}>
           <View style={styles.logoContainer}>
             <Ionicons name="cube" size={32} color={Colors.primary} />
@@ -323,7 +332,9 @@ export default function LoginScreen() {
             </Pressable>
           </Link>
         </View>
-      </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAwareScrollViewCompat>
     </View>
   );
 }
@@ -355,8 +366,11 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: 'rgba(255, 255, 255, 0.03)',
   },
-  content: {
+  scroll: {
     flex: 1,
+  },
+  content: {
+    flexGrow: 1,
     paddingHorizontal: 24,
     justifyContent: 'center',
   },
