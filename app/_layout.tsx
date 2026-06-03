@@ -2,10 +2,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, router } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
-import { Platform } from "react-native";
+import { Platform, View, StyleSheet, useWindowDimensions } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import Colors from "@/constants/colors";
 import { queryClient } from "@/lib/query-client";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { StatusBar } from "expo-status-bar";
@@ -25,8 +26,13 @@ if (Platform.OS === 'web' && typeof window !== 'undefined') {
 
 SplashScreen.preventAutoHideAsync();
 
+const APP_MAX_WIDTH = 520;
+
 function RootLayoutNav() {
-  return (
+  const { width } = useWindowDimensions();
+  const isWide = width > APP_MAX_WIDTH;
+
+  const stack = (
     <Stack screenOptions={{ headerBackTitle: "Back" }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
@@ -73,6 +79,14 @@ function RootLayoutNav() {
       <Stack.Screen name="review" options={{ headerShown: false, presentation: 'modal' }} />
       <Stack.Screen name="vehicle-jobs/[id]" options={{ headerShown: false }} />
     </Stack>
+  );
+
+  if (!isWide) return stack;
+
+  return (
+    <View style={styles.wideRoot}>
+      <View style={styles.wideFrame}>{stack}</View>
+    </View>
   );
 }
 
@@ -143,3 +157,17 @@ export default function RootLayout() {
     </ErrorBoundary>
   );
 }
+
+const styles = StyleSheet.create({
+  wideRoot: {
+    flex: 1,
+    backgroundColor: Colors.background,
+    alignItems: "center",
+  },
+  wideFrame: {
+    flex: 1,
+    width: "100%",
+    maxWidth: APP_MAX_WIDTH,
+    backgroundColor: Colors.background,
+  },
+});

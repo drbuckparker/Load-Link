@@ -1,2 +1,3 @@
 - [ESM prod bundle vs dynamic require](esm-prod-bundle.md) — server uses tsx in dev but esbuild ESM in prod; any `require()` in server/ throws "Dynamic require not supported" only in the deployed app (masked as a 500).
 - [Apple Sign-In token verification](apple-signin-verification.md) — /api/auth/social-login must cryptographically verify Apple tokens via jose JWKS (iss+aud=bundle id); never trust the request-body email, or it's account takeover.
+- [iPad Guideline 4 fix](ipad-app-store-guideline4.md) — phone-first Expo app rejected for iPad cutoff: supportsTablet:true + requireFullScreen + root maxWidth(520) centering, not a per-screen refactor.
