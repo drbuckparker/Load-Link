@@ -1,0 +1,1 @@
+- [ESM prod bundle vs dynamic require](esm-prod-bundle.md) — server uses tsx in dev but esbuild ESM in prod; any `require()` in server/ throws "Dynamic require not supported" only in the deployed app (masked as a 500).

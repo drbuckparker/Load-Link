@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import crypto from "node:crypto";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
@@ -244,7 +245,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Invalid response from auth service" });
       }
 
-      const localToken = require("crypto").randomBytes(32).toString("hex");
+      const localToken = crypto.randomBytes(32).toString("hex");
       const authEntry = { jwt, userId: user.id, user };
       tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
@@ -269,7 +270,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       for (const [existingToken, session] of tokenToJwt.entries()) {
         if (session.user?.email?.toLowerCase() === email.toLowerCase()) {
-          const localToken = require("crypto").randomBytes(32).toString("hex");
+          const localToken = crypto.randomBytes(32).toString("hex");
           tokenToJwt.set(localToken, session);
           saveJsonMap("sessions.json", tokenToJwt);
           recordUserActivity(session.userId);
@@ -313,7 +314,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Invalid response from auth service" });
       }
 
-      const localToken = require("crypto").randomBytes(32).toString("hex");
+      const localToken = crypto.randomBytes(32).toString("hex");
       const authEntry = { jwt, userId: user.id, user };
       tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
@@ -346,7 +347,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = data.user;
 
       if (jwt && user) {
-        const localToken = require("crypto").randomBytes(32).toString("hex");
+        const localToken = crypto.randomBytes(32).toString("hex");
         tokenToJwt.set(localToken, { jwt, userId: user.id, user });
         saveJsonMap("sessions.json", tokenToJwt);
         return res.json({ token: localToken, user: addDualKeys(user) });
@@ -648,7 +649,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       const body = { ...req.body, id, contractor_id: auth.userId, status: 'open', created_at: new Date().toISOString() };
 
       const columns = ['id', 'contractor_id', 'material', 'origin_address', 'destination_address', 'rate', 'rate_type',
@@ -779,7 +780,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const { vehicleIds } = req.body || {};
-      const crypto = require("crypto");
 
       // Look up the job + caller's favorite status BEFORE writing any assignments,
       // so we can enforce the auto-approval truck cap.
@@ -1003,7 +1003,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const { rate, note } = req.body;
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       await pool.query(
         `INSERT INTO job_assignments (id, job_id, driver_id, status, counter_bid_rate, counter_bid_note, created_at)
          VALUES ($1, $2, $3, 'counter_bid', $4, $5, NOW()) ON CONFLICT DO NOTHING`,
@@ -1151,7 +1151,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const { favoriteType, favoriteDriverId, favoriteCompanyName } = req.body;
-      const crypto = require("crypto");
       const id = crypto.randomUUID();
       if (favoriteType === 'driver' && favoriteDriverId) {
         await pool.query(
@@ -1343,7 +1342,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const runId = require("crypto").randomUUID();
+      const runId = crypto.randomUUID();
       const vehicleFromBody = req.body?.vehicle_id || req.body?.vehicleId || null;
       let vehicleId = vehicleFromBody;
       if (!vehicleId) {
@@ -1420,7 +1419,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       const runResult = await pool.query(`SELECT job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
       const jobId = runResult.rows[0]?.job_id || null;
       await pool.query(
@@ -1530,7 +1529,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       const body = req.body.body || req.body.message || req.body.content || '';
       await pool.query(
         `INSERT INTO job_messages (id, job_id, sender_id, body, read, created_at) VALUES ($1, $2, $3, $4, false, NOW())`,
@@ -1643,7 +1642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       const b = req.body;
       const truckType = b.truckType || b.truck_type;
       const licensePlate = b.licensePlate || b.license_plate || '';
@@ -1816,7 +1815,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
 
         if (!isAvailable) {
-          const id = require("crypto").randomUUID();
+          const id = crypto.randomUUID();
           await pool.query(
             `INSERT INTO driver_availability (id, driver_id, date, start_time, end_time, is_available, vehicle_id, notes, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
@@ -1832,7 +1831,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(201).json(result.rows[0] ? addDualKeys(result.rows[0]) : { ok: true, status: 'available' });
       }
 
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       await pool.query(
         `INSERT INTO driver_availability (id, driver_id, date, start_time, end_time, is_available, vehicle_id, notes, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
@@ -2798,7 +2797,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/projects", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       const name = req.body.name || req.body.projectName || req.body.project_name || "Untitled Project";
       const jobNumber = req.body.jobNumber || req.body.job_number || null;
       const siteAddress = req.body.siteAddress || req.body.site_address || null;
@@ -2952,7 +2951,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const id = require("crypto").randomUUID();
+      const id = crypto.randomUUID();
       const b = req.body;
       await pool.query(
         `INSERT INTO reviews (id, job_id, reviewer_id, reviewee_id, rating, comment, reviewer_role, created_at)
@@ -3019,7 +3018,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await pool.query(`DELETE FROM driver_favorites WHERE contractor_id = $1 AND driver_id = $2`, [auth.userId, req.params.driverId]);
         return res.json({ isFavorite: false });
       } else {
-        const id = require("crypto").randomUUID();
+        const id = crypto.randomUUID();
         await pool.query(`INSERT INTO driver_favorites (id, contractor_id, driver_id, created_at) VALUES ($1, $2, $3, NOW())`, [id, auth.userId, req.params.driverId]);
         return res.json({ isFavorite: true });
       }
