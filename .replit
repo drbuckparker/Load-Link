@@ -79,3 +79,7 @@ ensurePreviewReachable = "/status"
 DATABASE_URL = "postgresql://neondb_owner:npg_bhcy8Vikf3ep@ep-quiet-moon-a59bvzdf.us-east-2.aws.neon.tech/neondb?sslmode=require"
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID = "862930088432-oqe4bg3t1ef8lui1o56itm5higlgtmaa.apps.googleusercontent.com"
 WEBSITE_API_URL = "https://loadlinklive.com"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 180000
