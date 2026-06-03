@@ -102,8 +102,6 @@
     "postcss": "^8.5.15",
     "follow-redirects": "^1.16.0",
     "qs": "^6.15.2",
-    "brace-expansion": "^2.0.3",
-    "@isaacs/brace-expansion": "^5.0.1",
     "multer": "^2.1.1",
     "ws": "^8.21.0",
     "drizzle-orm": "^0.45.2",
