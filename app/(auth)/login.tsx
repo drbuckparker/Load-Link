@@ -27,13 +27,13 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [socialLoading, setSocialLoading] = useState<'google' | null>(null);
+  const [socialLoading, setSocialLoading] = useState<'google' | 'apple' | null>(null);
   const [error, setError] = useState('');
   const [needsPassword, setNeedsPassword] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  async function handleSocialAuth(provider: 'google', token: string, authEmail?: string) {
+  async function handleSocialAuth(provider: 'google' | 'apple', token: string, authEmail?: string) {
     setError('');
     setSocialLoading(provider);
     try {
@@ -44,7 +44,7 @@ export default function LoginScreen() {
       }
       router.replace('/(tabs)');
     } catch (e: any) {
-      setError(e.message || 'Google sign in failed');
+      setError(e.message || `${provider === 'google' ? 'Google' : 'Apple'} sign in failed`);
     } finally {
       setSocialLoading(null);
     }
@@ -92,6 +92,41 @@ export default function LoginScreen() {
     } catch (e: any) {
       if (!e.message?.includes('cancel') && !e.message?.includes('dismiss')) {
         setError(e.message || 'Google sign in failed');
+      }
+      setSocialLoading(null);
+    }
+  }
+
+  async function handleAppleSignIn() {
+    if (Platform.OS !== 'ios') {
+      setError('Apple sign in is only available on iOS devices');
+      return;
+    }
+    setError('');
+    setSocialLoading('apple');
+    try {
+      const AppleAuth = await import('expo-apple-authentication');
+      const isAvailable = await AppleAuth.isAvailableAsync();
+      if (!isAvailable) {
+        setError('Apple sign in is not available on this device');
+        setSocialLoading(null);
+        return;
+      }
+      const credential = await AppleAuth.signInAsync({
+        requestedScopes: [
+          AppleAuth.AppleAuthenticationScope.FULL_NAME,
+          AppleAuth.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (credential.identityToken) {
+        await handleSocialAuth('apple', credential.identityToken, credential.email || undefined);
+      } else {
+        setError('Apple sign in failed - no identity token received');
+        setSocialLoading(null);
+      }
+    } catch (e: any) {
+      if (e.code !== 'ERR_REQUEST_CANCELED') {
+        setError('Apple sign in failed');
       }
       setSocialLoading(null);
     }
@@ -322,6 +357,24 @@ export default function LoginScreen() {
                   </>
                 )}
               </Pressable>
+
+              {Platform.OS === 'ios' && (
+                <Pressable
+                  style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
+                  onPress={handleAppleSignIn}
+                  disabled={isAnyLoading}
+                  testID="apple-sign-in"
+                >
+                  {socialLoading === 'apple' ? (
+                    <ActivityIndicator size="small" color={Colors.text} />
+                  ) : (
+                    <>
+                      <Ionicons name="logo-apple" size={20} color={Colors.primary} />
+                      <Text style={styles.socialBtnText}>Continue with Apple</Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
             </View>
           )}
         </View>

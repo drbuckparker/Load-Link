@@ -12,6 +12,7 @@ import { createServer } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import crypto from "node:crypto";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 // server/db.ts
 import { Pool } from "pg";
@@ -1049,6 +1050,8 @@ try {
   mkdirSync(DATA_DIR, { recursive: true });
 } catch {
 }
+var APPLE_BUNDLE_ID = process.env.APPLE_BUNDLE_ID || "com.loadlink.app";
+var appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
 async function sendPushNotification(userId, title, body, data) {
   try {
     const result = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
@@ -1224,6 +1227,18 @@ async function registerRoutes(app2) {
           }
         } catch (e) {
           console.error("Google token verification failed:", e.message);
+        }
+      } else if (provider === "apple") {
+        try {
+          const { payload } = await jwtVerify(token, appleJwks, {
+            issuer: "https://appleid.apple.com",
+            audience: APPLE_BUNDLE_ID
+          });
+          if (payload.email && (payload.email_verified === true || payload.email_verified === "true")) {
+            verifiedEmail = payload.email;
+          }
+        } catch (e) {
+          console.error("Apple token verification failed:", e.message);
         }
       }
       if (!verifiedEmail) {

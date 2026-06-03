@@ -25,7 +25,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     - **Accessibility**: Minimum 44pt touch targets for gloved hands.
     - **Interactive Elements**: Liquid glass tab bar on iOS 26+ with BlurView fallback.
     - **Role-Aware UI**: Dynamic tab layouts and feature visibility based on user roles (e.g., contractors see job management/invoices; drivers see job browsing/earnings).
-- **Social Sign-In**: Google (via `expo-auth-session` with in-app browser sheet). Uses the Expo auth proxy in development and native redirect in production builds.
+- **Social Sign-In**: Google (via `expo-auth-session` with in-app browser sheet) and Apple (via `expo-apple-authentication`, iOS native only). Both use the Expo auth proxy in development and native redirects in production builds.
 
 ### Backend (Local DB + Website Sync)
 - **Technology**: Express.js with local PostgreSQL database and background sync to the LoadLink website API.

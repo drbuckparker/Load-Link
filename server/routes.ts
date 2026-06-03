@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import crypto from "node:crypto";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
@@ -12,6 +13,9 @@ const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API
 
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+
+const APPLE_BUNDLE_ID = process.env.APPLE_BUNDLE_ID || "com.loadlink.app";
+const appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
 
 async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>) {
   try {
@@ -213,6 +217,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         } catch (e: any) {
           console.error("Google token verification failed:", e.message);
+        }
+      } else if (provider === "apple") {
+        try {
+          const { payload } = await jwtVerify(token, appleJwks, {
+            issuer: "https://appleid.apple.com",
+            audience: APPLE_BUNDLE_ID,
+          });
+          if (payload.email && (payload.email_verified === true || payload.email_verified === "true")) {
+            verifiedEmail = payload.email as string;
+          }
+        } catch (e: any) {
+          console.error("Apple token verification failed:", e.message);
         }
       }
 

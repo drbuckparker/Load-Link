@@ -547,7 +547,7 @@ export default function ProfileScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.accountCardTitle}>CONNECTED ACCOUNTS</Text>
-            <Text style={styles.accountCardDesc}>Google, GitHub sign-in</Text>
+            <Text style={styles.accountCardDesc}>Google, Apple, GitHub sign-in</Text>
           </View>
         </View>
       </>
