@@ -56,6 +56,45 @@ function saveJsonMap<T>(filename: string, map: Map<string, T>) {
 
 const tokenToJwt = loadJsonMap<{ jwt: string; userId: string; user: any }>("sessions.json");
 
+// Apple only includes the `email` claim in the identity token on the FIRST
+// authorization. On every subsequent Sign in with Apple, the verified token
+// carries only a stable `sub` (user id) and no email. We persist sub -> email
+// the first time we see it so repeat sign-ins can resolve the email securely
+// server-side, without ever trusting a client-supplied email. Stored in a
+// companion-owned table (durable across redeploys / multiple instances),
+// following the same CREATE-IF-NOT-EXISTS pattern as sync_queue.
+let _appleIdentitiesReady = false;
+async function ensureAppleIdentitiesTable(): Promise<void> {
+  if (_appleIdentitiesReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS companion_apple_identities (
+      sub TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+  `);
+  _appleIdentitiesReady = true;
+}
+
+async function rememberAppleEmail(sub: string, email: string): Promise<void> {
+  await ensureAppleIdentitiesTable();
+  await pool.query(
+    `INSERT INTO companion_apple_identities (sub, email, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (sub) DO UPDATE SET email = EXCLUDED.email, updated_at = NOW()`,
+    [sub, email]
+  );
+}
+
+async function lookupAppleEmail(sub: string): Promise<string | null> {
+  await ensureAppleIdentitiesTable();
+  const r = await pool.query(
+    `SELECT email FROM companion_apple_identities WHERE sub = $1 LIMIT 1`,
+    [sub]
+  );
+  return r.rows[0]?.email ?? null;
+}
+
 const hiddenJobIds = new Set([
   "964f3e5b-6fa2-4aa2-9f2f-57a98bf5835d",
   "415b98c6-6102-4170-93b1-65601200e267",
@@ -224,8 +263,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
             issuer: "https://appleid.apple.com",
             audience: APPLE_BUNDLE_ID,
           });
-          if (payload.email && (payload.email_verified === true || payload.email_verified === "true")) {
+          const sub = typeof payload.sub === "string" ? payload.sub : null;
+          if (payload.email) {
+            // First authorization (or any token that still carries email):
+            // trust the cryptographically-verified email and remember it.
             verifiedEmail = payload.email as string;
+            if (sub) {
+              await rememberAppleEmail(sub, verifiedEmail).catch((e) =>
+                console.error("Failed to persist Apple sub->email:", e.message)
+              );
+            }
+          } else if (sub) {
+            // Repeat sign-in: Apple omitted the email, resolve it from the
+            // stable, verified `sub` we stored on the first authorization.
+            verifiedEmail = await lookupAppleEmail(sub);
+            if (!verifiedEmail) {
+              console.error(
+                "Apple sign-in: verified token has no email and no stored sub mapping"
+              );
+            }
+          } else {
+            console.error("Apple sign-in: verified token has neither email nor sub");
           }
         } catch (e: any) {
           console.error("Apple token verification failed:", e.message);
