@@ -54,7 +54,7 @@ function formatRoleLabel(role: string): string {
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
-  const { user, logout, updateUser, refreshUser } = useAuth();
+  const { user, logout, deleteAccount, updateUser, refreshUser } = useAuth();
   const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
   const [refreshing, setRefreshing] = useState(false);
   const [switchingRole, setSwitchingRole] = useState(false);
@@ -64,6 +64,9 @@ export default function ProfileScreen() {
   const [editValue, setEditValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [earningsPeriod, setEarningsPeriod] = useState<'week' | 'month' | 'all'>('month');
+  const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   const earningsQuery = useQuery<any>({
     queryKey: [`/api/earnings?period=${earningsPeriod}`],
@@ -189,6 +192,37 @@ export default function ProfileScreen() {
         },
       },
     ]);
+  }
+
+  function openDeleteFlow() {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setDeleteConfirmText('');
+    setDeleteStep(1);
+  }
+
+  function closeDeleteFlow() {
+    if (deleting) return;
+    setDeleteStep(0);
+    setDeleteConfirmText('');
+  }
+
+  async function handleConfirmDelete() {
+    setDeleting(true);
+    try {
+      await deleteAccount();
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setDeleteStep(0);
+      setDeleteConfirmText('');
+      router.replace('/(auth)/login');
+    } catch (e: any) {
+      setDeleting(false);
+      const msg = e?.message || 'Could not delete your account. Please try again.';
+      if (Platform.OS === 'web') {
+        setDeleteStep(0);
+        setDeleteConfirmText('');
+      }
+      Alert.alert('Deletion Failed', msg);
+    }
   }
 
   if (!user) return null;
@@ -520,17 +554,6 @@ export default function ProfileScreen() {
   function renderAccountTab() {
     return (
       <>
-        <View style={styles.comingSoonCard}>
-          <View style={styles.comingSoonIcon}>
-            <Ionicons name="shield-outline" size={40} color={Colors.textMuted} />
-          </View>
-          <Text style={styles.comingSoonTitle}>ACCOUNT MANAGEMENT</Text>
-          <Text style={styles.comingSoonDesc}>Manage your security settings, connected accounts, and login methods.</Text>
-          <View style={styles.comingSoonBadge}>
-            <Text style={styles.comingSoonBadgeText}>Coming Soon</Text>
-          </View>
-        </View>
-
         <View style={styles.accountCard}>
           <View style={styles.accountCardIcon}>
             <Ionicons name="lock-closed-outline" size={20} color={Colors.textMuted} />
@@ -538,6 +561,9 @@ export default function ProfileScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.accountCardTitle}>SECURITY SETTINGS</Text>
             <Text style={styles.accountCardDesc}>Password, 2FA, and login history</Text>
+          </View>
+          <View style={styles.comingSoonPill}>
+            <Text style={styles.comingSoonPillText}>Soon</Text>
           </View>
         </View>
 
@@ -549,6 +575,25 @@ export default function ProfileScreen() {
             <Text style={styles.accountCardTitle}>CONNECTED ACCOUNTS</Text>
             <Text style={styles.accountCardDesc}>Google, Apple, GitHub sign-in</Text>
           </View>
+          <View style={styles.comingSoonPill}>
+            <Text style={styles.comingSoonPillText}>Soon</Text>
+          </View>
+        </View>
+
+        <Text style={[styles.sectionTitle, { color: Colors.destructive }]}>DANGER ZONE</Text>
+        <View style={styles.dangerCard}>
+          <View style={styles.dangerHeaderRow}>
+            <Ionicons name="trash-outline" size={20} color={Colors.destructive} />
+            <Text style={styles.dangerTitle}>Delete Account</Text>
+          </View>
+          <Text style={styles.dangerDesc}>
+            Permanently delete your LoadLink account and all associated data — jobs, assignments,
+            trucks, messages, invoices, and reviews. This cannot be undone.
+          </Text>
+          <Pressable style={styles.deleteBtn} onPress={openDeleteFlow} testID="delete-account-button">
+            <Ionicons name="trash-outline" size={18} color={Colors.destructive} />
+            <Text style={styles.deleteBtnText}>Delete My Account</Text>
+          </Pressable>
         </View>
       </>
     );
@@ -777,6 +822,83 @@ export default function ProfileScreen() {
                   onSubmitEditing={saveFieldEdit}
                 />
               </View>
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={deleteStep !== 0}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDeleteFlow}
+      >
+        <Pressable style={styles.editOverlay} onPress={closeDeleteFlow}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.editKeyboard}>
+            <Pressable style={styles.deleteSheet} onPress={() => {}}>
+              <View style={styles.deleteIconCircle}>
+                <Ionicons name="warning-outline" size={30} color={Colors.destructive} />
+              </View>
+
+              {deleteStep === 1 ? (
+                <>
+                  <Text style={styles.deleteSheetTitle}>Delete Your Account?</Text>
+                  <Text style={styles.deleteSheetBody}>
+                    This permanently deletes your account and everything tied to it:
+                  </Text>
+                  <View style={styles.deleteBulletWrap}>
+                    {['Your profile and login', 'Jobs, assignments & bids', 'Trucks and availability', 'Messages, invoices & reviews'].map((b) => (
+                      <View key={b} style={styles.deleteBulletRow}>
+                        <Ionicons name="close-circle" size={15} color={Colors.destructive} />
+                        <Text style={styles.deleteBulletText}>{b}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <Text style={styles.deleteSheetWarn}>This action cannot be undone.</Text>
+                  <Pressable style={styles.deleteContinueBtn} onPress={() => setDeleteStep(2)} testID="delete-continue-button">
+                    <Text style={styles.deleteContinueText}>Continue</Text>
+                  </Pressable>
+                  <Pressable style={styles.deleteCancelBtn} onPress={closeDeleteFlow}>
+                    <Text style={styles.deleteCancelText}>Cancel</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.deleteSheetTitle}>Confirm Deletion</Text>
+                  <Text style={styles.deleteSheetBody}>
+                    To confirm, type <Text style={styles.deleteWord}>DELETE</Text> below. This is your last chance to turn back.
+                  </Text>
+                  <TextInput
+                    style={styles.deleteInput}
+                    value={deleteConfirmText}
+                    onChangeText={setDeleteConfirmText}
+                    placeholder="DELETE"
+                    placeholderTextColor={Colors.textMuted}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    editable={!deleting}
+                    testID="delete-confirm-input"
+                  />
+                  <Pressable
+                    style={[styles.deleteConfirmBtn, (deleteConfirmText.trim().toUpperCase() !== 'DELETE' || deleting) && styles.deleteConfirmBtnDisabled]}
+                    onPress={handleConfirmDelete}
+                    disabled={deleteConfirmText.trim().toUpperCase() !== 'DELETE' || deleting}
+                    testID="delete-confirm-button"
+                  >
+                    {deleting ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="trash" size={18} color="#fff" />
+                        <Text style={styles.deleteConfirmText}>Permanently Delete</Text>
+                      </>
+                    )}
+                  </Pressable>
+                  <Pressable style={styles.deleteCancelBtn} onPress={closeDeleteFlow} disabled={deleting}>
+                    <Text style={[styles.deleteCancelText, deleting && { opacity: 0.5 }]}>Cancel</Text>
+                  </Pressable>
+                </>
+              )}
             </Pressable>
           </KeyboardAvoidingView>
         </Pressable>
@@ -1286,6 +1408,180 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 16,
     color: Colors.text,
+  },
+  comingSoonPill: {
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  comingSoonPillText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+  },
+  dangerCard: {
+    backgroundColor: Colors.card,
+    borderRadius: 14,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.35)',
+    marginBottom: 24,
+  },
+  dangerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  dangerTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.destructive,
+    letterSpacing: 0.5,
+  },
+  dangerDesc: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 19,
+    marginBottom: 16,
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.destructive,
+    backgroundColor: 'rgba(239,68,68,0.08)',
+  },
+  deleteBtnText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    color: Colors.destructive,
+  },
+  deleteSheet: {
+    backgroundColor: Colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: 40,
+    alignItems: 'center',
+  },
+  deleteIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(239,68,68,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  deleteSheetTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 20,
+    color: Colors.text,
+    letterSpacing: 0.5,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  deleteSheetBody: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  deleteBulletWrap: {
+    alignSelf: 'stretch',
+    gap: 8,
+    marginBottom: 14,
+  },
+  deleteBulletRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  deleteBulletText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  deleteSheetWarn: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 13,
+    color: Colors.destructive,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  deleteWord: {
+    fontFamily: 'Inter_700Bold',
+    color: Colors.destructive,
+  },
+  deleteInput: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontFamily: 'Inter_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    textAlign: 'center',
+    letterSpacing: 2,
+    marginBottom: 18,
+  },
+  deleteContinueBtn: {
+    alignSelf: 'stretch',
+    backgroundColor: Colors.destructive,
+    borderRadius: 12,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  deleteContinueText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    color: '#fff',
+  },
+  deleteConfirmBtn: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    backgroundColor: Colors.destructive,
+    borderRadius: 12,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  deleteConfirmBtnDisabled: {
+    opacity: 0.4,
+  },
+  deleteConfirmText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 15,
+    color: '#fff',
+  },
+  deleteCancelBtn: {
+    alignSelf: 'stretch',
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  deleteCancelText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.textMuted,
   },
   earningsStatsCard: {
     backgroundColor: Colors.card,

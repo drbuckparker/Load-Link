@@ -40,6 +40,7 @@ interface AuthContextValue {
   socialLogin: (provider: 'google' | 'apple', token: string, email?: string) => Promise<void>;
   register: (data: { email: string; password: string; fullName: string; phone: string; role: string }) => Promise<void>;
   logout: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   updateUser: (updates: Partial<User>) => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -246,6 +247,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.clear();
   }
 
+  async function deleteAccount() {
+    await apiRequest('DELETE', '/api/account');
+    await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']).catch(() => {});
+    setAuthToken(null);
+    setUser(null);
+    queryClient.clear();
+  }
+
   async function updateUser(updates: Partial<User>) {
     if (!user) return;
 
@@ -300,6 +309,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     socialLogin,
     register,
     logout,
+    deleteAccount,
     updateUser,
     refreshUser,
   }), [user, isLoading]);

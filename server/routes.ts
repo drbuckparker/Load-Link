@@ -391,6 +391,147 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json({ user: addDualKeys(auth.user) });
   });
 
+  // Permanently delete the authenticated user's account and ALL associated data.
+  // Required by Apple App Store Guideline 5.1.1(v). Runs as a single transaction
+  // against the shared DB — if any step fails, nothing is deleted.
+  app.delete("/api/account", requireAuth, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    const userId = auth.userId;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Reusable subqueries for the user's owned jobs / job runs
+      const ownedJobs = `SELECT id FROM jobs WHERE contractor_id = $1`;
+      const relevantRuns = `SELECT id FROM job_runs WHERE driver_id = $1 OR job_id IN (${ownedJobs})`;
+
+      // --- Deepest children first (job_run / job children) ---
+      await client.query(
+        `DELETE FROM weight_tickets WHERE driver_id = $1 OR job_id IN (${ownedJobs}) OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM driver_location_updates WHERE driver_id = $1 OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM still_working_checks WHERE driver_id = $1 OR job_id IN (${ownedJobs}) OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_photos WHERE driver_id = $1 OR job_id IN (${ownedJobs}) OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM scheduled_notifications WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_bids WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_stops WHERE added_by_user_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_messages WHERE sender_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM reviews WHERE reviewer_id = $1 OR reviewee_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM conversation_actions WHERE user_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_runs WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_assignments WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+
+      // --- Trucks / availability / invitations ---
+      await client.query(
+        `DELETE FROM truck_availability WHERE trucking_company_id = $1 OR truck_id IN (SELECT id FROM trucks WHERE trucking_company_id = $1)`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM driver_invitations WHERE contractor_id = $1 OR driver_id = $1 OR trucking_company_id = $1 OR assigned_truck_id IN (SELECT id FROM trucks WHERE trucking_company_id = $1)`,
+        [userId]
+      );
+      await client.query(`DELETE FROM trucks WHERE trucking_company_id = $1`, [userId]);
+      await client.query(`UPDATE trucks SET assigned_driver_id = NULL WHERE assigned_driver_id = $1`, [userId]);
+      await client.query(`DELETE FROM driver_vehicles WHERE driver_id = $1`, [userId]);
+      await client.query(`UPDATE driver_vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = $1`, [userId]);
+
+      // --- Jobs: delete owned; dissociate where the user was the assigned driver ---
+      await client.query(`DELETE FROM jobs WHERE contractor_id = $1`, [userId]);
+      await client.query(`UPDATE jobs SET driver_id = NULL WHERE driver_id = $1`, [userId]);
+
+      // --- Documents / contractor data / favorites / availability ---
+      await client.query(
+        `DELETE FROM document_shares WHERE contractor_id = $1 OR document_id IN (SELECT id FROM driver_documents WHERE driver_id = $1)`,
+        [userId]
+      );
+      await client.query(`DELETE FROM driver_documents WHERE driver_id = $1`, [userId]);
+      await client.query(`DELETE FROM contractor_materials WHERE contractor_id = $1`, [userId]);
+      await client.query(`DELETE FROM contractor_projects WHERE contractor_id = $1`, [userId]);
+      await client.query(`DELETE FROM contractor_favorites WHERE contractor_id = $1`, [userId]);
+      await client.query(`DELETE FROM driver_availability WHERE driver_id = $1`, [userId]);
+      await client.query(`DELETE FROM driver_favorites WHERE driver_id = $1 OR favoriter_id = $1`, [userId]);
+      await client.query(`DELETE FROM company_favorites WHERE driver_id = $1 OR company_id = $1`, [userId]);
+      await client.query(`DELETE FROM foreman_requests WHERE foreman_id = $1 OR target_company_id = $1`, [userId]);
+
+      // --- Per-user system rows ---
+      await client.query(`DELETE FROM notifications WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM push_subscriptions WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM password_reset_tokens WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM sync_metadata WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM sync_queue WHERE user_id = $1`, [userId]);
+
+      // --- Dissociate other users who point to this account as their trucking company ---
+      await client.query(`UPDATE users SET trucking_company_id = NULL WHERE trucking_company_id = $1`, [userId]);
+
+      // --- Finally, the account itself ---
+      const del = await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      if (del.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Account not found" });
+      }
+
+      await client.query("COMMIT");
+
+      // Invalidate ALL local sessions for this user (in case of multiple devices)
+      let sessionsChanged = false;
+      for (const [token, session] of tokenToJwt.entries()) {
+        if (session.userId === userId) {
+          tokenToJwt.delete(token);
+          sessionsChanged = true;
+        }
+      }
+      if (sessionsChanged) saveJsonMap("sessions.json", tokenToJwt);
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      try { await client.query("ROLLBACK"); } catch {}
+      console.error("Account deletion error:", err.message);
+      return res.status(500).json({ message: "Failed to delete account. Please try again." });
+    } finally {
+      client.release();
+    }
+  });
+
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
     try {
       const websiteRes = await websiteFetch("/api/auth/forgot-password", {
