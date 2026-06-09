@@ -14,7 +14,20 @@ const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 
-const APPLE_BUNDLE_ID = process.env.APPLE_BUNDLE_ID || "com.loadlink.app";
+// The native Sign in with Apple flow (expo-apple-authentication) issues identity
+// tokens whose `aud` claim is the app's bundle id. We always allow the known
+// production bundle id so a stale/misconfigured APPLE_BUNDLE_ID env can never
+// break sign-in, and additionally honor any comma-separated values from the env.
+const APPLE_ALLOWED_AUD = Array.from(
+  new Set(
+    [
+      "com.loadlink.app",
+      ...(process.env.APPLE_BUNDLE_ID || "").split(","),
+    ]
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )
+);
 const appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
 
 async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>) {
@@ -259,10 +272,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (provider === "apple") {
         try {
+          // Verify signature + issuer + expiry against Apple's public keys.
+          // We validate `aud` manually (below) so we can log the real value if
+          // it ever mismatches, instead of failing opaquely inside jose.
           const { payload } = await jwtVerify(token, appleJwks, {
             issuer: "https://appleid.apple.com",
-            audience: APPLE_BUNDLE_ID,
           });
+          const audClaim = payload.aud;
+          const audList = typeof audClaim === "string"
+            ? [audClaim]
+            : Array.isArray(audClaim) ? audClaim : [];
+          if (!audList.some((a) => APPLE_ALLOWED_AUD.includes(a))) {
+            console.error(
+              `Apple sign-in: token aud [${audList.join(", ")}] not in allowlist [${APPLE_ALLOWED_AUD.join(", ")}]`
+            );
+            return res.status(401).json({ message: "Could not verify your identity. Please try again." });
+          }
           const sub = typeof payload.sub === "string" ? payload.sub : null;
           if (payload.email) {
             // First authorization (or any token that still carries email):

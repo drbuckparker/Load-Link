@@ -1,0 +1,60 @@
+Hello,
+
+Thank you for your resubmission. Upon further review, we identified additional issues that need your attention. See below for more information.
+
+If you have any questions, we are here to help. Reply to this message in App Store Connect and let us know.
+
+Review Environment
+Submission ID: a743a4bc-9600-433d-a5f4-b79fc675aa74
+Review date: June 09, 2026
+Review Device: iPad Air 11-inch (M3)
+Version reviewed: 1.0 (4)
+
+Guideline 4 - Design
+
+Issue Description
+
+Parts of the app's user interface were crowded, laid out, or displayed in a way that made it difficult to use the app when reviewed on iPad Air 11-inch (M3) running iPadOS 26.5.
+
+Specifically, the top menu bar was not fully visible. 
+
+Next Steps
+
+To resolve this issue, revise the app to ensure that the content and controls on the screen are easy to read and interact with.
+
+Note that users expect apps they download to function on all the devices where they are available. For example, apps that may be downloaded onto iPad devices should function as expected for iPad users. Learn more about supporting apps on compatible devices.
+
+Resources
+
+- Learn foundational design principles from Apple designers and the developer community.
+- See documentation for the UIKit framework.
+- Learn more about design requirements in guideline 4.
+Guideline 2.1(a) - Performance - App Completeness
+Issue Description
+
+The app exhibited one or more bugs that would negatively impact users.
+
+Bug description: An error message displayed when we tried to Sign in with Apple  
+
+Review device details:
+
+- Device type: iPhone 17 Pro Max 
+- OS version: iOS 26.5
+- Internet Connection: Active
+
+Next Steps
+
+Test the app on supported devices to identify and resolve bugs and stability issues before submitting for review.
+
+If the bug cannot be reproduced, try the following:
+
+- For new apps, uninstall all previous versions of the app from a device, then install and follow the steps to reproduce.
+- For app updates, install the new version as an update to the previous version, then follow the steps to reproduce.
+
+Note that users expect apps they download to function on all the devices where they are available. For example, apps that may be downloaded onto iPad devices should function as expected for iPad users. 
+
+Support
+- Reply to this message in your preferred language if you need assistance. If you need additional support, use the Contact Us module.
+- Consult with fellow developers and Apple engineers on the Apple Developer Forums.
+- Request an App Review Appointment at Meet with Apple to discuss your app's review. Appointments subject to availability during your local business hours on Tuesdays and Thursdays.
+- Provide feedback on this message and your review experience by completing a short survey.
