@@ -67,7 +67,7 @@ function saveJsonMap<T>(filename: string, map: Map<string, T>) {
   } catch {}
 }
 
-const tokenToJwt = loadJsonMap<{ jwt: string; userId: string; user: any }>("sessions.json");
+const tokenToJwt = loadJsonMap<{ jwt: string; userId: string; user: any; originalRole?: string }>("sessions.json");
 
 // Apple only includes the `email` claim in the identity token on the FIRST
 // authorization. On every subsequent Sign in with Apple, the verified token
@@ -2131,22 +2131,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     const { role } = req.body;
-    if (role) {
-      // Determine which roles this account is authorized to switch between.
-      // `originalRole` is set at login time from the website's user record and
-      // never mutated, so it reflects the account's actual entitlements even
-      // after prior view-switches. For sessions created before this field was
-      // added, fall back to the stored user role.
-      const baseRole = (auth as any).originalRole || auth.user.role;
-      const permitted = allowedRolesForUser(String(baseRole));
-      if (!permitted.includes(String(role))) {
-        return res.status(403).json({ message: "You are not authorized to switch to this role." });
-      }
-      auth.user.role = role;
-      try {
-        await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
-      } catch {}
+    if (!role) {
+      return res.status(400).json({ message: "Role is required" });
     }
+    // Determine which roles this account is authorized to switch between.
+    // `originalRole` is set at login time from the website's user record and
+    // never mutated, so it reflects the account's actual entitlements even
+    // after prior view-switches. For sessions created before this field was
+    // added, fall back to the stored user role.
+    const baseRole = (auth as any).originalRole || auth.user.role;
+    const permitted = allowedRolesForUser(String(baseRole));
+    if (!permitted.includes(String(role))) {
+      return res.status(403).json({ message: "You are not authorized to switch to this role." });
+    }
+    auth.user.role = role;
+    try {
+      await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
+    } catch {}
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) {
       tokenToJwt.set(localToken, auth);
