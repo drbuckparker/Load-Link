@@ -2308,6 +2308,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
     } catch (e: any) {
       console.error("Archive vehicle error:", e.message);
+      return res.status(500).json({ message: "Failed to archive vehicle" });
     }
     return res.json({ ok: true });
   });
@@ -3527,7 +3528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
       return res.json({ ok: true });
     } catch {
-      return res.json({ ok: true });
+      return res.status(500).json({ message: "Failed to restore project" });
     }
   });
 
