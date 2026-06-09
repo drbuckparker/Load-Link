@@ -919,39 +919,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
         `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.id = $1`,
         [req.params.id]
       );
       if (result.rows.length > 0) {
         const job = result.rows[0];
-        const assignResult = await pool.query(
-          `SELECT ja.*, t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
-                  t.truck_number as vehicle_truck_number, t.license_plate as vehicle_license_plate,
-                  t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp
-           FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id WHERE ja.job_id = $1`, [req.params.id]);
-        const runsResult = await pool.query(`SELECT * FROM job_runs WHERE job_id = $1 ORDER BY created_at DESC`, [req.params.id]);
-        const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
-        job.assignments = assignResult.rows.map(row => {
-          const a = addDualKeys(row);
-          if (row.vehicle_id) {
-            a.vehicle = {
-              id: row.vehicle_id,
-              make: row.vehicle_make, model: row.vehicle_model, year: row.vehicle_year,
-              truck_number: row.vehicle_truck_number, truckNumber: row.vehicle_truck_number,
-              license_plate: row.vehicle_license_plate, licensePlate: row.vehicle_license_plate,
-              truck_type: row.vehicle_truck_type, truckType: row.vehicle_truck_type,
-              capacity: row.vehicle_capacity, max_capacity_tons: row.vehicle_capacity,
-              has_tarp: row.vehicle_has_tarp, hasTarp: row.vehicle_has_tarp,
-            };
-          }
-          return a;
-        });
-        job.jobRuns = runsResult.rows.map(addDualKeys);
-        job.job_runs = job.jobRuns;
-        job.runs = job.jobRuns;
-        job.weightTickets = weightResult.rows.map(addDualKeys);
-        job.weight_tickets = job.weightTickets;
+        const isParticipant = (
+          String(job.contractor_id) === auth.userId ||
+          String(job.driver_id) === auth.userId
+        );
+        let hasAssignment = false;
+        if (!isParticipant) {
+          const aCheck = await pool.query(
+            `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+             AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+            [req.params.id, auth.userId]
+          );
+          hasAssignment = aCheck.rows.length > 0;
+        }
+        const canSeeDetails = isParticipant || hasAssignment;
+        if (canSeeDetails) {
+          const assignResult = await pool.query(
+            `SELECT ja.*, t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
+                    t.truck_number as vehicle_truck_number, t.license_plate as vehicle_license_plate,
+                    t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp
+             FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id WHERE ja.job_id = $1`, [req.params.id]);
+          const runsResult = await pool.query(`SELECT * FROM job_runs WHERE job_id = $1 ORDER BY created_at DESC`, [req.params.id]);
+          const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
+          job.assignments = assignResult.rows.map(row => {
+            const a = addDualKeys(row);
+            if (row.vehicle_id) {
+              a.vehicle = {
+                id: row.vehicle_id,
+                make: row.vehicle_make, model: row.vehicle_model, year: row.vehicle_year,
+                truck_number: row.vehicle_truck_number, truckNumber: row.vehicle_truck_number,
+                license_plate: row.vehicle_license_plate, licensePlate: row.vehicle_license_plate,
+                truck_type: row.vehicle_truck_type, truckType: row.vehicle_truck_type,
+                capacity: row.vehicle_capacity, max_capacity_tons: row.vehicle_capacity,
+                has_tarp: row.vehicle_has_tarp, hasTarp: row.vehicle_has_tarp,
+              };
+            }
+            return a;
+          });
+          job.jobRuns = runsResult.rows.map(addDualKeys);
+          job.job_runs = job.jobRuns;
+          job.runs = job.jobRuns;
+          job.weightTickets = weightResult.rows.map(addDualKeys);
+          job.weight_tickets = job.weightTickets;
+        } else {
+          job.assignments = [];
+          job.jobRuns = [];
+          job.job_runs = [];
+          job.runs = [];
+          job.weightTickets = [];
+          job.weight_tickets = [];
+        }
         return res.json(addDualKeys(job));
       }
       return res.status(404).json({ message: "Job not found" });
@@ -1011,6 +1035,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const prevDate = beforeRow.rows[0]?.scheduled_date ? String(beforeRow.rows[0].scheduled_date).slice(0, 10) : null;
       const jobMaterial = beforeRow.rows[0]?.material || '';
       const jobContractorId = beforeRow.rows[0]?.contractor_id;
+
+      if (!beforeRow.rows[0] || String(jobContractorId) !== auth.userId) {
+        return res.status(403).json({ message: "You do not have permission to update this job" });
+      }
 
       const updates: string[] = [];
       const values: any[] = [];
@@ -1352,6 +1380,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      const aRow = await pool.query(
+        `SELECT ja.driver_id, j.contractor_id FROM job_assignments ja
+         JOIN jobs j ON ja.job_id = j.id
+         WHERE ja.id = $1 AND ja.job_id = $2`,
+        [req.params.assignmentId, req.params.id]
+      );
+      if (aRow.rows.length === 0) return res.status(404).json({ message: "Assignment not found" });
+      const { driver_id, contractor_id } = aRow.rows[0];
+      if (String(contractor_id) !== auth.userId && String(driver_id) !== auth.userId) {
+        return res.status(403).json({ message: "You do not have permission to modify this assignment" });
+      }
       await pool.query(`UPDATE job_assignments SET status = 'withdrawn' WHERE id = $1`, [req.params.assignmentId]);
       const remaining = await pool.query(`SELECT COUNT(*) FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`, [req.params.id]);
       const remainingCount = parseInt(remaining.rows[0]?.count || '0');
@@ -1366,7 +1406,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/cleanup-duplicate-assignments", requireAuth, async (req: Request, res: Response) => {
     try {
-      await pool.query(`DELETE FROM job_assignments WHERE id NOT IN (SELECT MIN(id) FROM job_assignments GROUP BY job_id, driver_id)`);
+      const auth = getWebsiteAuth(req)!;
+      await pool.query(
+        `DELETE FROM job_assignments
+         WHERE driver_id = $1
+           AND id NOT IN (
+             SELECT MIN(id) FROM job_assignments
+             WHERE driver_id = $1
+             GROUP BY job_id, driver_id
+           )`,
+        [auth.userId]
+      );
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -1376,6 +1426,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/jobs/:id/assignments", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.id]);
+      if (jobRow.rows.length === 0) return res.status(404).json({ message: "Job not found" });
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isContractor = String(contractor_id) === auth.userId;
+      const isDriver = String(driver_id) === auth.userId;
+      if (!isContractor && !isDriver) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.id, auth.userId]
+        );
+        if (aCheck.rows.length === 0) {
+          return res.status(403).json({ message: "You do not have access to this job's assignments" });
+        }
+      }
+
       try {
         await syncJobAssignments(auth);
       } catch {}
@@ -1497,6 +1563,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/assignments/:assignmentId/vehicle", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      const aRow = await pool.query(
+        `SELECT ja.driver_id, j.contractor_id FROM job_assignments ja
+         JOIN jobs j ON ja.job_id = j.id
+         WHERE ja.id = $1`,
+        [req.params.assignmentId]
+      );
+      if (aRow.rows.length === 0) return res.status(404).json({ message: "Assignment not found" });
+      const { driver_id, contractor_id } = aRow.rows[0];
+      if (String(contractor_id) !== auth.userId && String(driver_id) !== auth.userId) {
+        return res.status(403).json({ message: "You do not have permission to modify this assignment" });
+      }
       const { vehicleId, vehicle_id } = req.body;
       const vid = vehicleId || vehicle_id;
       await pool.query(`UPDATE job_assignments SET vehicle_id = $1 WHERE id = $2`, [vid, req.params.assignmentId]);
@@ -1538,6 +1615,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           activeJobId: other.job_id,
           activeRunId: other.id,
         });
+      }
+
+      // Rule: caller must be assigned to the job (or be the direct driver)
+      const jobOwnership = await pool.query(
+        `SELECT driver_id, contractor_id FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      const jobOwner = jobOwnership.rows[0];
+      const isDirectDriver = jobOwner && String(jobOwner.driver_id) === auth.userId;
+      const isJobContractor = jobOwner && String(jobOwner.contractor_id) === auth.userId;
+      if (!isDirectDriver && !isJobContractor) {
+        const assignCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.id, auth.userId]
+        );
+        if (assignCheck.rows.length === 0) {
+          return res.status(403).json({ code: "NOT_ASSIGNED", message: "You are not assigned to this job" });
+        }
       }
 
       // Load job for time/geofence rules
@@ -1684,8 +1780,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const runRow = await pool.query(`SELECT job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
-      const jobIdForEnd = runRow.rows[0]?.job_id;
+      const runRow = await pool.query(`SELECT job_id, driver_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.status(404).json({ message: "Run not found" });
+      const { job_id: jobIdForEnd, driver_id: runDriverId } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [jobIdForEnd]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to clock out this run" });
+        }
+      }
       await pool.query(`UPDATE job_runs SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE id = $1`, [req.params.runId]);
       if (jobIdForEnd) {
         pushToWebsite(`/api/jobs/${jobIdForEnd}/end`, auth, { method: "POST", body: { ...(req.body || {}), runId: req.params.runId } }).catch(() => {});
@@ -1700,6 +1803,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      const runRow = await pool.query(`SELECT driver_id, job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.status(404).json({ message: "Run not found" });
+      const { driver_id: runDriverId, job_id: runJobId } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [runJobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to update this run" });
+        }
+      }
       const updates: string[] = [];
       const values: any[] = [];
       let idx = 1;
@@ -1724,6 +1837,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      const runRow = await pool.query(`SELECT driver_id, job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.json({ ok: true });
+      const { driver_id: runDriverId, job_id: runJobId } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [runJobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to delete this run" });
+        }
+      }
       await pool.query(`DELETE FROM job_runs WHERE id = $1`, [req.params.runId]);
       return res.json({ ok: true });
     } catch {
@@ -1735,8 +1858,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const id = crypto.randomUUID();
-      const runResult = await pool.query(`SELECT job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
-      const jobId = runResult.rows[0]?.job_id || null;
+      const runResult = await pool.query(`SELECT job_id, driver_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runResult.rows.length === 0) return res.status(404).json({ message: "Run not found" });
+      const { job_id: jobId, driver_id: runDriverId } = runResult.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [jobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to add tickets to this run" });
+        }
+      }
       await pool.query(
         `INSERT INTO weight_tickets (id, job_run_id, job_id, driver_id, weight_value, notes, image_data, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
@@ -1752,6 +1882,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/jobs/:jobId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length === 0) return res.json([]);
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isParticipant = String(contractor_id) === auth.userId || String(driver_id) === auth.userId;
+      if (!isParticipant) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.jobId, auth.userId]
+        );
+        if (aCheck.rows.length === 0) return res.status(403).json({ message: "You do not have access to these weight tickets" });
+      }
       const result = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1 ORDER BY created_at`, [req.params.jobId]);
       return res.json(result.rows.map(addDualKeys));
     } catch {
@@ -1761,6 +1904,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/job-runs/:runId/weight-tickets", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      const runRow = await pool.query(`SELECT driver_id, job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.json([]);
+      const { driver_id: runDriverId, job_id: runJobId } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [runJobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have access to these weight tickets" });
+        }
+      }
       const result = await pool.query(`SELECT * FROM weight_tickets WHERE job_run_id = $1 ORDER BY created_at`, [req.params.runId]);
       return res.json(result.rows.map(addDualKeys));
     } catch {
@@ -1806,6 +1959,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/conversations/:jobId/delete", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length > 0) {
+        const { contractor_id, driver_id } = jobRow.rows[0];
+        if (String(contractor_id) !== auth.userId && String(driver_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to delete this conversation" });
+        }
+      }
       await pool.query(`DELETE FROM job_messages WHERE job_id = $1`, [req.params.jobId]);
     } catch {}
     return res.json({ ok: true });
@@ -1829,6 +1990,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length === 0) return res.json([]);
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isParticipant = String(contractor_id) === auth.userId || String(driver_id) === auth.userId;
+      if (!isParticipant) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.jobId, auth.userId]
+        );
+        if (aCheck.rows.length === 0) {
+          return res.status(403).json({ message: "You do not have access to this conversation" });
+        }
+      }
       const result = await pool.query(
         `SELECT jm.*, u.full_name as sender_name FROM job_messages jm
          LEFT JOIN users u ON jm.sender_id = u.id
@@ -1844,6 +2020,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/messages/:jobId", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length === 0) return res.status(404).json({ message: "Job not found" });
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isParticipant = String(contractor_id) === auth.userId || String(driver_id) === auth.userId;
+      if (!isParticipant) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.jobId, auth.userId]
+        );
+        if (aCheck.rows.length === 0) {
+          return res.status(403).json({ message: "You are not a participant in this conversation" });
+        }
+      }
       const id = crypto.randomUUID();
       const body = req.body.body || req.body.message || req.body.content || '';
       await pool.query(
