@@ -1926,14 +1926,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
       const search = (req.query.q || req.query.search || '') as string;
-      let query = `SELECT id, full_name, email, phone, truck_type, rating, total_jobs, profile_image_url, is_connected FROM users WHERE (role LIKE '%driver%' OR also_driver = true)`;
-      const params: any[] = [];
+      // Only return contact details to users who already have an operational
+      // relationship (shared job) with the driver. For callers with no such
+      // relationship, omit email and phone to prevent cross-tenant harvesting.
+      let query = `
+        SELECT
+          u.id, u.full_name, u.truck_type, u.rating, u.total_jobs,
+          u.profile_image_url, u.is_connected,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM jobs j
+            WHERE (j.contractor_id = $1 OR j.driver_id = $1)
+              AND (j.contractor_id = u.id OR j.driver_id = u.id)
+          ) THEN u.email ELSE NULL END AS email,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM jobs j
+            WHERE (j.contractor_id = $1 OR j.driver_id = $1)
+              AND (j.contractor_id = u.id OR j.driver_id = u.id)
+          ) THEN u.phone ELSE NULL END AS phone
+        FROM users u
+        WHERE (u.role LIKE '%driver%' OR u.also_driver = true)
+          AND u.id != $1`;
+      const params: any[] = [auth.userId];
       if (search) {
-        query += ` AND (full_name ILIKE $1 OR email ILIKE $1)`;
+        query += ` AND (u.full_name ILIKE $2)`;
         params.push(`%${search}%`);
       }
-      query += ` ORDER BY rating DESC LIMIT 50`;
+      query += ` ORDER BY u.rating DESC LIMIT 50`;
       const result = await pool.query(query, params);
       return res.json(result.rows.map(addDualKeys));
     } catch {
@@ -1981,6 +2001,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      // Ownership check — caller must own this truck.
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
+
       const fieldMap: Record<string, string> = {
         truck_type: 'truck_type',
         truckType: 'truck_type',
@@ -2036,6 +2064,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/vehicles/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      // Ownership check — caller must own this truck.
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       deletedVehicleIds.add(req.params.id);
       await pool.query(`UPDATE trucks SET archived_at = NOW(), is_active = false WHERE id = $1`, [req.params.id]);
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
@@ -2085,6 +2120,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/vehicles/:id/unarchive", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      // Ownership check — caller must own this truck.
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       deletedVehicleIds.delete(req.params.id);
       await pool.query(`UPDATE trucks SET archived_at = NULL, is_active = true WHERE id = $1`, [req.params.id]);
       return res.json({ ok: true });
@@ -2096,6 +2138,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/vehicles/:vehicleId/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
+      // Ownership check — caller must own this truck.
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.vehicleId, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       const result = await pool.query(
         `SELECT j.* FROM jobs j JOIN job_assignments ja ON j.id = ja.job_id WHERE ja.vehicle_id = $1 ORDER BY j.scheduled_date DESC`,
         [req.params.vehicleId]
@@ -3010,6 +3059,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/invoices/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
         `SELECT mi.*,
           c.full_name AS contractor_name, c.company AS contractor_company,
@@ -3023,8 +3073,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         FROM monthly_invoices mi
         LEFT JOIN users c ON c.id = mi.contractor_id
         LEFT JOIN users d ON d.id = mi.driver_id
-        WHERE mi.id = $1`,
-        [req.params.id]
+        WHERE mi.id = $1 AND (mi.contractor_id = $2 OR mi.driver_id = $2)`,
+        [req.params.id, auth.userId]
       );
       if (result.rows.length > 0) {
         const invoice = result.rows[0];
@@ -3045,6 +3095,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const { status } = req.body;
+      const owned = await pool.query(
+        `SELECT id FROM monthly_invoices WHERE id = $1 AND (contractor_id = $2 OR driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Invoice not found" });
       await pool.query(`UPDATE monthly_invoices SET status = $1, updated_at = NOW() WHERE id = $2`, [status, req.params.id]);
       pushToWebsite(`/api/invoices/${req.params.id}/status`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM monthly_invoices WHERE id = $1`, [req.params.id]);
@@ -3139,6 +3194,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/projects/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+
+      // Ownership check — only the contractor who owns this project may update it.
+      const owned = await pool.query(
+        `SELECT id FROM contractor_projects WHERE id = $1 AND contractor_id::text = $2 AND deleted_at IS NULL`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Project not found" });
+
       const updates: string[] = [];
       const values: any[] = [];
       let paramIdx = 1;
@@ -3224,10 +3287,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/projects/:id/restore", requireAuth, async (req: Request, res: Response) => {
     try {
-      await pool.query(
-        `UPDATE contractor_projects SET status = 'active', deleted_at = NULL WHERE id = $1`,
-        [req.params.id]
+      const auth = getWebsiteAuth(req)!;
+      const upd = await pool.query(
+        `UPDATE contractor_projects SET status = 'active', deleted_at = NULL
+         WHERE id = $1 AND contractor_id::text = $2 RETURNING id`,
+        [req.params.id, auth.userId]
       );
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -3266,12 +3332,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/reviews", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const id = crypto.randomUUID();
       const b = req.body;
+      const jobId = b.jobId || b.job_id;
+      const revieweeId = b.revieweeId || b.reviewee_id;
+
+      // Validate the job exists, is completed, and the caller participated in it.
+      const jobRow = await pool.query(
+        `SELECT id, contractor_id, driver_id FROM jobs WHERE id = $1 AND status = 'completed'`,
+        [jobId]
+      );
+      if (jobRow.rows.length === 0) {
+        return res.status(400).json({ message: "Job not found or not completed" });
+      }
+      const job = jobRow.rows[0];
+      const callerIsContractor = job.contractor_id === auth.userId;
+      const callerIsDriver = job.driver_id === auth.userId;
+      if (!callerIsContractor && !callerIsDriver) {
+        return res.status(403).json({ message: "You did not participate in this job" });
+      }
+      // The reviewee must be the legitimate counterparty.
+      const expectedReviewee = callerIsContractor ? job.driver_id : job.contractor_id;
+      if (revieweeId !== expectedReviewee) {
+        return res.status(400).json({ message: "Invalid reviewee for this job" });
+      }
+      // Prevent duplicate reviews.
+      const existing = await pool.query(
+        `SELECT id FROM reviews WHERE job_id = $1 AND reviewer_id = $2`,
+        [jobId, auth.userId]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ message: "You have already reviewed this job" });
+      }
+
+      const id = crypto.randomUUID();
+      // Use the server-derived role, not whatever the client sent.
+      const reviewerRole = callerIsContractor ? 'contractor' : 'driver';
       await pool.query(
         `INSERT INTO reviews (id, job_id, reviewer_id, reviewee_id, rating, comment, reviewer_role, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-        [id, b.jobId || b.job_id, auth.userId, b.revieweeId || b.reviewee_id, b.rating, b.comment, b.reviewerRole || b.reviewer_role || auth.user?.role]
+        [id, jobId, auth.userId, revieweeId, b.rating, b.comment, reviewerRole]
       );
       return res.status(201).json({ ok: true, id });
     } catch (e: any) {
