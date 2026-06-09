@@ -1035,6 +1035,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
 
       const beforeRow = await pool.query(`SELECT scheduled_date, material, contractor_id FROM jobs WHERE id = $1`, [req.params.id]);
+      if (!beforeRow.rows[0]) return res.status(404).json({ message: "Job not found" });
+      if (String(beforeRow.rows[0].contractor_id) !== String(auth.userId)) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
       const prevDate = beforeRow.rows[0]?.scheduled_date ? String(beforeRow.rows[0].scheduled_date).slice(0, 10) : null;
       const jobMaterial = beforeRow.rows[0]?.material || '';
       const jobContractorId = beforeRow.rows[0]?.contractor_id;
