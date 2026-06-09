@@ -38,6 +38,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   socialLogin: (provider: 'google' | 'apple', token: string, email?: string) => Promise<void>;
+  completeAppleLink: (identityToken: string, email: string) => Promise<void>;
   register: (data: { email: string; password: string; fullName: string; phone: string; role: string }) => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -219,6 +220,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     registerForPushNotifications().catch(() => {});
   }
 
+  // Finishes Sign in with Apple for an Apple ID that authorized the app before
+  // we captured its email (Apple only sends the email on first authorization).
+  // The verified Apple token + the user-supplied email are sent to the server,
+  // which binds them so future Apple sign-ins resolve automatically.
+  async function completeAppleLink(identityToken: string, email: string) {
+    const res = await apiRequest('POST', '/api/auth/apple/link', { identityToken, email });
+    const data = await res.json();
+
+    if (data.token) {
+      setAuthToken(data.token);
+      await AsyncStorage.setItem('loadlink_token', data.token);
+    }
+
+    if (data.user?.email) {
+      await AsyncStorage.setItem('loadlink_email', data.user.email);
+    }
+
+    const mapped = mapDbUser(data.user);
+    await safeStore(mapped);
+    setUser(mapped);
+    registerForPushNotifications().catch(() => {});
+  }
+
   async function register(data: { email: string; password: string; fullName: string; phone: string; role: string }) {
     const res = await apiRequest('POST', '/api/auth/register', data);
     const responseData = await res.json();
@@ -307,6 +331,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: !!user,
     login,
     socialLogin,
+    completeAppleLink,
     register,
     logout,
     deleteAccount,
