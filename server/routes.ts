@@ -140,13 +140,24 @@ async function verifyAppleToken(
   }
 }
 
-// Resolve an email to a LoadLink account via the website's companion login
-// (email-only, gated by the server-held API key — the same trust model as
-// /api/auth/login) and create a local bearer-token session for it.
+// Returns the set of roles this user is authorized to switch between based on
+// their account's base role (e.g. a driver_contractor may switch between
+// 'driver' and 'contractor' views; a plain 'driver' may not switch at all).
+function allowedRolesForUser(baseRole: string): string[] {
+  if (!baseRole) return [];
+  const compound: Record<string, string[]> = {
+    driver_contractor: ["driver", "contractor"],
+    driver_trucking_company: ["driver", "trucking_company"],
+    trucking_company_contractor: ["trucking_company", "contractor"],
+    driver_trucking_company_contractor: ["driver", "trucking_company", "contractor"],
+  };
+  return compound[baseRole] ?? [baseRole];
+}
+
 async function createCompanionSession(
   email: string
 ): Promise<
-  | { ok: true; token: string; user: any; authEntry: { jwt: string; userId: string; user: any } }
+  | { ok: true; token: string; user: any; authEntry: { jwt: string; userId: string; user: any; originalRole: string } }
   | { ok: false; status: number; message: string }
 > {
   const websiteRes = await websiteFetch("/api/companion/auth/login", {
@@ -174,7 +185,7 @@ async function createCompanionSession(
     return { ok: false, status: 500, message: "Invalid response from auth service" };
   }
   const localToken = crypto.randomBytes(32).toString("hex");
-  const authEntry = { jwt, userId: user.id, user };
+  const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
   tokenToJwt.set(localToken, authEntry);
   saveJsonMap("sessions.json", tokenToJwt);
   return { ok: true, token: localToken, user, authEntry };
@@ -398,9 +409,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/apple/link", async (req: Request, res: Response) => {
     try {
-      const { identityToken, email } = req.body || {};
-      if (!identityToken || !email) {
-        return res.status(400).json({ message: "Apple identity token and email are required" });
+      const { identityToken } = req.body || {};
+      if (!identityToken) {
+        return res.status(400).json({ message: "Apple identity token is required" });
       }
       // Re-verify the Apple identity token so we know this request comes from a
       // genuine Sign in with Apple flow before binding it to an account.
@@ -408,12 +419,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!verified || !verified.sub) {
         return res.status(401).json({ message: "Could not verify your Apple identity. Please try again." });
       }
-      const linkEmail = String(email).trim();
+      // The email for linking MUST come from the cryptographically-verified
+      // Apple token itself — never from the request body. Apple only includes
+      // the email claim on the very first authorization, which is exactly when
+      // a new link is needed. If the token carries no email, the link cannot
+      // be completed securely; the user must revoke and re-authorize the app
+      // in their Apple ID settings to get a fresh first-auth token with email.
+      const tokenEmail = verified.email;
+      if (!tokenEmail) {
+        return res.status(400).json({
+          message: "Your Apple sign-in token does not include an email address. Please revoke this app in your Apple ID settings and sign in again to complete linking.",
+        });
+      }
+      const linkEmail = tokenEmail.trim().toLowerCase();
       // First-bind-wins: once an Apple `sub` is linked to an account it cannot be
-      // remapped to a different email here. This prevents an attacker who owns a
-      // valid Apple identity from re-pointing their `sub` at a victim's email.
+      // remapped to a different email here.
       const existingBinding = await lookupAppleEmail(verified.sub);
-      if (existingBinding && existingBinding.toLowerCase() !== linkEmail.toLowerCase()) {
+      if (existingBinding && existingBinding.toLowerCase() !== linkEmail) {
         console.error("Apple link: sub already bound to a different account; refusing to remap");
         return res.status(409).json({ message: "This Apple ID is already linked to a different LoadLink account." });
       }
@@ -441,36 +463,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!email) {
         return res.status(400).json({ message: "Email is required" });
       }
-
-      for (const [existingToken, session] of tokenToJwt.entries()) {
-        if (session.user?.email?.toLowerCase() === email.toLowerCase()) {
-          const localToken = crypto.randomBytes(32).toString("hex");
-          tokenToJwt.set(localToken, session);
-          saveJsonMap("sessions.json", tokenToJwt);
-          recordUserActivity(session.userId);
-          res.json({ token: localToken, user: addDualKeys(session.user) });
-
-          websiteFetch("/api/companion/auth/login", {
-            method: "POST",
-            body: { email },
-          }).then(async (r) => {
-            if (r.ok) {
-              const d = await r.json();
-              if (d.token && d.user) {
-                const updated = { jwt: d.token, userId: d.user.id, user: d.user };
-                tokenToJwt.set(localToken, updated);
-                saveJsonMap("sessions.json", tokenToJwt);
-                fullSync(updated).catch(() => {});
-              }
-            }
-          }).catch(() => {});
-          return;
-        }
+      if (!password) {
+        return res.status(400).json({ message: "Password is required" });
       }
 
+      // Always validate credentials against the upstream website. We forward
+      // the password so the website can verify it. The cached-session fast-path
+      // that existed previously is removed because it allowed anyone who knew
+      // a valid email to receive a bearer token without a password check.
       const websiteRes = await websiteFetch("/api/companion/auth/login", {
         method: "POST",
-        body: { email },
+        body: { email, password },
       });
 
       const data = await websiteRes.json();
@@ -489,7 +492,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const localToken = crypto.randomBytes(32).toString("hex");
-      const authEntry = { jwt, userId: user.id, user };
+      const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
       tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
 
@@ -2058,12 +2061,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put("/api/profile", requireAuth, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    Object.assign(auth.user, req.body);
+
+    // Allowlist of fields a user may update on their own profile. Security-
+    // sensitive columns (role, is_admin, is_suspended, suspended_*, email,
+    // password hash, id) are intentionally excluded.
+    const PROFILE_ALLOWLIST = new Set([
+      "fullName", "full_name",
+      "phone",
+      "profileImageUrl", "profile_image_url",
+      "bio",
+      "primaryLocation", "primary_location",
+      "secondaryLocation", "secondary_location",
+      "truckType", "truck_type",
+      "truckCapacity", "truck_capacity",
+      "cdlClass", "cdl_class",
+      "insuranceInfo", "insurance_info",
+      "companyName", "company_name",
+      "website",
+      "notificationPreferences", "notification_preferences",
+      "expoPushToken", "expo_push_token",
+    ]);
+
+    const safeBody: Record<string, any> = {};
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (PROFILE_ALLOWLIST.has(k)) {
+        safeBody[k] = v;
+      }
+    }
+
+    Object.assign(auth.user, safeBody);
     try {
       const updates: string[] = [];
       const values: any[] = [];
       let idx = 1;
-      for (const [k, v] of Object.entries(req.body)) {
+      for (const [k, v] of Object.entries(safeBody)) {
         if (v !== undefined) {
           updates.push(`${camelToSnake(k)} = $${idx}`);
           values.push(v);
@@ -2101,6 +2132,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     const { role } = req.body;
     if (role) {
+      // Determine which roles this account is authorized to switch between.
+      // `originalRole` is set at login time from the website's user record and
+      // never mutated, so it reflects the account's actual entitlements even
+      // after prior view-switches. For sessions created before this field was
+      // added, fall back to the stored user role.
+      const baseRole = (auth as any).originalRole || auth.user.role;
+      const permitted = allowedRolesForUser(String(baseRole));
+      if (!permitted.includes(String(role))) {
+        return res.status(403).json({ message: "You are not authorized to switch to this role." });
+      }
       auth.user.role = role;
       try {
         await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
