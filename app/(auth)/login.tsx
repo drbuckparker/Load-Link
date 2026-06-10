@@ -22,7 +22,7 @@ const isExpoGo = Constants.appOwnership === 'expo' || __DEV__;
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { login, socialLogin, completeAppleLink } = useAuth();
+  const { login, socialLogin } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -32,8 +32,6 @@ export default function LoginScreen() {
   const [needsPassword, setNeedsPassword] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [appleLinkMode, setAppleLinkMode] = useState(false);
-  const [appleLinkToken, setAppleLinkToken] = useState<string | null>(null);
 
   async function handleSocialAuth(provider: 'google' | 'apple', token: string, authEmail?: string) {
     setError('');
@@ -46,9 +44,10 @@ export default function LoginScreen() {
       }
       router.replace('/(tabs)');
     } catch (e: any) {
-      // Apple ID authorized before we captured its email — let the caller show
-      // the email-link prompt instead of surfacing a generic error.
-      if (e?.code === 'apple_link_required' || e?.message === 'apple_link_required') {
+      // First-time Apple sign-in (no account yet) or a previously-authorized
+      // Apple ID with no email — let the Apple handler decide what to do next.
+      const code = e?.code || e?.message;
+      if (code === 'apple_signup_required' || code === 'apple_reauthorize_required') {
         throw e;
       }
       setError(e.message || `${provider === 'google' ? 'Google' : 'Apple'} sign in failed`);
@@ -128,13 +127,27 @@ export default function LoginScreen() {
       if (credential.identityToken) {
         try {
           await handleSocialAuth('apple', credential.identityToken, credential.email || undefined);
-        } catch (linkErr: any) {
-          if (linkErr?.code === 'apple_link_required' || linkErr?.message === 'apple_link_required') {
-            // Apple verified the identity but couldn't resolve an email for this
-            // Apple ID. Ask for the LoadLink email to finish linking.
-            setAppleLinkToken(credential.identityToken);
-            setAppleLinkMode(true);
-            setError('');
+        } catch (appleErr: any) {
+          const code = appleErr?.code || appleErr?.message;
+          if (code === 'apple_signup_required') {
+            // First-time Apple user with no LoadLink account yet. Carry the
+            // verified token to the onboarding screen to collect role + phone
+            // and create a real account.
+            const name = credential.fullName
+              ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ').trim()
+              : '';
+            router.push({
+              pathname: '/(auth)/apple-complete',
+              params: {
+                token: credential.identityToken,
+                name,
+                email: credential.email || '',
+              },
+            });
+          } else if (code === 'apple_reauthorize_required') {
+            // Apple already authorized this app previously and no longer shares
+            // the email, and we have no stored mapping. The user must un-link.
+            setError('Apple isn\u2019t sharing your email anymore. Go to Settings → tap your name → Sign in with Apple → LoadLink → "Stop Using Apple ID", then sign in again.');
           }
         }
       } else {
@@ -147,40 +160,6 @@ export default function LoginScreen() {
       }
       setSocialLoading(null);
     }
-  }
-
-  async function handleCompleteAppleLink() {
-    if (!email.trim()) {
-      setError('Please enter your LoadLink account email');
-      return;
-    }
-    if (!appleLinkToken) {
-      setError('Apple sign in expired. Please tap Continue with Apple again.');
-      setAppleLinkMode(false);
-      return;
-    }
-    setError('');
-    setSocialLoading('apple');
-    try {
-      await completeAppleLink(appleLinkToken, email.trim());
-      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setAppleLinkMode(false);
-      setAppleLinkToken(null);
-      while (router.canGoBack()) {
-        router.back();
-      }
-      router.replace('/(tabs)');
-    } catch (e: any) {
-      setError(e.message || 'Could not finish signing in with Apple');
-    } finally {
-      setSocialLoading(null);
-    }
-  }
-
-  function exitAppleLinkMode() {
-    setAppleLinkMode(false);
-    setAppleLinkToken(null);
-    setError('');
   }
 
   async function handleLogin() {
@@ -278,11 +257,9 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.formCard}>
-          <Text style={styles.formTitle}>{appleLinkMode ? 'FINISH APPLE SIGN-IN' : needsPassword ? 'SET MOBILE PASSWORD' : 'WELCOME BACK'}</Text>
+          <Text style={styles.formTitle}>{needsPassword ? 'SET MOBILE PASSWORD' : 'WELCOME BACK'}</Text>
           <Text style={styles.formSubtitle}>
-            {appleLinkMode
-              ? 'Enter the email for your LoadLink account to finish signing in with Apple.'
-              : needsPassword
+            {needsPassword
               ? 'Your web account uses a different login. Create a password for mobile access.'
               : 'Sign in to continue to LoadLink'}
           </Text>
@@ -319,7 +296,6 @@ export default function LoginScreen() {
             </View>
           </View>
 
-          {!appleLinkMode && (
           <View style={styles.inputGroup}>
             <View style={styles.labelRow}>
               <Text style={styles.inputLabel}>{needsPassword ? 'New Password' : 'Password'}</Text>
@@ -346,7 +322,6 @@ export default function LoginScreen() {
               </Pressable>
             </View>
           </View>
-          )}
 
           {needsPassword && (
             <View style={styles.inputGroup}>
@@ -367,15 +342,15 @@ export default function LoginScreen() {
 
           <Pressable
             style={({ pressed }) => [styles.loginBtn, pressed && styles.loginBtnPressed, isAnyLoading && styles.loginBtnDisabled]}
-            onPress={appleLinkMode ? handleCompleteAppleLink : needsPassword ? handleSetPassword : handleLogin}
+            onPress={needsPassword ? handleSetPassword : handleLogin}
             disabled={isAnyLoading}
             testID="sign-in-btn"
           >
-            {loading || (appleLinkMode && socialLoading === 'apple') ? (
+            {loading ? (
               <ActivityIndicator size="small" color={Colors.primaryForeground} />
             ) : (
               <>
-                <Text style={styles.loginBtnText}>{appleLinkMode ? 'FINISH SIGN-IN' : needsPassword ? 'CREATE PASSWORD' : 'SIGN IN'}</Text>
+                <Text style={styles.loginBtnText}>{needsPassword ? 'CREATE PASSWORD' : 'SIGN IN'}</Text>
                 <Ionicons name="arrow-forward" size={18} color={Colors.primaryForeground} />
               </>
             )}
@@ -387,13 +362,7 @@ export default function LoginScreen() {
             </Pressable>
           )}
 
-          {appleLinkMode && (
-            <Pressable onPress={exitAppleLinkMode} style={styles.backBtn}>
-              <Text style={styles.backBtnText}>Back to Sign In</Text>
-            </Pressable>
-          )}
-
-          {!needsPassword && !appleLinkMode && (
+          {!needsPassword && (
             <View style={styles.socialSection}>
               <View style={styles.dividerRow}>
                 <View style={styles.dividerLine} />

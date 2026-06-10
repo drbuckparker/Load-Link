@@ -38,7 +38,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   socialLogin: (provider: 'google' | 'apple', token: string, email?: string) => Promise<void>;
-  completeAppleLink: (identityToken: string, email: string) => Promise<void>;
+  appleRegister: (identityToken: string, data: { fullName: string; phone: string; role: string }) => Promise<void>;
   register: (data: { email: string; password: string; fullName: string; phone: string; role: string }) => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -220,24 +220,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     registerForPushNotifications().catch(() => {});
   }
 
-  // Finishes Sign in with Apple for an Apple ID that authorized the app before
-  // we captured its email (Apple only sends the email on first authorization).
-  // The verified Apple token + the user-supplied email are sent to the server,
-  // which binds them so future Apple sign-ins resolve automatically.
-  async function completeAppleLink(identityToken: string, email: string) {
-    const res = await apiRequest('POST', '/api/auth/apple/link', { identityToken, email });
-    const data = await res.json();
+  // Completes first-time Sign in with Apple by creating a real LoadLink account.
+  // Apple gives us the verified email (inside the identity token) but never a
+  // phone or role, so the client collects those and posts them here. The server
+  // re-verifies the token, creates the account, and binds the Apple ID so future
+  // sign-ins resolve automatically.
+  async function appleRegister(identityToken: string, data: { fullName: string; phone: string; role: string }) {
+    const res = await apiRequest('POST', '/api/auth/apple/register', { identityToken, ...data });
+    const responseData = await res.json();
 
-    if (data.token) {
-      setAuthToken(data.token);
-      await AsyncStorage.setItem('loadlink_token', data.token);
+    if (responseData.token) {
+      setAuthToken(responseData.token);
+      await AsyncStorage.setItem('loadlink_token', responseData.token);
     }
 
-    if (data.user?.email) {
-      await AsyncStorage.setItem('loadlink_email', data.user.email);
+    if (responseData.user?.email) {
+      await AsyncStorage.setItem('loadlink_email', responseData.user.email);
     }
 
-    const mapped = mapDbUser(data.user);
+    const mapped = mapDbUser(responseData.user);
     await safeStore(mapped);
     setUser(mapped);
     registerForPushNotifications().catch(() => {});
@@ -331,7 +332,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: !!user,
     login,
     socialLogin,
-    completeAppleLink,
+    appleRegister,
     register,
     logout,
     deleteAccount,

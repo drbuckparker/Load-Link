@@ -355,38 +355,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (provider === "apple") {
         const verified = await verifyAppleToken(token);
-        if (!verified) {
+        if (!verified || !verified.sub) {
           return res.status(401).json({ message: "Could not verify your identity. Please try again." });
         }
         const { sub, email } = verified;
-        if (email) {
-          // First authorization (or any token that still carries email):
-          // trust the cryptographically-verified email and remember it.
-          verifiedEmail = email;
-          if (sub) {
-            await rememberAppleEmail(sub, email).catch((e) =>
-              console.error("Failed to persist Apple sub->email:", e.message)
-            );
-          }
-        } else if (sub) {
-          // Repeat sign-in: Apple omitted the email, resolve it from the
-          // stable, verified `sub` we stored on the first authorization.
-          verifiedEmail = await lookupAppleEmail(sub);
-          if (!verifiedEmail) {
-            // This Apple ID authorized the app before we captured its email
-            // (Apple only sends the email on the first authorization). Ask the
-            // client to supply their LoadLink email to finish linking; the
-            // /api/auth/apple/link route then binds it to this verified `sub`
-            // so it never has to prompt again.
-            console.error(
-              "Apple sign-in: verified token has no email and no stored sub mapping; requesting email link"
-            );
-            return res.status(409).json({ message: "apple_link_required" });
-          }
-        } else {
-          console.error("Apple sign-in: verified token has neither email nor sub");
-          return res.status(401).json({ message: "Could not verify your identity. Please try again." });
+        // Resolve the LoadLink email. Apple only sends the email claim on the
+        // very first authorization, so on repeat sign-ins fall back to the
+        // sub->email mapping we stored the first time.
+        const resolvedEmail = email ?? (await lookupAppleEmail(sub));
+        if (!resolvedEmail) {
+          // Previously-authorized Apple ID whose email we never captured and for
+          // which we have no stored mapping. We cannot resolve or create an
+          // account without it — the user must re-authorize the app in their
+          // Apple ID settings to get a fresh first-auth token carrying email.
+          console.error("Apple sign-in: no token email and no stored sub mapping");
+          return res.status(409).json({ message: "apple_reauthorize_required" });
         }
+        const session = await createCompanionSession(resolvedEmail);
+        if (!session.ok) {
+          // First-auth email is verified but no LoadLink account exists yet.
+          // Tell the client to collect the remaining profile fields (role,
+          // phone, name) and create the account via /api/auth/apple/register.
+          if (session.status === 404 && email) {
+            return res.status(409).json({ message: "apple_signup_required" });
+          }
+          return res.status(session.status).json({ message: session.message });
+        }
+        // Remember the verified sub->email so future sign-ins resolve silently.
+        await rememberAppleEmail(sub, resolvedEmail).catch((e) =>
+          console.error("Failed to persist Apple sub->email:", e.message)
+        );
+        res.json({ token: session.token, user: addDualKeys(session.user) });
+        fullSync(session.authEntry).catch(() => {});
+        return;
       }
 
       if (!verifiedEmail) {
@@ -407,53 +408,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/apple/link", async (req: Request, res: Response) => {
+  // Completes first-time Sign in with Apple by creating a real LoadLink account.
+  // Apple only gives us the email + name on first authorization and never gives
+  // a phone or role, so the client collects role + phone (and confirms the name)
+  // and posts them here together with the identity token. The email is always
+  // taken from the cryptographically-verified token — never from the request
+  // body — which keeps an attacker from provisioning an account for someone
+  // else's email.
+  app.post("/api/auth/apple/register", async (req: Request, res: Response) => {
     try {
-      const { identityToken } = req.body || {};
+      const { identityToken, role, phone, fullName } = req.body || {};
       if (!identityToken) {
         return res.status(400).json({ message: "Apple identity token is required" });
       }
-      // Re-verify the Apple identity token so we know this request comes from a
-      // genuine Sign in with Apple flow before binding it to an account.
       const verified = await verifyAppleToken(identityToken);
       if (!verified || !verified.sub) {
         return res.status(401).json({ message: "Could not verify your Apple identity. Please try again." });
       }
-      // The email for linking MUST come from the cryptographically-verified
-      // Apple token itself — never from the request body. Apple only includes
-      // the email claim on the very first authorization, which is exactly when
-      // a new link is needed. If the token carries no email, the link cannot
-      // be completed securely; the user must revoke and re-authorize the app
-      // in their Apple ID settings to get a fresh first-auth token with email.
-      const tokenEmail = verified.email;
-      if (!tokenEmail) {
-        return res.status(400).json({
-          message: "Your Apple sign-in token does not include an email address. Please revoke this app in your Apple ID settings and sign in again to complete linking.",
-        });
+      const email = verified.email;
+      if (!email) {
+        // Apple omits the email on repeat authorizations; without it we cannot
+        // create the account securely. Ask the user to re-authorize the app.
+        return res.status(409).json({ message: "apple_reauthorize_required" });
       }
-      const linkEmail = tokenEmail.trim().toLowerCase();
-      // First-bind-wins: once an Apple `sub` is linked to an account it cannot be
-      // remapped to a different email here.
-      const existingBinding = await lookupAppleEmail(verified.sub);
-      if (existingBinding && existingBinding.toLowerCase() !== linkEmail) {
-        console.error("Apple link: sub already bound to a different account; refusing to remap");
-        return res.status(409).json({ message: "This Apple ID is already linked to a different LoadLink account." });
+      if (!role || !phone || !fullName) {
+        return res.status(400).json({ message: "Please provide your name, phone, and role." });
       }
-      const session = await createCompanionSession(linkEmail);
+      const ALLOWED_SIGNUP_ROLES = ["owner_operator", "trucking_company", "contractor"];
+      if (!ALLOWED_SIGNUP_ROLES.includes(role)) {
+        return res.status(400).json({ message: "Invalid role selection." });
+      }
+      const normEmail = String(email).trim().toLowerCase();
+      // If an account already exists for this verified email, just sign in to it
+      // (and bind the Apple sub below). Otherwise create it on the website.
+      let session = await createCompanionSession(normEmail);
       if (!session.ok) {
-        return res.status(session.status).json({ message: session.message });
+        if (session.status === 404) {
+          // Apple users don't choose a password (they sign in with Apple), so
+          // generate a strong random one to satisfy the website's register API.
+          const password = crypto.randomBytes(24).toString("hex");
+          const regRes = await websiteFetch("/api/companion/auth/register", {
+            method: "POST",
+            body: { email: normEmail, password, fullName, phone, role },
+          });
+          if (!regRes.ok) {
+            const d = await regRes.json().catch(() => ({}));
+            return res.status(regRes.status).json({
+              message: d.message || d.error || "Could not create your LoadLink account.",
+            });
+          }
+          session = await createCompanionSession(normEmail);
+          if (!session.ok) {
+            return res.status(session.status).json({ message: session.message });
+          }
+        } else {
+          return res.status(session.status).json({ message: session.message });
+        }
       }
-      // Bind the verified Apple `sub` to this account so future Sign in with
-      // Apple (which omits the email) resolves automatically without prompting.
-      await rememberAppleEmail(verified.sub, session.user.email || linkEmail).catch((e) =>
-        console.error("Failed to persist Apple sub->email on link:", e.message)
+      // Bind the verified Apple sub to this account so future Sign in with Apple
+      // (which omits the email) resolves automatically without re-onboarding.
+      await rememberAppleEmail(verified.sub, session.user.email || normEmail).catch((e) =>
+        console.error("Failed to persist Apple sub->email on register:", e.message)
       );
       res.json({ token: session.token, user: addDualKeys(session.user) });
       fullSync(session.authEntry).catch(() => {});
       return;
     } catch (err: any) {
-      console.error("Apple link error:", err.message);
-      return res.status(500).json({ message: "Authentication service unavailable" });
+      console.error("Apple register error:", err.message);
+      return res.status(500).json({ message: "Registration service unavailable" });
     }
   });
 
