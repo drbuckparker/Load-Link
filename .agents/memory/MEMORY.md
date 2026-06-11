@@ -4,3 +4,5 @@
 - [xmldom override breaks Expo prebuild](xmldom-expo-prebuild.md) — security override pinning @xmldom/xmldom to 0.9.x fails iOS prebuild (@expo/plist needs 0.8.x); pin override to ^0.8.13.
 - [brace-expansion override breaks EAS fingerprint](brace-expansion-eas-fingerprint.md) — blanket brace-expansion override fails "Computing project fingerprint" (minimatch10 needs 5.x .expand); remove blanket pin.
 - [Account deletion cascade](account-deletion-cascade.md) — DELETE /api/account hard-deletes via a hand-ordered manual cascade (all user FKs are NO ACTION); any new NO ACTION FK to users/jobs/job_runs/trucks must be added there or deletion 500s.
+- [SQL seeding gotchas](sql-seeding-gotchas.md) — executeSql returns {success:false} instead of throwing; and a parametrized INSERT that lists a defaulted column + binds NULL overrides the default and fails NOT NULL.
+- [dev-local role entitlement](dev-local-role-entitlement.md) — for dev-local sessions users.role IS the re-login entitlement; PUT /api/profile/role must not persist it or compound roles collapse and get trapped.

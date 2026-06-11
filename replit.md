@@ -3,6 +3,11 @@
 ## Overview
 The LoadLink Mobile App is the **companion** to the main LoadLink website (`loadlink.replit.app` / `loadlinklive.com`). The app uses a **local-first architecture**: a PostgreSQL database stores all data locally for fast reads, with background sync to/from the website API. On login, a full sync pulls all user data from the website. Periodic sync (every 60s) keeps data fresh. Writes go to the local DB first for instant response, then are pushed to the website asynchronously. The mobile app extends the website's functionality to iOS/Android devices, serving all user roles within the short-haul trucking and construction industries: truck drivers, contractors, trucking companies, and foremen.
 
+## Demo Account
+A self-contained demo login exists for showing the app to prospects: **demo@loadlink.com / demo1234**. The account carries the compound role `driver_trucking_company_contractor`, so the same login can switch between driver / contractor / trucking_company views (via the profile role switcher) and see fully-populated data in each (jobs, schedules, invoices/earnings, fleet, projects, messages, reviews, notifications).
+- Re-runnable seed: `npx tsx scripts/seed-demo.ts` — idempotent (all ids prefixed `demo-`), transactional/fail-fast, dates are relative to "today" so the demo stays current, and it asserts row counts after committing. Re-run it after a DB reset/checkpoint rollback to restore the demo.
+- Role switching for this account is session-scoped and does NOT overwrite `users.role` (see role-switch note below), so the compound entitlement survives re-login.
+
 ## User Preferences
 I want to prioritize a clean, maintainable, and well-structured codebase. I prefer clear and concise explanations for any proposed changes, focusing on the "why" as much as the "what." For development, I prefer an iterative approach, with small, testable changes. Please ask for confirmation before implementing major architectural changes or refactoring large portions of the codebase. When making changes, ensure that all existing features continue to function as expected, especially role-based access and UI elements.
 
@@ -51,6 +56,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
     7. All subsequent API calls forward to website with `Authorization: Bearer <website JWT>` + `X-API-Key`
     8. On 401/403 from website, Express automatically refreshes the JWT via re-login
 - **Silent re-login**: If a stored session token becomes invalid (e.g., after a deploy/restart), the mobile app automatically re-authenticates using stored credentials (email/password in AsyncStorage) without showing a login screen.
+- **Role switching & entitlement**: `PUT /api/profile/role` is gated by `allowedRolesForUser(originalRole)`, where `originalRole` is captured at login. For **dev-local sessions** (local-auth users; session jwt starts `dev-local:`), `users.role` is the entitlement source on re-login, so the handler does NOT persist the switched role to `users.role` — it only updates the in-memory session (`auth.user.role`) + `sessions.json`. This keeps compound entitlements (e.g. `driver_trucking_company_contractor`, used by the demo account) from collapsing to a single role and trapping the account on next login. Website-backed sessions still persist, since their entitlement comes from the website on each login. `GET /api/profile` and `GET /api/auth/me` return the in-memory session user, so in-session view switches stick.
 - **Endpoint categories**:
     - **Auth (website API calls)**: login, register, forgot-password, reset-password, set-password — these are the ONLY endpoints that call the website API directly
     - **Local DB reads**: ALL data endpoints — jobs, dashboard, conversations, messages, notifications, invoices, vehicles, reviews, favorites, earnings, projects, materials, availability, calendar

@@ -2201,9 +2201,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(403).json({ message: "You are not authorized to switch to this role." });
     }
     auth.user.role = role;
-    try {
-      await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
-    } catch {}
+    // Dev-local sessions authenticate against the local users table, so the
+    // `role` column doubles as the account's entitlement source on re-login.
+    // Persisting the switched view here would collapse a compound entitlement
+    // (e.g. driver_trucking_company_contractor) down to a single role and trap
+    // the account after the next login. Keep the DB role as the entitlement and
+    // track the active view in the session only. Website-backed sessions still
+    // persist, since their entitlement comes from the upstream website.
+    if (!String(auth.jwt).startsWith("dev-local:")) {
+      try {
+        await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
+      } catch {}
+    }
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) {
       tokenToJwt.set(localToken, auth);
