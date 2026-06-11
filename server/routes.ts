@@ -2889,16 +2889,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/earnings", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const result = await pool.query(
-        `SELECT COALESCE(SUM(total_amount), 0)::float as total,
-                COALESCE(SUM(CASE WHEN status::text = 'payment_received' THEN total_amount ELSE 0 END), 0)::float as paid,
-                COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued', 'payment_sent') THEN total_amount ELSE 0 END), 0)::float as pending
-         FROM monthly_invoices WHERE driver_id = $1`,
+      const period = (req.query.period as string) || "all";
+      let dateFilter = "";
+      if (period === "week") {
+        dateFilter = `AND COALESCE(j.completed_date, j.scheduled_date) >= date_trunc('week', now())`;
+      } else if (period === "month") {
+        dateFilter = `AND COALESCE(j.completed_date, j.scheduled_date) >= date_trunc('month', now())`;
+      }
+
+      // The driver's earnings are the jobs they actually worked (completed or
+      // currently in progress), valued from their tracked job_runs. We reuse
+      // computeJobEarnings so this stays consistent with invoice math.
+      const jobsRes = await pool.query(
+        `SELECT j.*, c.company AS contractor_company, c.full_name AS contractor_name
+         FROM jobs j
+         LEFT JOIN users c ON c.id = j.contractor_id
+         WHERE (j.driver_id = $1
+                OR j.id IN (SELECT job_id FROM job_assignments
+                            WHERE driver_id = $1 AND status::text = 'approved'))
+           AND j.archived_at IS NULL
+           AND j.status::text IN ('completed', 'in_progress')
+           ${dateFilter}
+         ORDER BY COALESCE(j.completed_date, j.scheduled_date) DESC NULLS LAST`,
         [auth.userId]
       );
-      return res.json(addDualKeys(result.rows[0] || { total: 0, paid: 0, pending: 0 }));
-    } catch {
-      return res.json({ total: 0, paid: 0, pending: 0 });
+
+      let total = 0, paid = 0, pending = 0;
+      const earnings: any[] = [];
+      for (const job of jobsRes.rows) {
+        const calc = await computeJobEarnings(job);
+        const amount = Number(calc.earnings.toFixed(2));
+        const payStatus = job.payment_status || "unpaid";
+        const status = job.status === "in_progress" ? "in_progress" : payStatus;
+        total += amount;
+        if (payStatus === "payment_received") paid += amount;
+        else pending += amount;
+        const dateVal = job.completed_date || job.scheduled_date;
+        earnings.push(addDualKeys({
+          id: job.id,
+          job_id: job.id,
+          material: job.material,
+          contractor_company: job.contractor_company || job.contractor_name || "",
+          date: dateVal ? new Date(dateVal).toISOString() : "",
+          completed_date: job.completed_date ? new Date(job.completed_date).toISOString() : null,
+          billed_hours: Number((calc.totalMinutes / 60).toFixed(1)),
+          rate: Number(job.rate || 0),
+          rate_type: job.rate_type,
+          amount,
+          status,
+          sessions: calc.runs.length,
+          total_loads: calc.totalLoads,
+        }));
+      }
+      total = Number(total.toFixed(2));
+      paid = Number(paid.toFixed(2));
+      pending = Number(pending.toFixed(2));
+
+      return res.json({
+        earnings,
+        stats: {
+          totalEarnings: total, paidAmount: paid, pendingAmount: pending,
+          total_earnings: total, paid_amount: paid, pending_amount: pending,
+        },
+        total, paid, pending,
+      });
+    } catch (e: any) {
+      console.error("GET /api/earnings error:", e.message);
+      return res.json({ earnings: [], stats: { totalEarnings: 0, paidAmount: 0, pendingAmount: 0 }, total: 0, paid: 0, pending: 0 });
     }
   });
 
@@ -3255,6 +3312,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         earnings = totalLoads * rate;
         break;
       case 'flat':
+      case 'flat_rate':
       case 'per_job':
         earnings = rate;
         break;
