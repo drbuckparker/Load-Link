@@ -248,7 +248,7 @@ export default function LoginScreen() {
           <View>
         <View style={styles.logoSection}>
           <Image
-            source={require('@/assets/images/app-logo.png')}
+            source={require('@/assets/images/app-logo-v2.png')}
             style={styles.logoImage}
             resizeMode="contain"
           />

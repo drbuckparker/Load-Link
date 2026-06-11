@@ -285,7 +285,7 @@ export default function DashboardScreen() {
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <View style={styles.headerLeft}>
           <Image
-            source={require('@/assets/images/app-logo.png')}
+            source={require('@/assets/images/app-logo-v2.png')}
             style={styles.logoMark}
             resizeMode="contain"
           />
