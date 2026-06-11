@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import crypto from "node:crypto";
+import bcrypt from "bcrypt";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
@@ -487,6 +488,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (!password) {
         return res.status(400).json({ message: "Password is required" });
+      }
+
+      // Dev-only local authentication. In production the upstream website is the
+      // sole authority for credentials. In development the workspace uses its own
+      // database (separate from the website's), so we authenticate directly
+      // against the local users table. This lets developers sign in without the
+      // website accepting the account (e.g. Sign-in-with-Replit accounts).
+      if (process.env.NODE_ENV !== "production") {
+        try {
+          const localRes = await pool.query(
+            `SELECT * FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+            [email],
+          );
+          const dbUser = localRes.rows[0];
+          if (dbUser?.password && (await bcrypt.compare(password, dbUser.password))) {
+            const localToken = crypto.randomBytes(32).toString("hex");
+            const authEntry = {
+              jwt: `dev-local:${dbUser.id}`,
+              userId: dbUser.id,
+              user: dbUser,
+              originalRole: dbUser.role as string,
+            };
+            tokenToJwt.set(localToken, authEntry);
+            saveJsonMap("sessions.json", tokenToJwt);
+            return res.json({ token: localToken, user: addDualKeys(dbUser) });
+          }
+        } catch (devErr: any) {
+          console.error("Dev local login failed, falling back to website:", devErr.message);
+        }
       }
 
       // Always validate credentials against the upstream website. We forward
