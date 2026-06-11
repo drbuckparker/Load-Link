@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator, RefreshControl, Alert } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Switch, ActivityIndicator, RefreshControl, Alert, Image } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -284,9 +284,11 @@ export default function DashboardScreen() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <View style={styles.headerLeft}>
-          <View style={styles.logoMark}>
-            <Ionicons name="cube" size={20} color={Colors.primary} />
-          </View>
+          <Image
+            source={require('@/assets/images/app-logo.png')}
+            style={styles.logoMark}
+            resizeMode="contain"
+          />
           <View>
             <Text style={styles.headerTitle}>DASHBOARD</Text>
             <Text style={styles.headerSubtitle}>Welcome Back, {user.firstName}</Text>
