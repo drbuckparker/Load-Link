@@ -5,162 +5,22 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import Constants from 'expo-constants';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/lib/query-client';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 
-try {
-  const WebBrowser = require('expo-web-browser');
-  WebBrowser.maybeCompleteAuthSession();
-} catch (e) {
-}
-
-const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
-const isExpoGo = Constants.appOwnership === 'expo' || __DEV__;
-
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { login, socialLogin } = useAuth();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [socialLoading, setSocialLoading] = useState<'google' | 'apple' | null>(null);
   const [error, setError] = useState('');
   const [needsPassword, setNeedsPassword] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-
-  async function handleSocialAuth(provider: 'google' | 'apple', token: string, authEmail?: string) {
-    setError('');
-    setSocialLoading(provider);
-    try {
-      await socialLogin(provider, token, authEmail);
-      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      while (router.canGoBack()) {
-        router.back();
-      }
-      router.replace('/(tabs)');
-    } catch (e: any) {
-      // First-time Apple sign-in (no account yet) or a previously-authorized
-      // Apple ID with no email — let the Apple handler decide what to do next.
-      const code = e?.code || e?.message;
-      if (code === 'apple_signup_required' || code === 'apple_reauthorize_required') {
-        throw e;
-      }
-      setError(e.message || `${provider === 'google' ? 'Google' : 'Apple'} sign in failed`);
-    } finally {
-      setSocialLoading(null);
-    }
-  }
-
-  async function handleGoogleSignIn() {
-    if (!GOOGLE_CLIENT_ID) {
-      setError('Google sign in is not configured yet. Please use email/password.');
-      return;
-    }
-    setError('');
-    setSocialLoading('google');
-    try {
-      const { makeRedirectUri, AuthRequest, ResponseType } = await import('expo-auth-session');
-      const redirectUri = makeRedirectUri({
-        scheme: 'loadlink',
-        ...(isExpoGo ? { useProxy: true } : {}),
-      });
-      const discovery = {
-        authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-        tokenEndpoint: 'https://oauth2.googleapis.com/token',
-      };
-      const request = new AuthRequest({
-        clientId: GOOGLE_CLIENT_ID,
-        redirectUri,
-        responseType: ResponseType.Token,
-        scopes: ['openid', 'profile', 'email'],
-        usePKCE: false,
-      });
-      const result = await request.promptAsync(discovery, {
-        showInRecents: true,
-        ...(isExpoGo ? { useProxy: true } : {}),
-      });
-      if (result.type === 'success') {
-        const token = result.params.access_token || result.params.id_token;
-        if (token) {
-          await handleSocialAuth('google', token);
-        } else {
-          setError('No token received from Google');
-          setSocialLoading(null);
-        }
-      } else {
-        setSocialLoading(null);
-      }
-    } catch (e: any) {
-      if (!e.message?.includes('cancel') && !e.message?.includes('dismiss')) {
-        setError(e.message || 'Google sign in failed');
-      }
-      setSocialLoading(null);
-    }
-  }
-
-  async function handleAppleSignIn() {
-    if (Platform.OS !== 'ios') {
-      setError('Apple sign in is only available on iOS devices');
-      return;
-    }
-    setError('');
-    setSocialLoading('apple');
-    try {
-      const AppleAuth = await import('expo-apple-authentication');
-      const isAvailable = await AppleAuth.isAvailableAsync();
-      if (!isAvailable) {
-        setError('Apple sign in is not available on this device');
-        setSocialLoading(null);
-        return;
-      }
-      const credential = await AppleAuth.signInAsync({
-        requestedScopes: [
-          AppleAuth.AppleAuthenticationScope.FULL_NAME,
-          AppleAuth.AppleAuthenticationScope.EMAIL,
-        ],
-      });
-      if (credential.identityToken) {
-        try {
-          await handleSocialAuth('apple', credential.identityToken, credential.email || undefined);
-        } catch (appleErr: any) {
-          const code = appleErr?.code || appleErr?.message;
-          if (code === 'apple_signup_required') {
-            // First-time Apple user with no LoadLink account yet. Carry the
-            // verified token to the onboarding screen to collect role + phone
-            // and create a real account.
-            const name = credential.fullName
-              ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ').trim()
-              : '';
-            router.push({
-              pathname: '/(auth)/apple-complete',
-              params: {
-                token: credential.identityToken,
-                name,
-                email: credential.email || '',
-              },
-            });
-          } else if (code === 'apple_reauthorize_required') {
-            // Apple already authorized this app previously and no longer shares
-            // the email, and we have no stored mapping. The user must un-link.
-            setError('Apple isn\u2019t sharing your email anymore. Go to Settings → tap your name → Sign in with Apple → LoadLink → "Stop Using Apple ID", then sign in again.');
-          }
-        }
-      } else {
-        setError('Apple sign in failed - no identity token received');
-        setSocialLoading(null);
-      }
-    } catch (e: any) {
-      if (e.code !== 'ERR_REQUEST_CANCELED') {
-        setError('Apple sign in failed');
-      }
-      setSocialLoading(null);
-    }
-  }
 
   async function handleLogin() {
     if (!email || !password) {
@@ -220,7 +80,7 @@ export default function LoginScreen() {
     }
   }
 
-  const isAnyLoading = loading || !!socialLoading;
+  const isAnyLoading = loading;
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 + insets.top : insets.top }]}>
@@ -362,51 +222,6 @@ export default function LoginScreen() {
             </Pressable>
           )}
 
-          {!needsPassword && (
-            <View style={styles.socialSection}>
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>or</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <Pressable
-                style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
-                onPress={handleGoogleSignIn}
-                disabled={isAnyLoading}
-                testID="google-sign-in"
-              >
-                {socialLoading === 'google' ? (
-                  <ActivityIndicator size="small" color={Colors.text} />
-                ) : (
-                  <>
-                    <View style={styles.googleIconWrap}>
-                      <Text style={styles.googleG}>G</Text>
-                    </View>
-                    <Text style={styles.socialBtnText}>Continue with Google</Text>
-                  </>
-                )}
-              </Pressable>
-
-              {Platform.OS === 'ios' && (
-                <Pressable
-                  style={({ pressed }) => [styles.socialBtn, pressed && styles.socialBtnPressed, isAnyLoading && styles.socialBtnDisabled]}
-                  onPress={handleAppleSignIn}
-                  disabled={isAnyLoading}
-                  testID="apple-sign-in"
-                >
-                  {socialLoading === 'apple' ? (
-                    <ActivityIndicator size="small" color={Colors.text} />
-                  ) : (
-                    <>
-                      <Ionicons name="logo-apple" size={20} color={Colors.primary} />
-                      <Text style={styles.socialBtnText}>Continue with Apple</Text>
-                    </>
-                  )}
-                </Pressable>
-              )}
-            </View>
-          )}
         </View>
 
         <View style={styles.footer}>
@@ -539,64 +354,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.success,
     flex: 1,
-  },
-  socialSection: {
-    marginTop: 16,
-  },
-  socialBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 48,
-    borderRadius: 8,
-    gap: 10,
-    marginBottom: 10,
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.borderMedium,
-  },
-  socialBtnPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.98 }],
-    backgroundColor: Colors.cardHover,
-  },
-  socialBtnDisabled: {
-    opacity: 0.5,
-  },
-  googleIconWrap: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleG: {
-    fontSize: 14,
-    fontWeight: '700' as const,
-    color: Colors.primary,
-  },
-  socialBtnText: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 14,
-    color: Colors.text,
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 6,
-    marginBottom: 16,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: Colors.borderMedium,
-  },
-  dividerText: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 13,
-    color: Colors.textMuted,
-    marginHorizontal: 12,
   },
   backBtn: {
     alignItems: 'center',

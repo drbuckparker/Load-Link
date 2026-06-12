@@ -4,7 +4,6 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import crypto from "node:crypto";
 import bcrypt from "bcrypt";
-import { createRemoteJWKSet, jwtVerify } from "jose";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
@@ -14,22 +13,6 @@ const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API
 
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
-
-// The native Sign in with Apple flow (expo-apple-authentication) issues identity
-// tokens whose `aud` claim is the app's bundle id. We always allow the known
-// production bundle id so a stale/misconfigured APPLE_BUNDLE_ID env can never
-// break sign-in, and additionally honor any comma-separated values from the env.
-const APPLE_ALLOWED_AUD = Array.from(
-  new Set(
-    [
-      "com.loadlink.app",
-      ...(process.env.APPLE_BUNDLE_ID || "").split(","),
-    ]
-      .map((s) => s.trim())
-      .filter(Boolean)
-  )
-);
-const appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
 
 async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>) {
   try {
@@ -70,77 +53,6 @@ function saveJsonMap<T>(filename: string, map: Map<string, T>) {
 
 const tokenToJwt = loadJsonMap<{ jwt: string; userId: string; user: any; originalRole?: string }>("sessions.json");
 
-// Apple only includes the `email` claim in the identity token on the FIRST
-// authorization. On every subsequent Sign in with Apple, the verified token
-// carries only a stable `sub` (user id) and no email. We persist sub -> email
-// the first time we see it so repeat sign-ins can resolve the email securely
-// server-side, without ever trusting a client-supplied email. Stored in a
-// companion-owned table (durable across redeploys / multiple instances),
-// following the same CREATE-IF-NOT-EXISTS pattern as sync_queue.
-let _appleIdentitiesReady = false;
-async function ensureAppleIdentitiesTable(): Promise<void> {
-  if (_appleIdentitiesReady) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS companion_apple_identities (
-      sub TEXT PRIMARY KEY,
-      email TEXT NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-  `);
-  _appleIdentitiesReady = true;
-}
-
-async function rememberAppleEmail(sub: string, email: string): Promise<void> {
-  await ensureAppleIdentitiesTable();
-  await pool.query(
-    `INSERT INTO companion_apple_identities (sub, email, updated_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (sub) DO UPDATE SET email = EXCLUDED.email, updated_at = NOW()`,
-    [sub, email]
-  );
-}
-
-async function lookupAppleEmail(sub: string): Promise<string | null> {
-  await ensureAppleIdentitiesTable();
-  const r = await pool.query(
-    `SELECT email FROM companion_apple_identities WHERE sub = $1 LIMIT 1`,
-    [sub]
-  );
-  return r.rows[0]?.email ?? null;
-}
-
-// Verify a Sign in with Apple identity token: signature + issuer + expiry are
-// checked against Apple's JWKS, and the `aud` claim is validated against our
-// allowlist (so a stale APPLE_BUNDLE_ID env can't break sign-in). Returns the
-// stable `sub` and the `email` claim (email is only present on first auth), or
-// null if the token is invalid.
-async function verifyAppleToken(
-  token: string
-): Promise<{ sub: string | null; email: string | null } | null> {
-  try {
-    const { payload } = await jwtVerify(token, appleJwks, {
-      issuer: "https://appleid.apple.com",
-    });
-    const audClaim = payload.aud;
-    const audList = typeof audClaim === "string"
-      ? [audClaim]
-      : Array.isArray(audClaim) ? audClaim : [];
-    if (!audList.some((a) => APPLE_ALLOWED_AUD.includes(a))) {
-      console.error(
-        `Apple sign-in: token aud [${audList.join(", ")}] not in allowlist [${APPLE_ALLOWED_AUD.join(", ")}]`
-      );
-      return null;
-    }
-    return {
-      sub: typeof payload.sub === "string" ? payload.sub : null,
-      email: typeof payload.email === "string" ? payload.email : null,
-    };
-  } catch (e: any) {
-    console.error("Apple token verification failed:", e.message);
-    return null;
-  }
-}
-
 // Returns the set of roles this user is authorized to switch between based on
 // their account's base role (e.g. a driver_contractor may switch between
 // 'driver' and 'contractor' views; a plain 'driver' may not switch at all).
@@ -153,43 +65,6 @@ function allowedRolesForUser(baseRole: string): string[] {
     driver_trucking_company_contractor: ["driver", "trucking_company", "contractor"],
   };
   return compound[baseRole] ?? [baseRole];
-}
-
-async function createCompanionSession(
-  email: string
-): Promise<
-  | { ok: true; token: string; user: any; authEntry: { jwt: string; userId: string; user: any; originalRole: string } }
-  | { ok: false; status: number; message: string }
-> {
-  const websiteRes = await websiteFetch("/api/companion/auth/login", {
-    method: "POST",
-    body: { email },
-  });
-  const data = await websiteRes.json();
-  if (!websiteRes.ok) {
-    if (websiteRes.status === 404 || (data.message && String(data.message).toLowerCase().includes("not found"))) {
-      return {
-        ok: false,
-        status: 404,
-        message: "No LoadLink account found with this email. Please sign up first on loadlinklive.com",
-      };
-    }
-    return {
-      ok: false,
-      status: websiteRes.status,
-      message: data.message || data.error || "Authentication failed",
-    };
-  }
-  const jwt = data.token;
-  const user = data.user;
-  if (!jwt || !user) {
-    return { ok: false, status: 500, message: "Invalid response from auth service" };
-  }
-  const localToken = crypto.randomBytes(32).toString("hex");
-  const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
-  tokenToJwt.set(localToken, authEntry);
-  saveJsonMap("sessions.json", tokenToJwt);
-  return { ok: true, token: localToken, user, authEntry };
 }
 
 const hiddenJobIds = new Set([
@@ -321,164 +196,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     return res.status(401).json({ message: "Not authenticated" });
   }
-
-  app.post("/api/auth/social-login", async (req: Request, res: Response) => {
-    try {
-      const { provider, token, email: clientEmail } = req.body;
-      if (!provider || !token) {
-        return res.status(400).json({ message: "Provider and token are required" });
-      }
-
-      let verifiedEmail: string | null = null;
-
-      if (provider === "google") {
-        try {
-          const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
-          if (googleRes.ok) {
-            const info = await googleRes.json();
-            if (info.email_verified === "true" || info.email_verified === true) {
-              verifiedEmail = info.email;
-            }
-          }
-          if (!verifiedEmail) {
-            const userinfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-              headers: { Authorization: `Bearer ${token}` },
-            });
-            if (userinfoRes.ok) {
-              const info = await userinfoRes.json();
-              if (info.email_verified) {
-                verifiedEmail = info.email;
-              }
-            }
-          }
-        } catch (e: any) {
-          console.error("Google token verification failed:", e.message);
-        }
-      } else if (provider === "apple") {
-        const verified = await verifyAppleToken(token);
-        if (!verified || !verified.sub) {
-          return res.status(401).json({ message: "Could not verify your identity. Please try again." });
-        }
-        const { sub, email } = verified;
-        // Resolve the LoadLink email. Apple only sends the email claim on the
-        // very first authorization, so on repeat sign-ins fall back to the
-        // sub->email mapping we stored the first time.
-        const resolvedEmail = email ?? (await lookupAppleEmail(sub));
-        if (!resolvedEmail) {
-          // Previously-authorized Apple ID whose email we never captured and for
-          // which we have no stored mapping. We cannot resolve or create an
-          // account without it — the user must re-authorize the app in their
-          // Apple ID settings to get a fresh first-auth token carrying email.
-          console.error("Apple sign-in: no token email and no stored sub mapping");
-          return res.status(409).json({ message: "apple_reauthorize_required" });
-        }
-        const session = await createCompanionSession(resolvedEmail);
-        if (!session.ok) {
-          // First-auth email is verified but no LoadLink account exists yet.
-          // Tell the client to collect the remaining profile fields (role,
-          // phone, name) and create the account via /api/auth/apple/register.
-          if (session.status === 404 && email) {
-            return res.status(409).json({ message: "apple_signup_required" });
-          }
-          return res.status(session.status).json({ message: session.message });
-        }
-        // Remember the verified sub->email so future sign-ins resolve silently.
-        await rememberAppleEmail(sub, resolvedEmail).catch((e) =>
-          console.error("Failed to persist Apple sub->email:", e.message)
-        );
-        res.json({ token: session.token, user: addDualKeys(session.user) });
-        fullSync(session.authEntry).catch(() => {});
-        return;
-      }
-
-      if (!verifiedEmail) {
-        return res.status(401).json({ message: "Could not verify your identity. Please try again." });
-      }
-
-      const session = await createCompanionSession(verifiedEmail);
-      if (!session.ok) {
-        return res.status(session.status).json({ message: session.message });
-      }
-
-      res.json({ token: session.token, user: addDualKeys(session.user) });
-      fullSync(session.authEntry).catch(() => {});
-      return;
-    } catch (err: any) {
-      console.error("Social login error:", err.message);
-      return res.status(500).json({ message: "Authentication service unavailable" });
-    }
-  });
-
-  // Completes first-time Sign in with Apple by creating a real LoadLink account.
-  // Apple only gives us the email + name on first authorization and never gives
-  // a phone or role, so the client collects role + phone (and confirms the name)
-  // and posts them here together with the identity token. The email is always
-  // taken from the cryptographically-verified token — never from the request
-  // body — which keeps an attacker from provisioning an account for someone
-  // else's email.
-  app.post("/api/auth/apple/register", async (req: Request, res: Response) => {
-    try {
-      const { identityToken, role, phone, fullName } = req.body || {};
-      if (!identityToken) {
-        return res.status(400).json({ message: "Apple identity token is required" });
-      }
-      const verified = await verifyAppleToken(identityToken);
-      if (!verified || !verified.sub) {
-        return res.status(401).json({ message: "Could not verify your Apple identity. Please try again." });
-      }
-      const email = verified.email;
-      if (!email) {
-        // Apple omits the email on repeat authorizations; without it we cannot
-        // create the account securely. Ask the user to re-authorize the app.
-        return res.status(409).json({ message: "apple_reauthorize_required" });
-      }
-      if (!role || !phone || !fullName) {
-        return res.status(400).json({ message: "Please provide your name, phone, and role." });
-      }
-      const ALLOWED_SIGNUP_ROLES = ["owner_operator", "trucking_company", "contractor"];
-      if (!ALLOWED_SIGNUP_ROLES.includes(role)) {
-        return res.status(400).json({ message: "Invalid role selection." });
-      }
-      const normEmail = String(email).trim().toLowerCase();
-      // If an account already exists for this verified email, just sign in to it
-      // (and bind the Apple sub below). Otherwise create it on the website.
-      let session = await createCompanionSession(normEmail);
-      if (!session.ok) {
-        if (session.status === 404) {
-          // Apple users don't choose a password (they sign in with Apple), so
-          // generate a strong random one to satisfy the website's register API.
-          const password = crypto.randomBytes(24).toString("hex");
-          const regRes = await websiteFetch("/api/companion/auth/register", {
-            method: "POST",
-            body: { email: normEmail, password, fullName, phone, role },
-          });
-          if (!regRes.ok) {
-            const d = await regRes.json().catch(() => ({}));
-            return res.status(regRes.status).json({
-              message: d.message || d.error || "Could not create your LoadLink account.",
-            });
-          }
-          session = await createCompanionSession(normEmail);
-          if (!session.ok) {
-            return res.status(session.status).json({ message: session.message });
-          }
-        } else {
-          return res.status(session.status).json({ message: session.message });
-        }
-      }
-      // Bind the verified Apple sub to this account so future Sign in with Apple
-      // (which omits the email) resolves automatically without re-onboarding.
-      await rememberAppleEmail(verified.sub, session.user.email || normEmail).catch((e) =>
-        console.error("Failed to persist Apple sub->email on register:", e.message)
-      );
-      res.json({ token: session.token, user: addDualKeys(session.user) });
-      fullSync(session.authEntry).catch(() => {});
-      return;
-    } catch (err: any) {
-      console.error("Apple register error:", err.message);
-      return res.status(500).json({ message: "Registration service unavailable" });
-    }
-  });
 
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {

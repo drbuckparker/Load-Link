@@ -14,7 +14,6 @@ export default function AuthLayout() {
     >
       <Stack.Screen name="login" options={{ title: "Sign In", headerShown: false }} />
       <Stack.Screen name="register" options={{ title: "Create Account" }} />
-      <Stack.Screen name="apple-complete" options={{ title: "Finish Sign Up" }} />
       <Stack.Screen name="forgot-password" options={{ title: "Reset Password" }} />
     </Stack>
   );

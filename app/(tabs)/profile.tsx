@@ -567,19 +567,6 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <View style={styles.accountCard}>
-          <View style={styles.accountCardIcon}>
-            <Ionicons name="people-outline" size={20} color={Colors.textMuted} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.accountCardTitle}>CONNECTED ACCOUNTS</Text>
-            <Text style={styles.accountCardDesc}>Google, Apple, GitHub sign-in</Text>
-          </View>
-          <View style={styles.comingSoonPill}>
-            <Text style={styles.comingSoonPillText}>Soon</Text>
-          </View>
-        </View>
-
         <Text style={[styles.sectionTitle, { color: Colors.destructive }]}>DANGER ZONE</Text>
         <View style={styles.dangerCard}>
           <View style={styles.dangerHeaderRow}>

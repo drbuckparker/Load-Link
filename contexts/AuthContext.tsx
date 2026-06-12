@@ -37,8 +37,6 @@ interface AuthContextValue {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
-  socialLogin: (provider: 'google' | 'apple', token: string, email?: string) => Promise<void>;
-  appleRegister: (identityToken: string, data: { fullName: string; phone: string; role: string }) => Promise<void>;
   register: (data: { email: string; password: string; fullName: string; phone: string; role: string }) => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -201,49 +199,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     registerForPushNotifications().catch(() => {});
   }
 
-  async function socialLogin(provider: 'google' | 'apple', token: string, email?: string) {
-    const res = await apiRequest('POST', '/api/auth/social-login', { provider, token, email });
-    const data = await res.json();
-
-    if (data.token) {
-      setAuthToken(data.token);
-      await AsyncStorage.setItem('loadlink_token', data.token);
-    }
-
-    if (data.user?.email) {
-      await AsyncStorage.setItem('loadlink_email', data.user.email);
-    }
-
-    const mapped = mapDbUser(data.user);
-    await safeStore(mapped);
-    setUser(mapped);
-    registerForPushNotifications().catch(() => {});
-  }
-
-  // Completes first-time Sign in with Apple by creating a real LoadLink account.
-  // Apple gives us the verified email (inside the identity token) but never a
-  // phone or role, so the client collects those and posts them here. The server
-  // re-verifies the token, creates the account, and binds the Apple ID so future
-  // sign-ins resolve automatically.
-  async function appleRegister(identityToken: string, data: { fullName: string; phone: string; role: string }) {
-    const res = await apiRequest('POST', '/api/auth/apple/register', { identityToken, ...data });
-    const responseData = await res.json();
-
-    if (responseData.token) {
-      setAuthToken(responseData.token);
-      await AsyncStorage.setItem('loadlink_token', responseData.token);
-    }
-
-    if (responseData.user?.email) {
-      await AsyncStorage.setItem('loadlink_email', responseData.user.email);
-    }
-
-    const mapped = mapDbUser(responseData.user);
-    await safeStore(mapped);
-    setUser(mapped);
-    registerForPushNotifications().catch(() => {});
-  }
-
   async function register(data: { email: string; password: string; fullName: string; phone: string; role: string }) {
     const res = await apiRequest('POST', '/api/auth/register', data);
     const responseData = await res.json();
@@ -331,8 +286,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading,
     isAuthenticated: !!user,
     login,
-    socialLogin,
-    appleRegister,
     register,
     logout,
     deleteAccount,
