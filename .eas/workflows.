@@ -1,1 +1,0 @@
-mkdir .eas\workflows && type nul > .eas\workflows\create-production-builds.yml
