@@ -1849,7 +1849,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       "truckCapacity", "truck_capacity",
       "cdlClass", "cdl_class",
       "insuranceInfo", "insurance_info",
-      "companyName", "company_name",
+      "company",
       "website",
       "notificationPreferences", "notification_preferences",
       "expoPushToken", "expo_push_token",
