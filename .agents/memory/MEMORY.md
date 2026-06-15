@@ -7,3 +7,4 @@
 - [Account deletion cascade](account-deletion-cascade.md) — DELETE /api/account hard-deletes via a hand-ordered manual cascade (all user FKs are NO ACTION); any new NO ACTION FK to users/jobs/job_runs/trucks must be added there or deletion 500s.
 - [SQL seeding gotchas](sql-seeding-gotchas.md) — executeSql returns {success:false} instead of throwing; and a parametrized INSERT that lists a defaulted column + binds NULL overrides the default and fails NOT NULL.
 - [dev-local role entitlement](dev-local-role-entitlement.md) — for dev-local sessions users.role IS the re-login entitlement; PUT /api/profile/role must not persist it or compound roles collapse and get trapped.
+- [Companion enum drift](companion-enum-drift.md) — app's hardcoded option lists (truck types, statuses) drift from website's synced data; filters silently fail. Check DISTINCT DB values + that the server route reads the query param.

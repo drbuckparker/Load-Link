@@ -106,6 +106,9 @@ export function formatTruckType(truckType: string): string {
     case 'end_dump': return 'End Dump';
     case 'side_dump': return 'Side Dump';
     case 'belly_dump': return 'Belly Dump';
+    case 'super_dump': return 'Super Dump';
+    case 'tandem_dump': return 'Tandem Dump';
+    case 'tri_axle': return 'Tri-Axle';
     default: return truckType;
   }
 }

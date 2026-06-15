@@ -574,6 +574,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         params.push(`%${search}%`);
         paramIdx++;
       }
+      const truckType = req.query.truck_type as string | undefined;
+      if (truckType) {
+        query += ` AND j.truck_type::text = $${paramIdx}`;
+        params.push(truckType);
+        paramIdx++;
+      }
       // Hide jobs from Find Jobs when they're no longer truly available to apply to.
       // EXCEPTION: never hide a job from the contractor who posted it — they should
       // always be able to see their own postings in Find Jobs as a "this is live"
@@ -2724,6 +2730,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (search) {
         query += ` AND (j.material_type ILIKE $${paramIdx} OR j.pickup_location ILIKE $${paramIdx} OR j.dropoff_location ILIKE $${paramIdx})`;
         params.push(`%${search}%`);
+        paramIdx++;
+      }
+      const truckType = req.query.truck_type as string | undefined;
+      if (truckType) {
+        query += ` AND j.truck_type::text = $${paramIdx}`;
+        params.push(truckType);
         paramIdx++;
       }
       query += ` ORDER BY j.scheduled_date ASC NULLS LAST, j.created_at DESC`;
