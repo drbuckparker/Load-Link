@@ -149,9 +149,19 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
   const values = filteredEntries.map(([, v]) => v);
   const placeholders = values.map((_, i) => `$${i + 1}`);
 
+  // For notifications, never let a sync revert a locally-read notification back
+  // to unread. mark-read is applied to the local DB only (not pushed upstream),
+  // so the website still reports is_read=false; a blind overwrite would make
+  // cleared notifications reappear. Make is_read "sticky": once read locally or
+  // upstream, it stays read.
+  const readSticky = tableName === "notifications";
   const updateClauses = keys
     .filter((k) => k !== idField)
-    .map((k) => `${k} = EXCLUDED.${k}`);
+    .map((k) =>
+      readSticky && k === "is_read"
+        ? `is_read = (COALESCE(${tableName}.is_read, false) OR COALESCE(EXCLUDED.is_read, false))`
+        : `${k} = EXCLUDED.${k}`
+    );
 
   const archiveGuard = ARCHIVE_PROTECTED_TABLES.has(tableName) && columns.has("archived_at");
   const withdrawnGuard = tableName === "job_assignments" && columns.has("status");
