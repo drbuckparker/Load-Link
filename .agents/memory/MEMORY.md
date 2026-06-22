@@ -8,4 +8,5 @@
 - [SQL seeding gotchas](sql-seeding-gotchas.md) — executeSql returns {success:false} instead of throwing; and a parametrized INSERT that lists a defaulted column + binds NULL overrides the default and fails NOT NULL.
 - [dev-local role entitlement](dev-local-role-entitlement.md) — for dev-local sessions users.role IS the re-login entitlement; PUT /api/profile/role must not persist it or compound roles collapse and get trapped.
 - [Companion enum drift](companion-enum-drift.md) — app's hardcoded option lists (truck types, statuses) drift from website's synced data; filters silently fail. Check DISTINCT DB values + that the server route reads the query param.
+- [EAS Android build off-Replit](eas-build-replit.md) — Android built via EAS not Replit; Replit's package-lock pins package-firewall.replit.local URLs EAS can't fetch (regen lockfile); versionCode is EAS-remote (don't hardcode); OTA only reaches builds with expo-updates embedded.
 - [Companion DB topology](companion-db-topology.md) — dev DATABASE_URL IS the live shared Neon prod DB (writes hit production+website); Replit's managed "production" replica is empty/unused — don't verify prod through it.
