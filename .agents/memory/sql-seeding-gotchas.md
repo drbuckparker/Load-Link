@@ -18,3 +18,10 @@ Postgres applies a column DEFAULT only when the column is OMITTED from the INSER
 **Why:** A generic row builder mapped any `undefined` field to `null` and included every column in the INSERT. NOT-NULL-with-default columns then got an explicit NULL and the whole statement failed.
 
 **How to apply:** Either omit defaulted columns from the column list, or give them an explicit real value in your row defaults (the seed script sets `urgent:false` etc. in its job defaults).
+
+## 3. A bound param reused inside a CASE (or as a bare NULL) needs an explicit cast
+`pool.query("... SET col = $1, ts = CASE WHEN $1 IS NULL THEN NULL ELSE NOW() END", [val])` fails with **"could not determine data type of parameter $1"** — Postgres can't infer the param's type from a CASE/NULL context alone. Cast it: `$1::text` (or the right type) at each use.
+
+**Why:** The truck-down endpoint set `truck_down_status = $1` and reused `$1` in a `CASE WHEN $1 IS NULL` for the timestamp; the driver passed/cleared the value but every call 500'd until both `$1` were written `$1::text`.
+
+**How to apply:** Any `pg` parametrized statement where a placeholder appears only in NULL-comparison / CASE / generic contexts (never next to a typed column) should carry an explicit `::type` cast.

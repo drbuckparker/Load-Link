@@ -1620,6 +1620,108 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Truck Down — a driver flags that their truck is down on a job they're
+  // assigned to. status: 'back_shortly' | 'out_for_day' to set, null/'up' to
+  // clear. Posts a status message to the job thread, notifies the contractor,
+  // and (for 'out_for_day') clocks the driver out of today's active run.
+  app.post("/api/jobs/:id/truck-down", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const jobId = req.params.id;
+      const rawStatus = req.body?.status;
+      const clearing = rawStatus == null || rawStatus === 'up' || rawStatus === '';
+      const VALID = new Set(['back_shortly', 'out_for_day']);
+      if (!clearing && !VALID.has(rawStatus)) {
+        return res.status(400).json({ message: "Invalid truck-down status" });
+      }
+      const newStatus: string | null = clearing ? null : rawStatus;
+
+      // Caller must be an APPROVED driver on this job (not merely a pending
+      // applicant) — only the actually-assigned driver may flag truck-down,
+      // post to the thread, and notify the contractor.
+      const assignRes = await pool.query(
+        `SELECT id FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+         AND status::text IN ('approved','accepted')
+         ORDER BY created_at DESC LIMIT 1`,
+        [jobId, auth.userId]
+      );
+      if (assignRes.rows.length === 0) {
+        return res.status(403).json({ message: "You are not assigned to this job" });
+      }
+      const assignmentId = assignRes.rows[0].id;
+
+      await pool.query(
+        `UPDATE job_assignments
+         SET truck_down_status = $1::text,
+             truck_down_at = CASE WHEN $1::text IS NULL THEN NULL ELSE NOW() END
+         WHERE id = $2`,
+        [newStatus, assignmentId]
+      );
+
+      // "Out for the day" stops today's clock if one is running.
+      if (newStatus === 'out_for_day') {
+        const activeRun = await pool.query(
+          `SELECT id FROM job_runs WHERE job_id = $1 AND driver_id = $2 AND status::text = 'active'
+           AND started_at::date = CURRENT_DATE
+           ORDER BY created_at DESC LIMIT 1`,
+          [jobId, auth.userId]
+        );
+        if (activeRun.rows.length > 0) {
+          const runId = activeRun.rows[0].id;
+          await pool.query(
+            `UPDATE job_runs SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE id = $1`,
+            [runId]
+          );
+          pushToWebsite(`/api/jobs/${jobId}/end`, auth, { method: "POST", body: { runId } }).catch(() => {});
+        }
+      }
+
+      // Human-readable status for the thread + notification.
+      const driverRow = await pool.query(`SELECT full_name FROM users WHERE id = $1`, [auth.userId]);
+      const driverName = driverRow.rows[0]?.full_name || 'The driver';
+      let messageBody: string;
+      let notifTitle: string;
+      if (newStatus === 'back_shortly') {
+        messageBody = `🔧 Truck Down — ${driverName} will be back with you shortly.`;
+        notifTitle = 'Truck Down';
+      } else if (newStatus === 'out_for_day') {
+        messageBody = `🔧 Truck Down — ${driverName} is out for the day.`;
+        notifTitle = 'Truck Down';
+      } else {
+        messageBody = `✅ ${driverName}'s truck is back up and running.`;
+        notifTitle = 'Truck Back Up';
+      }
+
+      // Post into the job message thread (local + website sync).
+      const msgId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO job_messages (id, job_id, sender_id, body, read, created_at) VALUES ($1, $2, $3, $4, false, NOW())`,
+        [msgId, jobId, auth.userId, messageBody]
+      );
+      pushToWebsite(`/api/jobs/${jobId}/messages`, auth, { method: "POST", body: { body: messageBody } }).catch(() => {});
+
+      // Notify the contractor who posted the job.
+      const jobRow = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [jobId]);
+      const contractorId = jobRow.rows[0]?.contractor_id;
+      if (contractorId && String(contractorId) !== auth.userId) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+           VALUES ($1, $2, 'general', $3, $4, $5, false, NOW())`,
+          [crypto.randomUUID(), contractorId, notifTitle, messageBody, jobId]
+        );
+      }
+
+      return res.json(addDualKeys({
+        id: assignmentId,
+        truck_down_status: newStatus,
+        truck_down_at: newStatus ? new Date().toISOString() : null,
+      }));
+    } catch (e: any) {
+      console.error("Truck-down error:", e.message);
+      return res.status(500).json({ message: "Failed to update truck status" });
+    }
+  });
+
   app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;

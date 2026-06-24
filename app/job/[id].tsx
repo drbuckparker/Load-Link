@@ -207,6 +207,8 @@ export default function JobDetailScreen() {
 
   const [jobStatus, setJobStatus] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
+  const [truckDownPickerVisible, setTruckDownPickerVisible] = useState(false);
+  const [truckDownSubmitting, setTruckDownSubmitting] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showResumeModal, setShowResumeModal] = useState(false);
   const [showPaperworkInfo, setShowPaperworkInfo] = useState(false);
@@ -450,6 +452,10 @@ export default function JobDetailScreen() {
   // contractor mode, even if they happen to also be the approved driver on
   // the job (self-apply scenario where the same company posted and applied).
   const canStart = isMyJob && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
+  // Truck Down — available to the assigned driver anytime the job is live
+  // (even before clocking in), never in contractor mode.
+  const canReportTruckDown = isMyJob && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
+  const truckDownStatus: string | null = myAssignment?.truck_down_status || myAssignment?.truckDownStatus || null;
 
   const clockInRestriction = (() => {
     if (!canStart || isRunning) return null;
@@ -1097,6 +1103,25 @@ export default function JobDetailScreen() {
       const msg = e.message || 'Failed to clock in';
       setClockInError(msg);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }
+
+  async function submitTruckDown(status: 'back_shortly' | 'out_for_day' | null) {
+    setTruckDownSubmitting(true);
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/truck-down`, { status });
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(status ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success);
+      }
+      if (status === 'out_for_day') setIsRunning(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+    } catch (e: any) {
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setTruckDownSubmitting(false);
+      setTruckDownPickerVisible(false);
     }
   }
 
@@ -2631,7 +2656,79 @@ export default function JobDetailScreen() {
             </Pressable>
           )
         )}
+
+        {canReportTruckDown && (
+          truckDownStatus ? (
+            <View style={styles.truckDownBanner}>
+              <View style={styles.truckDownBannerRow}>
+                <Ionicons name="construct" size={18} color={Colors.warning} />
+                <Text style={styles.truckDownBannerText}>
+                  {truckDownStatus === 'out_for_day' ? 'TRUCK DOWN — OUT FOR THE DAY' : 'TRUCK DOWN — BACK SHORTLY'}
+                </Text>
+              </View>
+              <Text style={styles.truckDownBannerSub}>The contractor has been notified.</Text>
+              <Pressable
+                style={({ pressed }) => [styles.truckUpBtn, pressed && { opacity: 0.85 }]}
+                onPress={() => submitTruckDown(null)}
+                disabled={truckDownSubmitting}
+              >
+                {truckDownSubmitting ? (
+                  <ActivityIndicator size="small" color={Colors.success} />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
+                    <Text style={styles.truckUpBtnText}>TRUCK BACK UP</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.truckDownBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+              onPress={() => setTruckDownPickerVisible(true)}
+            >
+              <Ionicons name="construct-outline" size={20} color={Colors.warning} />
+              <Text style={styles.truckDownBtnText}>TRUCK DOWN</Text>
+            </Pressable>
+          )
+        )}
       </ScrollView>
+
+      <Modal visible={truckDownPickerVisible} transparent animationType="fade" onRequestClose={() => setTruckDownPickerVisible(false)}>
+        <Pressable style={styles.wtModalOverlay} onPress={() => { if (!truckDownSubmitting) setTruckDownPickerVisible(false); }}>
+          <View style={[styles.wtModalContent, { alignItems: 'center', paddingTop: 20 }]} onStartShouldSetResponder={() => true}>
+            <Pressable style={{ position: 'absolute', top: 12, right: 12, zIndex: 10 }} onPress={() => setTruckDownPickerVisible(false)} disabled={truckDownSubmitting}>
+              <Ionicons name="close" size={24} color="#999" />
+            </Pressable>
+            <Ionicons name="construct" size={48} color={Colors.warning} />
+            <Text style={[styles.wtModalTitle, { marginTop: 12 }]}>Truck Down</Text>
+            <Text style={[styles.wtModalSubtitle, { textAlign: 'center', marginBottom: 20 }]}>
+              Let the contractor know what's going on. They'll be notified right away.
+            </Text>
+            {truckDownSubmitting ? (
+              <ActivityIndicator size="large" color={Colors.warning} style={{ paddingVertical: 16 }} />
+            ) : (
+              <>
+                <Pressable
+                  style={({ pressed }) => [styles.truckDownOptionBtn, pressed && { opacity: 0.85 }]}
+                  onPress={() => submitTruckDown('back_shortly')}
+                >
+                  <Ionicons name="time-outline" size={20} color={Colors.text} />
+                  <Text style={styles.truckDownOptionText}>Back with you shortly</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.truckDownOptionBtn, { borderColor: 'rgba(239,68,68,0.4)' }, pressed && { opacity: 0.85 }]}
+                  onPress={() => submitTruckDown('out_for_day')}
+                >
+                  <Ionicons name="moon-outline" size={20} color={Colors.destructive} />
+                  <Text style={[styles.truckDownOptionText, { color: Colors.destructive }]}>Out for the day</Text>
+                </Pressable>
+                <Text style={styles.truckDownOptionHint}>"Out for the day" also clocks you out of today's run.</Text>
+              </>
+            )}
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={selectedDriver !== null}
@@ -3918,6 +4015,93 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#fff',
     letterSpacing: 1,
+  },
+  truckDownBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: 'rgba(245,158,11,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.35)',
+    borderRadius: 12,
+    height: 52,
+    gap: 8,
+    marginTop: 12,
+  },
+  truckDownBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 15,
+    color: Colors.warning,
+    letterSpacing: 1,
+  },
+  truckDownBanner: {
+    backgroundColor: 'rgba(245,158,11,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.4)',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 12,
+    gap: 8,
+  },
+  truckDownBannerRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  truckDownBannerText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.warning,
+    letterSpacing: 0.5,
+  },
+  truckDownBannerSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  truckUpBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: 'rgba(34,197,94,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.35)',
+    borderRadius: 10,
+    height: 44,
+    gap: 8,
+    marginTop: 4,
+  },
+  truckUpBtnText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 14,
+    color: Colors.success,
+    letterSpacing: 1,
+  },
+  truckDownOptionBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    width: '100%' as const,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    paddingVertical: 16,
+    gap: 10,
+    marginBottom: 12,
+  },
+  truckDownOptionText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+    letterSpacing: 0.5,
+  },
+  truckDownOptionHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    textAlign: 'center' as const,
+    marginTop: 4,
   },
   backOutBtn: {
     flexDirection: 'row' as const,
