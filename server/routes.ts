@@ -2932,6 +2932,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = auth.userId;
       const userRole = (auth.user?.role || '').toLowerCase();
       const isContractorRole = userRole.includes('contractor') && userRole !== 'trucking_company';
+      // Fleet (trucking-company) view: the calendar is about THIS company's own trucks.
+      // A job can carry assignments for trucks owned by other companies (e.g. a sub the
+      // contractor hired); those must not appear as bookings in this fleet's calendar.
+      const isTruckingCompany = userRole === 'trucking_company';
       const allJobs = await getJobsForCalendar(auth, isContractorRole ? 'contractor' : 'driver');
       const month = parseInt(req.query.month as string) || (new Date().getMonth() + 1);
       const year = parseInt(req.query.year as string) || new Date().getFullYear();
@@ -2958,7 +2962,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (jobIds.length > 0) {
         try {
           const assResult = await pool.query(
-            `SELECT ja.job_id, ja.vehicle_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type
+            `SELECT ja.job_id, ja.vehicle_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type, t.trucking_company_id
              FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id
              WHERE ja.job_id = ANY($1) AND ja.status::text NOT IN ('withdrawn', 'rejected')`,
             [jobIds]
@@ -2974,6 +2978,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               truckNumber: row.truck_number,
               licensePlate: row.license_plate,
               truckType: row.truck_type,
+              truckCompanyId: row.trucking_company_id,
             });
           }
         } catch {}
@@ -3001,8 +3006,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const includesSat = (job.includesSaturday ?? job.includes_saturday) !== false;
         const includesSun = (job.includesSunday ?? job.includes_sunday) !== false;
         const jobDates = getJobDateRange(sd, estDays, includesWeekends, includesSat, includesSun);
-        const vehicleAssignments = assignmentsByJob[job.id] || [];
-        const activeRuns = activeRunsByJob[job.id] || [];
+        const allAssignments = assignmentsByJob[job.id] || [];
+        // In fleet view, only surface this company's own trucks; other companies'
+        // trucks on the same job belong to the contractor's roster, not this fleet.
+        const vehicleAssignments = isTruckingCompany
+          ? allAssignments.filter((a: any) => String(a.truckCompanyId) === String(userId))
+          : allAssignments;
+        const rawActiveRuns = activeRunsByJob[job.id] || [];
+        // Fleet view: scope clock-in runs to this company's trucks too (same job can
+        // carry another company's truck runs).
+        const activeRuns = isTruckingCompany
+          ? rawActiveRuns.filter((r: any) => vehicleAssignments.some((a: any) => String(a.vehicleId) === String(r.vehicle_id)))
+          : rawActiveRuns;
         const activeAssignments = vehicleAssignments.filter((a: any) => a.status !== 'rejected' && a.status !== 'withdrawn');
         const entriesToAdd: any[] = [];
         if (activeAssignments.length > 1) {
