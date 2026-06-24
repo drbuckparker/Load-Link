@@ -10,6 +10,10 @@ A single job can carry job_assignments for trucks owned by DIFFERENT trucking co
 **Why:** the trucking_company branch of the calendar query returns every job where ANY of the viewer's trucks is assigned. If the handler then expands one row per assignment on that job without re-filtering by truck owner, it surfaces OTHER companies' trucks as if they were the viewer's fleet. This caused a real report ("that truck is Calvin's") — a subcontractor's truck showed in another company's Fleet Manager calendar.
 
 **How to apply:**
-- Distinguish the three viewer modes by active session role: `contractor` (job poster — SHOULD see all assigned trucks incl. subs), `trucking_company` / fleet (MUST see only own trucks), `driver`.
-- When scoping a fleet view, filter not just the assignment rows but every per-job array derived from them (vehicle list shown in modals, active clock-in runs, etc.) — each is a separate potential cross-tenant leak.
+- Distinguish the three viewer modes by active session role and scope each per-job assignment list accordingly:
+  - `contractor` (job poster) — NO filter; SHOULD see all assigned trucks incl. subs (they manage the job).
+  - `trucking_company` / fleet — filter to assignments whose truck `trucking_company_id === viewer userId`.
+  - `driver` — filter to assignments whose `driver_id === viewer userId` (their own assignment only; not co-drivers' trucks on a shared multi-truck job).
+- A contractor who *accepts* someone else's job is NOT in contractor view for it — that job appears in their driver/fleet calendar, so the driver/fleet scoping covers it. Contractor view only lists jobs they posted (`contractor_id = me`).
+- When scoping, filter not just the assignment rows but every per-job array derived from them (vehicle list shown in modals, active clock-in runs, etc.) — each is a separate potential cross-tenant leak.
 - Compound accounts (e.g. `driver_trucking_company_contractor`) switch their active session role to a single value; key off that active value, not the original compound string.
