@@ -14,5 +14,5 @@ Server-side enforcement blocks a truck (vehicle) from being `approved` on two ac
 - **Auto-approve must check the full set that will become approved**, not just the trucks in the request — the accept flow flips ALL of the driver's pending assignments on that job to approved. Checking only the request payload lets a pre-existing pending row with a conflicting truck slip through.
 - **Concurrency race is knowingly NOT closed.** All three paths do check-then-write without a transaction/lock, so two simultaneous approvals of the same truck on overlapping jobs could both pass. Accepted for a low-concurrency, single-contractor manual-approval workflow. If hardening is ever needed: wrap check+write in a txn with `pg_advisory_xact_lock(hashtext(vehicle_id))`. Do not assume the invariant holds under true concurrency.
 
-## Note: pre-existing double-bookings in live data
-The guard prevents NEW dupes; it does not clean up existing ones. As of mid-2026 live data already had trucks approved on overlapping jobs (a "Fill" + "Demo" pair overlapping ~June 30). Cleanup is a separate, user-authorized data fix, not something the guard does.
+## Note: pre-existing double-bookings are not auto-cleaned
+The guard only prevents NEW dupes; it never modifies existing approved assignments. So overlapping approvals created before the guard can persist in the data. Detecting/cleaning them is a separate, user-authorized data fix (run `findApprovedTruckConflicts`-style query, confirm with the user, then un-approve the losing assignment) — not something the guard does.
