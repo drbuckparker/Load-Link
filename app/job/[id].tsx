@@ -1207,13 +1207,13 @@ export default function JobDetailScreen() {
           const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
           const label = isTomorrow ? dayNames[nextDate.getDay()] : `${dayNames[nextDate.getDay()]}, ${nextDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
           setNextDayDate(label);
-          setTimeout(() => setShowNextDayBanner(true), jobRequiresWeightTickets ? 800 : 300);
+          setTimeout(() => setShowNextDayBanner(true), 800);
         }
       }
 
-      if (jobRequiresWeightTickets) {
-        setTimeout(() => setShowTicketPrompt(true), 500);
-      }
+      // Always ask the driver whether they have load tickets to upload after
+      // ending a job — not only when the job requires weight tickets.
+      setTimeout(() => setShowTicketPrompt(true), 500);
     } catch (e: any) {
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsRunning(false);
@@ -1877,19 +1877,33 @@ export default function JobDetailScreen() {
         {showTicketPrompt && (
           <View style={styles.ticketPromptBanner}>
             <View style={styles.ticketPromptContent}>
-              <Ionicons name="warning" size={24} color={Colors.warning} />
+              <Ionicons
+                name={jobRequiresWeightTickets ? 'warning' : 'receipt-outline'}
+                size={24}
+                color={jobRequiresWeightTickets ? Colors.warning : Colors.primary}
+              />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.ticketPromptTitle}>Weight Tickets Required</Text>
-                <Text style={styles.ticketPromptMsg}>Please upload weight tickets within 30 minutes.</Text>
+                <Text style={styles.ticketPromptTitle}>
+                  {jobRequiresWeightTickets ? 'Weight Tickets Required' : 'Any Load Tickets?'}
+                </Text>
+                <Text style={styles.ticketPromptMsg}>
+                  {jobRequiresWeightTickets
+                    ? 'Please upload weight tickets within 30 minutes.'
+                    : 'Do you have any load tickets to upload for this run?'}
+                </Text>
               </View>
             </View>
             <View style={styles.ticketPromptActions}>
               <Pressable style={styles.ticketPromptUploadBtn} onPress={() => { setShowTicketPrompt(false); setWeightTicketModalVisible(true); }}>
                 <Ionicons name="camera" size={18} color="#fff" />
-                <Text style={styles.ticketPromptUploadText}>Upload Now</Text>
+                <Text style={styles.ticketPromptUploadText}>
+                  {jobRequiresWeightTickets ? 'Upload Now' : 'Upload'}
+                </Text>
               </Pressable>
               <Pressable style={styles.ticketPromptLaterBtn} onPress={() => setShowTicketPrompt(false)}>
-                <Text style={styles.ticketPromptLaterText}>Later</Text>
+                <Text style={styles.ticketPromptLaterText}>
+                  {jobRequiresWeightTickets ? 'Later' : 'No Thanks'}
+                </Text>
               </Pressable>
             </View>
           </View>
