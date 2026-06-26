@@ -978,6 +978,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (conflicts.length > 0) {
           return res.status(409).json({ message: bookingConflictMessage(conflicts), conflicts });
         }
+        // Driver double-booking: this driver can't be approved on two overlapping jobs.
+        const driverConflicts = await findApprovedDriverConflicts([auth.userId], String(req.params.id));
+        if (driverConflicts.length > 0) {
+          return res.status(409).json({ message: driverConflictMessage(driverConflicts, true), conflicts: driverConflicts });
+        }
       }
 
       await pool.query(`UPDATE jobs SET status = 'pending', updated_at = NOW() WHERE id = $1`, [req.params.id]);
@@ -1287,13 +1292,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!jobCheck.rows[0] || jobCheck.rows[0].contractor_id !== auth.userId) {
         return res.status(403).json({ message: "Not authorized" });
       }
-      // Double-booking guard: don't approve a truck that's already approved on an overlapping job.
-      const vRow = await pool.query(`SELECT vehicle_id FROM job_assignments WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
+      // Double-booking guard: don't approve a truck OR driver already approved on an overlapping job.
+      const vRow = await pool.query(`SELECT vehicle_id, driver_id FROM job_assignments WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
       const approveVid = vRow.rows[0]?.vehicle_id;
+      const approveDid = vRow.rows[0]?.driver_id;
       if (approveVid) {
         const conflicts = await findApprovedTruckConflicts([approveVid], String(req.params.id));
         if (conflicts.length > 0) {
           return res.status(409).json({ message: bookingConflictMessage(conflicts), conflicts });
+        }
+      }
+      if (approveDid) {
+        const driverConflicts = await findApprovedDriverConflicts([approveDid], String(req.params.id));
+        if (driverConflicts.length > 0) {
+          return res.status(409).json({ message: driverConflictMessage(driverConflicts, false), conflicts: driverConflicts });
         }
       }
       await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
@@ -2993,6 +3005,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const material = conflicts.find((c) => c.jobMaterial)?.jobMaterial;
     const onJob = material ? ` on another "${material}" job` : ' on another job';
     return `That truck is already booked${onJob} for ${pretty.join(', ')}. Pick a different truck or remove the other booking first.`;
+  }
+
+  // Shared double-booking guard for DRIVERS. Mirrors findApprovedTruckConflicts
+  // but keyed on driver_id, so a driver can't be APPROVED on two active jobs whose
+  // working days overlap — regardless of which truck (or no truck) is attached.
+  async function findApprovedDriverConflicts(
+    driverIds: (string | null | undefined)[],
+    targetJobId: string
+  ): Promise<{ driverId: string; conflictDates: string[]; jobMaterial: string | null }[]> {
+    const dIds = Array.from(new Set((driverIds || []).filter((v): v is string => !!v)));
+    if (dIds.length === 0) return [];
+    const jr = await pool.query(
+      `SELECT scheduled_date, estimated_days, includes_weekends, includes_saturday, includes_sunday FROM jobs WHERE id = $1`,
+      [targetJobId]
+    );
+    const tj = jr.rows[0];
+    if (!tj || !tj.scheduled_date) return [];
+    const targetDates = new Set(
+      getJobDateRange(
+        tj.scheduled_date,
+        Number(tj.estimated_days) || 1,
+        !!tj.includes_weekends,
+        tj.includes_saturday !== false,
+        tj.includes_sunday !== false
+      )
+    );
+    if (targetDates.size === 0) return [];
+    const other = await pool.query(
+      `SELECT ja.driver_id, j.material AS job_material, j.scheduled_date, j.estimated_days,
+              j.includes_weekends, j.includes_saturday, j.includes_sunday
+       FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id
+       WHERE ja.driver_id::text = ANY($1::text[])
+         AND ja.job_id <> $2
+         AND ja.status::text = 'approved'
+         AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
+      [dIds, targetJobId]
+    );
+    const conflicts: { driverId: string; conflictDates: string[]; jobMaterial: string | null }[] = [];
+    for (const r of other.rows) {
+      const otherDates = getJobDateRange(
+        r.scheduled_date,
+        Number(r.estimated_days) || 1,
+        !!r.includes_weekends,
+        r.includes_saturday !== false,
+        r.includes_sunday !== false
+      );
+      const overlap = otherDates.filter((d) => targetDates.has(d));
+      if (overlap.length > 0) {
+        conflicts.push({ driverId: r.driver_id, conflictDates: overlap, jobMaterial: r.job_material || null });
+      }
+    }
+    return conflicts;
+  }
+
+  function driverConflictMessage(
+    conflicts: { conflictDates: string[]; jobMaterial: string | null }[],
+    self: boolean
+  ): string {
+    const allDates = Array.from(new Set(conflicts.flatMap((c) => c.conflictDates))).sort();
+    const pretty = allDates.map((d) => {
+      const [, m, day] = d.split('-');
+      return `${Number(m)}/${Number(day)}`;
+    });
+    const material = conflicts.find((c) => c.jobMaterial)?.jobMaterial;
+    const onJob = material ? ` on another "${material}" job` : ' on another job';
+    return self
+      ? `You're already booked${onJob} for ${pretty.join(', ')}. You can't be on two jobs the same day — finish or drop the other booking first.`
+      : `That driver is already booked${onJob} for ${pretty.join(', ')}. Approve them on different dates or remove the other booking first.`;
   }
 
   async function getJobsForCalendar(auth: { jwt: string; userId: string; user: any }, role: 'driver' | 'contractor'): Promise<any[]> {

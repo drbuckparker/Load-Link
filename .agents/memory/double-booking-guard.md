@@ -7,6 +7,8 @@ description: Server-side guard preventing a truck being 'approved' on two date-o
 
 Server-side enforcement blocks a truck (vehicle) from being `approved` on two active jobs whose working-day sets overlap. Enforced at the three write paths that can flip an assignment to approved / attach a vehicle (job accept auto-approve, assignment approve, assignment vehicle change). Date overlap uses the weekend-aware working-day expansion shared with the calendar.
 
+**Driver guard added (parallel to truck guard):** `findApprovedDriverConflicts` + `driverConflictMessage(self)` mirror the truck functions but key on `driver_id`. Wired into the TWO paths where a driver becomes approved — job accept auto-approve (checks `auth.userId`, self-facing message) and assignment approve (now also SELECTs `driver_id`, contractor-facing message). NOT on vehicle-change (driver doesn't change there). Same scope/caveats as truck guard below (only `approved` blocks; concurrency race + cross-writer/website paths NOT closed). Overlap is day-level on purpose — these are day-bookings, no time-of-day slotting.
+
 **Why this exists:** before this, conflict detection was read-only UI (a `vehicle-conflicts` endpoint) and never enforced, so the same truck could be approved on overlapping jobs. replit.md *claimed* "conflict re-check" existed but it was not implemented — doc/code drift.
 
 ## Deliberate scope decisions (be consistent)
