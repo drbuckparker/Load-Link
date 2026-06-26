@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "mOB2q710rXl1PvErGjEfn"
+uri = "file://assets/sounds/truckhorn.mp3"
+type = "audio"
+title = "truck_horn"

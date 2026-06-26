@@ -12,7 +12,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, ChakraPetch_600SemiBold, ChakraPetch_700Bold } from "@expo-google-fonts/chakra-petch";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
-import { playNotificationSound } from "@/lib/sounds";
+import { playNotificationSound, playTruckHornSound } from "@/lib/sounds";
 
 if (Platform.OS === 'web' && typeof window !== 'undefined') {
   window.addEventListener('unhandledrejection', (event) => {
@@ -116,8 +116,13 @@ export default function RootLayout() {
       try {
         const N = await import('expo-notifications');
         if (cancelled) return;
-        notifSub = N.addNotificationReceivedListener(() => {
-          playNotificationSound();
+        notifSub = N.addNotificationReceivedListener((notification) => {
+          const data = notification?.request?.content?.data as any;
+          if (data?.type === 'job_application') {
+            playTruckHornSound();
+          } else {
+            playNotificationSound();
+          }
           queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
         });
         responseSub = N.addNotificationResponseReceivedListener((response) => {

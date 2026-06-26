@@ -14,12 +14,12 @@ const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 
-async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>) {
+async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>, sound: string = 'default') {
   try {
     const result = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
     const token = result.rows[0]?.expo_push_token;
     if (!token) return;
-    const message = { to: token, sound: 'default' as const, title, body, data: data || {} };
+    const message = { to: token, sound, title, body, data: data || {} };
     const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1026,7 +1026,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const truckCount = (vehicleIds && Array.isArray(vehicleIds)) ? vehicleIds.length : 1;
         const notifTitle = 'New Truck Application';
         const notifBody = `${applicantName} applied ${truckCount} truck${truckCount > 1 ? 's' : ''} to your ${jobForNotif?.material || ''} job`;
-        sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: 'job_application' });
+        // Create an in-app notification row so the contractor sees it in the
+        // notifications list with an unread badge on the bell (not just a push).
+        try {
+          await pool.query(
+            `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+             VALUES ($1, $2, 'new_load', $3, $4, $5, false, NOW())`,
+            [crypto.randomUUID(), contractorId, notifTitle, notifBody, req.params.id]
+          );
+        } catch (e: any) {
+          console.error("Job-application notification insert error:", e.message);
+        }
+        // Truck-horn sound on the contractor's device for new applications.
+        sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: 'job_application' }, 'truckhorn.wav');
       }
       return res.json({ ...addDualKeys(jobForNotif || { id: req.params.id, status: 'pending' }), autoApproved });
     } catch (e: any) {

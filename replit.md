@@ -80,7 +80,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Project Management**: Contractors can create, update, and manage projects, linking jobs to specific projects.
 - **Weight Ticket System**: Supports uploading weight tickets for job runs, with reminders and viewing capabilities.
 - **Location Services**: GPS tracking for clock-in/out, location-based job filtering, and integration with Google Places/Maps.
-- **Push Notifications**: Utilizes Expo Push for critical updates.
+- **Push Notifications**: Utilizes Expo Push for critical updates. When a driver applies to a posted job, the contractor gets BOTH a push (with a custom `truckhorn.wav` sound) AND an in-app notification row (so the home-screen bell badge + notifications list populate — a push alone does NOT show in the inbox). The DB notification row reuses the existing `new_load` enum value because the shared `notification_type` enum (owned by the website) has no `job_application` value; the truck-horn trigger keys off the push payload's free-form `data.type: 'job_application'` instead. The in-app truck horn (`lib/sounds.ts` → `playTruckHornSound`, played by the foreground listener in `app/_layout.tsx`) is iOS-only by existing design; the custom lock-screen push sound requires a native rebuild (Expo Launch) and does not work in Expo Go.
 - **Partial Availability**: Drivers can specify which days they're available for multi-day jobs via `available_days` on job_assignments.
 
 ## External Dependencies
