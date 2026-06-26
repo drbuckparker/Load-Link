@@ -14,3 +14,4 @@
 - [Companion DB topology](companion-db-topology.md) — dev DATABASE_URL IS the live shared Neon prod DB (writes hit production+website); Replit's managed "production" replica is empty/unused — don't verify prod through it.
 - [Contractor app-notifications](contractor-app-notifications.md) — bell badge/inbox read the `notifications` table, not pushes; `notification_type` enum is website-owned (no `job_application` — reuse `new_load`); truck-horn keys off push `data.type`.
 - [Driver/foreman invitations](driver-invitations.md) — companion reads invite list from shared DB but must proxy CREATE to website /api/invitations (it owns the accept-link email); send dual-keyed payloads.
+- [Geofence (0,0) coord trap](geofence-zero-coords.md) — a failed GPS read must resolve to null, never {0,0}; the clock-in geofence reads (0,0) as ~6000mi away and falsely blocks (Android-skewed).

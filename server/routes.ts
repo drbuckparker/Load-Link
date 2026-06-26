@@ -1573,8 +1573,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         const driverLat = Number(startLat);
         const driverLng = Number(startLng);
-        if (isNaN(driverLat) || isNaN(driverLng)) {
-          return res.status(400).json({ code: "LOCATION_REQUIRED", message: "Invalid location data." });
+        // Treat (0,0) as "no location": it's a real point in the ocean off
+        // Africa that older clients sent as a failure fallback, which made the
+        // geofence report a bogus ~6000 miles. Ask for a real fix instead.
+        if (isNaN(driverLat) || isNaN(driverLng) || (driverLat === 0 && driverLng === 0)) {
+          return res.status(400).json({
+            code: "LOCATION_REQUIRED",
+            message: "Location is required to clock in. Enable location and try again.",
+          });
         }
         let closest: number;
         if (oLat != null && oLng != null && dLat != null && dLng != null) {

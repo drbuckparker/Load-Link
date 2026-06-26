@@ -983,24 +983,36 @@ export default function JobDetailScreen() {
     setSubmittingBid(false);
   }
 
-  async function getDriverLocation(): Promise<{ lat: number; lng: number }> {
+  // Returns the driver's real GPS coordinates, or null when location is
+  // unavailable (permission denied, GPS off, timeout). We must NOT fall back to
+  // {0,0} — that is a real point in the ocean off Africa, which the geofence
+  // check reads as ~6000 miles away and wrongly blocks clock-in.
+  async function getDriverLocation(): Promise<{ lat: number; lng: number } | null> {
+    const isValidCoord = (lat: number, lng: number) =>
+      Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
     try {
       if (Platform.OS === 'web') {
         return await new Promise((resolve) => {
-          if (!navigator.geolocation) return resolve({ lat: 0, lng: 0 });
+          if (!navigator.geolocation) return resolve(null);
           navigator.geolocation.getCurrentPosition(
-            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-            () => resolve({ lat: 0, lng: 0 }),
+            (pos) => resolve(
+              isValidCoord(pos.coords.latitude, pos.coords.longitude)
+                ? { lat: pos.coords.latitude, lng: pos.coords.longitude }
+                : null
+            ),
+            () => resolve(null),
             { timeout: 10000, enableHighAccuracy: true }
           );
         });
       }
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return { lat: 0, lng: 0 };
+      if (status !== 'granted') return null;
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      return { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      return isValidCoord(loc.coords.latitude, loc.coords.longitude)
+        ? { lat: loc.coords.latitude, lng: loc.coords.longitude }
+        : null;
     } catch {
-      return { lat: 0, lng: 0 };
+      return null;
     }
   }
 
@@ -1083,6 +1095,11 @@ export default function JobDetailScreen() {
     setShowTimePicker(null);
     try {
       const loc = await getDriverLocation();
+      if (!loc) {
+        setClockInError('Location is required to clock in. Please enable location services for LoadLink and try again.');
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
       const adjusted = isTimeAdjusted();
       const body: any = { ...loc };
       if (adjusted) {
@@ -1135,6 +1152,11 @@ export default function JobDetailScreen() {
     setShowTimePicker(null);
     try {
       const loc = await getDriverLocation();
+      if (!loc) {
+        setClockInError('Location is required to clock in. Please enable location services for LoadLink and try again.');
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return;
+      }
       const adjusted = isTimeAdjusted();
       const body: any = { ...loc };
       if (adjusted) {
@@ -1170,7 +1192,8 @@ export default function JobDetailScreen() {
       const activeRun = runs?.find?.((r: any) => !r.clock_out_time && !r.clockOutTime);
       if (activeRun) {
         const loc = await getDriverLocation();
-        const body: any = { lat: loc.lat || 0, lng: loc.lng || 0, loads_hauled: loadsHauled };
+        const body: any = { loads_hauled: loadsHauled };
+        if (loc) { body.lat = loc.lat; body.lng = loc.lng; }
         if (timeManuallyAdjusted) {
           body.custom_time = getPickerDate().toISOString();
           body.time_manually_entered = true;
