@@ -314,6 +314,18 @@ export default function ProfileScreen() {
         </Pressable>
 
         {isContractor && (
+          <Pressable style={styles.navCard} onPress={() => router.push('/invite')}>
+            <View style={styles.navCardLeft}>
+              <View style={[styles.navIconBox, { backgroundColor: 'rgba(59,130,246,0.15)' }]}>
+                <Ionicons name="person-add-outline" size={18} color={Colors.info} />
+              </View>
+              <Text style={styles.navCardText}>Invite Driver / Foreman</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+          </Pressable>
+        )}
+
+        {isContractor && (
           <View style={{ marginBottom: 20 }}>
             <Pressable
               style={styles.navCard}

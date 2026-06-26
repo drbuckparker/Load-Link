@@ -2439,6 +2439,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.json({ ok: true });
   });
 
+  // --- Driver / foreman invitations ---
+  // Invite a driver or foreman by email to create a LoadLink profile.
+  // CREATE forwards to the website's /api/invitations so it can send the
+  // accept-link email (an email side-effect the companion cannot replicate)
+  // and own the acceptance flow. LIST reads the shared driver_invitations
+  // table directly (local-first read pattern, no JWT dependency).
+  app.post("/api/driver-invitations", requireAuth, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const role = (auth.user?.role || '').toLowerCase();
+    const canInvite = role.includes('contractor') || role.includes('trucking_company');
+    if (!canInvite) {
+      return res.status(403).json({ message: "Only contractors and trucking companies can send invitations." });
+    }
+    const email = (req.body?.email || req.body?.driverEmail || "").trim().toLowerCase();
+    const type = (req.body?.type || req.body?.invitationType || "driver").trim();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({ message: "A valid email address is required." });
+    }
+    if (type !== "driver" && type !== "foreman") {
+      return res.status(400).json({ message: "Invitation type must be 'driver' or 'foreman'." });
+    }
+    const firstName = (req.body?.firstName || req.body?.driverFirstName || "").trim();
+    const lastName = (req.body?.lastName || req.body?.driverLastName || "").trim();
+    const phone = (req.body?.phone || req.body?.driverPhone || "").trim();
+    const message = (req.body?.message || "").trim();
+    const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+
+    // Send both key cases so the website handler can read either format.
+    const payload: any = {
+      email, driverEmail: email, driver_email: email,
+      invitationType: type, invitation_type: type, type,
+    };
+    if (firstName) { payload.driverFirstName = firstName; payload.driver_first_name = firstName; }
+    if (lastName) { payload.driverLastName = lastName; payload.driver_last_name = lastName; }
+    if (fullName) { payload.driverName = fullName; payload.driver_name = fullName; }
+    if (phone) { payload.driverPhone = phone; payload.driver_phone = phone; }
+    if (message) { payload.message = message; }
+
+    try {
+      const websiteRes = await websiteFetch("/api/invitations", {
+        method: "POST",
+        body: payload,
+        jwt: auth.jwt,
+      });
+      const text = await websiteRes.text();
+      let data: any = {};
+      try { data = JSON.parse(text); } catch {}
+      if (!websiteRes.ok) {
+        // Pass 401 through so the app's silent re-login + retry can kick in.
+        if (websiteRes.status === 401) {
+          return res.status(401).json({ message: "Your session expired. Please try again." });
+        }
+        const msg = data?.message || data?.error || "Could not send the invitation. Please try again.";
+        return res.status(400).json({ message: msg });
+      }
+      return res.json(addDualKeys(data?.invitation || data || { ok: true }));
+    } catch (e: any) {
+      console.error("Invitation send error:", e.message);
+      return res.status(502).json({ message: "Could not reach the LoadLink service to send the invitation." });
+    }
+  });
+
+  app.get("/api/driver-invitations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const role = (auth.user?.role || '').toLowerCase();
+      if (!(role.includes('contractor') || role.includes('trucking_company'))) {
+        return res.json([]);
+      }
+      const result = await pool.query(
+        `SELECT * FROM driver_invitations
+         WHERE contractor_id = $1 OR trucking_company_id = $1
+         ORDER BY created_at DESC LIMIT 100`,
+        [auth.userId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch (e: any) {
+      console.error("Invitation list error:", e.message);
+      return res.json([]);
+    }
+  });
+
   app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
