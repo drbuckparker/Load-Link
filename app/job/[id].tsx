@@ -1008,10 +1008,23 @@ export default function JobDetailScreen() {
       }
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      return isValidCoord(loc.coords.latitude, loc.coords.longitude)
-        ? { lat: loc.coords.latitude, lng: loc.coords.longitude }
-        : null;
+      // Race a fresh GPS fix against a timeout so a slow/cold GPS receiver does
+      // not hang the clock-in button forever. Balanced accuracy returns a fix
+      // faster than High and is plenty accurate for a 15-mile geofence.
+      const fresh = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 12000)),
+      ]);
+      if (fresh && isValidCoord(fresh.coords.latitude, fresh.coords.longitude)) {
+        return { lat: fresh.coords.latitude, lng: fresh.coords.longitude };
+      }
+      // Fall back to the last cached fix — fast, and works when a fresh read is
+      // slow or momentarily unavailable in the field.
+      const last = await Location.getLastKnownPositionAsync().catch(() => null);
+      if (last && isValidCoord(last.coords.latitude, last.coords.longitude)) {
+        return { lat: last.coords.latitude, lng: last.coords.longitude };
+      }
+      return null;
     } catch {
       return null;
     }
