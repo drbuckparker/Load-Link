@@ -466,12 +466,13 @@ export default function ProfileScreen() {
           <View style={styles.statusCard}>
             <View style={styles.statusLeft}>
               <Ionicons name="car" size={20} color={Colors.success} />
-              <View>
+              <View style={styles.statusTextWrap}>
                 <Text style={styles.statusTitle}>I also drive</Text>
                 <Text style={styles.statusSubtitle}>Show up in my fleet & get driver job notifications</Text>
               </View>
             </View>
             <Switch
+              style={{ marginLeft: 12 }}
               value={!!(user as any).alsoDriver || !!(user as any).also_driver}
               onValueChange={async (val) => {
                 if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1053,7 +1054,8 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     marginBottom: 20,
   },
-  statusLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  statusLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  statusTextWrap: { flex: 1 },
   statusDot: { width: 12, height: 12, borderRadius: 6 },
   statusTitle: {
     fontFamily: 'Inter_600SemiBold',
