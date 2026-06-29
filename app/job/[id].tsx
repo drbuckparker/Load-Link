@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 let _Notif: typeof import('expo-notifications') | null = null;
 async function getNotif() {
   if (_Notif) return _Notif;
