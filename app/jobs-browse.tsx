@@ -236,7 +236,10 @@ export default function JobsBrowseScreen() {
     },
     onSuccess: () => {
       pinSaveProjectRef.current = null;
-      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
+      // Refresh projects AND the views that show a project's site address on a
+      // map (job lists + calendar) so a saved address change propagates there
+      // too — the backend cascades the new address/coords onto linked jobs.
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && (k.includes('/api/projects') || k.includes('/api/jobs') || k.includes('/api/contractor') || k.includes('/api/calendar'))) });
       setEditingProject(null);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
@@ -741,12 +744,14 @@ export default function JobsBrowseScreen() {
       const res = await apiRequest('GET', `/api/places/geocode?address=${encodeURIComponent(address)}`);
       if (res.ok) {
         const data = await res.json();
+        // Only resolve coordinates here — never overwrite the address the user
+        // typed. The Geocoding API is disabled, so this hits "Find Place from
+        // Text", which snaps arbitrary input to the nearest known place and
+        // would silently replace the user's address (often back to the original).
         if (target === 'new') {
           setNewProjectSiteLat(data.lat); setNewProjectSiteLng(data.lng);
-          if (data.address) setNewProjectSiteAddress(data.address);
         } else {
           setEditProjectSiteLat(data.lat); setEditProjectSiteLng(data.lng);
-          if (data.address) setEditProjectSiteAddress(data.address);
         }
       }
     } catch {}
