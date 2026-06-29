@@ -135,6 +135,8 @@ export default function JobsBrowseScreen() {
   const [showNewProjectMapPicker, setShowNewProjectMapPicker] = useState(false);
   const [showEditProjectMapPicker, setShowEditProjectMapPicker] = useState(false);
   const editingProjectRef = useRef<ProjectItem | null>(null);
+  const editPinSavedRef = useRef(false);
+  const pinSaveProjectRef = useRef<ProjectItem | null>(null);
   const siteDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const siteGeoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userLocationRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -233,11 +235,17 @@ export default function JobsBrowseScreen() {
       return res.json();
     },
     onSuccess: () => {
+      pinSaveProjectRef.current = null;
       queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
       setEditingProject(null);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: () => {
+      // If this save came from the drop-pin flow (editor already closed), reopen
+      // the editor so the user can retry without losing their pin/other edits.
+      const pinProj = pinSaveProjectRef.current;
+      pinSaveProjectRef.current = null;
+      if (pinProj) setEditingProject(pinProj);
       Alert.alert('Error', 'Failed to update project');
     },
   });
@@ -1361,11 +1369,38 @@ export default function JobsBrowseScreen() {
 
       <LocationPickerModal
         visible={showEditProjectMapPicker}
-        onClose={() => { setShowEditProjectMapPicker(false); if (editingProjectRef.current) { setTimeout(() => setEditingProject(editingProjectRef.current), 300); editingProjectRef.current = null; } }}
+        onClose={() => {
+          setShowEditProjectMapPicker(false);
+          const proj = editingProjectRef.current;
+          // If a pin was just chosen we auto-saved it, so don't reopen the editor.
+          // If the user cancelled (no pin chosen), reopen the editor so their other edits aren't lost.
+          if (!editPinSavedRef.current && proj) {
+            setTimeout(() => setEditingProject(proj), 300);
+          }
+          editPinSavedRef.current = false;
+          editingProjectRef.current = null;
+        }}
         onSelect={(result) => {
           setEditProjectSiteAddress(result.address);
           setEditProjectSiteLat(result.lat);
           setEditProjectSiteLng(result.lng);
+          const proj = editingProjectRef.current;
+          if (proj) {
+            // Save immediately so dropping a pin persists the address without
+            // needing the user to reopen the editor and tap "Save Changes" again.
+            editPinSavedRef.current = true;
+            pinSaveProjectRef.current = proj;
+            updateProjectMutation.mutate({
+              id: String(proj.id),
+              name: (editProjectName.trim() || proj.name || '').trim(),
+              job_number: editProjectJobNumber.trim(),
+              site_address: result.address,
+              site_lat: result.lat,
+              site_lng: result.lng,
+              notes: editProjectNotes.trim(),
+              awarded_amount: editProjectAwarded.trim(),
+            });
+          }
         }}
         title="Pick Site Location"
         initialLat={editProjectSiteLat ?? undefined}

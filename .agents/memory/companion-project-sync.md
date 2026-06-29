@@ -40,3 +40,13 @@ push upstream to the website's `/api/contractor-projects`, not just write the sh
 - A not-yet-succeeded `sync_queue` row (even one stuck on a retryable 401) exempts the
   project from the reconcile soft-delete, so transient upstream auth failures won't
   re-trigger auto-deletion; the queued write drains once the session JWT refreshes.
+
+**Frontend "Drop Pin on Map" edit gotcha:** the site-address `LocationPickerModal` is a
+`presentationStyle="fullScreen"` modal, so the project edit modal must be *closed* before
+it opens (two fullScreen iOS modals can't stack) — done via `setEditingProject(null)` then
+`setShowEditProjectMapPicker(true)` after 300ms. This makes editing feel like "the window
+closed without saving." Fix applied: on pin-select for an existing project, **auto-save
+immediately** (fire the update mutation with the picked address/coords) instead of making
+the user reopen the editor and tap Save again; reopen the editor only on cancel or save
+failure. Backend persistence is separate (sticky site fields above) and was the deeper
+root cause of "address reverts."
