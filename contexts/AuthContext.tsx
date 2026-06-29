@@ -12,6 +12,7 @@ export interface User {
   email: string;
   phone: string;
   role: string;
+  accountRole: string;
   company?: string;
   profileImageUrl?: string;
   truckType?: string;
@@ -55,6 +56,7 @@ function mapDbUser(dbUser: any): User {
     email: dbUser.email || '',
     phone: dbUser.phone || '',
     role: dbUser.role || 'driver',
+    accountRole: dbUser.account_role || dbUser.accountRole || dbUser.role || 'driver',
     company: dbUser.company,
     profileImageUrl: dbUser.profile_image_url || dbUser.profileImageUrl,
     truckType: dbUser.truck_type || dbUser.truckType,

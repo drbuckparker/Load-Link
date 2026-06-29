@@ -18,6 +18,15 @@ function isContractorRole(role: string): boolean {
   return role.includes('contractor') || role === 'trucking_company';
 }
 
+// The account's permanent entitlement (e.g. "trucking_company_contractor"),
+// independent of whichever view the home-page toggle is currently showing.
+// Falls back to the active `role` when the entitlement isn't one of the cards
+// below (e.g. driver-inclusive compound roles not listed in ROLES).
+function getAccountRoleKey(user: any): string {
+  const accountRole = user?.accountRole;
+  return ROLES.some(r => r.key === accountRole) ? accountRole : (user?.role || '');
+}
+
 type SettingsTab = 'profile' | 'role' | 'earnings' | 'help' | 'account' | 'billing';
 
 const TABS: { key: SettingsTab; label: string; icon: string }[] = [
@@ -147,7 +156,7 @@ export default function ProfileScreen() {
   }
 
   async function handleRoleSwitch(role: string) {
-    if (role === user?.role) return;
+    if (role === getAccountRoleKey(user)) return;
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
     const doSwitch = async () => {
@@ -491,7 +500,7 @@ export default function ProfileScreen() {
 
         <View style={styles.roleGrid}>
           {ROLES.map(r => {
-            const isActive = user.role === r.key;
+            const isActive = getAccountRoleKey(user) === r.key;
             return (
               <Pressable
                 key={r.key}

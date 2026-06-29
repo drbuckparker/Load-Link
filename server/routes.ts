@@ -128,7 +128,17 @@ function addDualKeys(obj: any): any {
   return result;
 }
 
-function getWebsiteAuth(req: Request): { jwt: string; userId: string; user: any } | null {
+// Returns the user object for client responses, augmented with `accountRole` —
+// the account's *entitlement* (the originalRole captured at login). This is
+// stable even when the in-memory session `role` reflects a temporary
+// active-view switch. The client uses `role` for the active view and
+// `accountRole` for the account type shown in Settings, so toggling the
+// home-page view no longer rewrites what Settings displays.
+function userPayload(user: any, originalRole?: string): any {
+  return addDualKeys({ ...user, accountRole: originalRole || user?.role });
+}
+
+function getWebsiteAuth(req: Request): { jwt: string; userId: string; user: any; originalRole?: string } | null {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
@@ -229,7 +239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             };
             tokenToJwt.set(localToken, authEntry);
             saveJsonMap("sessions.json", tokenToJwt);
-            return res.json({ token: localToken, user: addDualKeys(dbUser) });
+            return res.json({ token: localToken, user: userPayload(dbUser, authEntry.originalRole) });
           }
         } catch (devErr: any) {
           console.error("Dev local login failed, falling back to website:", devErr.message);
@@ -265,7 +275,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
 
-      const enrichedUser = addDualKeys(user);
+      const enrichedUser = userPayload(user, authEntry.originalRole);
       res.json({ token: localToken, user: enrichedUser });
 
       fullSync(authEntry).catch(() => {});
@@ -294,9 +304,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (jwt && user) {
         const localToken = crypto.randomBytes(32).toString("hex");
-        tokenToJwt.set(localToken, { jwt, userId: user.id, user });
+        const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
+        tokenToJwt.set(localToken, authEntry);
         saveJsonMap("sessions.json", tokenToJwt);
-        return res.json({ token: localToken, user: addDualKeys(user) });
+        return res.json({ token: localToken, user: userPayload(user, authEntry.originalRole) });
       }
 
       return res.json(addDualKeys(data));
@@ -318,7 +329,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    return res.json({ user: addDualKeys(auth.user) });
+    return res.json({ user: userPayload(auth.user, auth.originalRole) });
   });
 
   // Permanently delete the authenticated user's account and ALL associated data.
@@ -2003,7 +2014,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/profile", requireAuth, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    return res.json(addDualKeys(auth.user));
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
 
   app.put("/api/profile", requireAuth, async (req: Request, res: Response) => {
@@ -2059,7 +2070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) { tokenToJwt.set(localToken, auth); saveJsonMap("sessions.json", tokenToJwt); }
-    return res.json(addDualKeys(auth.user));
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
 
   app.put("/api/profile/status", requireAuth, async (req: Request, res: Response) => {
@@ -2072,7 +2083,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       await pool.query(`UPDATE users SET is_connected = $1, updated_at = NOW() WHERE id = $2`, [newStatus, auth.userId]);
     } catch {}
-    return res.json(addDualKeys(auth.user));
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
 
   app.put("/api/profile/role", requireAuth, async (req: Request, res: Response) => {
@@ -2113,7 +2124,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       tokenToJwt.set(localToken, auth);
       saveJsonMap("sessions.json", tokenToJwt);
     }
-    return res.json(addDualKeys(auth.user));
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
 
   app.get("/api/drivers/search", requireAuth, async (req: Request, res: Response) => {
