@@ -561,17 +561,40 @@ export default function JobsBrowseScreen() {
             <Ionicons name="time-outline" size={13} color={Colors.textMuted} />
             <Text style={styles.footerText}>{item.pickupTime || '—'}</Text>
           </View>
-          {item.driverId ? (
-            <View style={styles.footerItem}>
-              <Ionicons name="person-outline" size={13} color={Colors.textMuted} />
-              <Text style={styles.footerText}>Assigned</Text>
-            </View>
-          ) : (
-            <View style={styles.footerItem}>
-              <Ionicons name="people-outline" size={13} color={Colors.textMuted} />
-              <Text style={styles.footerText}>No driver</Text>
-            </View>
-          )}
+          {(() => {
+            const needed = Number(item.trucksNeeded) || 0;
+            const approved = Number(item.approvedAssignments) || 0;
+            if (needed > 0 && approved >= needed) {
+              return (
+                <View style={styles.footerItem}>
+                  <Ionicons name="checkmark-circle" size={13} color={Colors.success} />
+                  <Text style={[styles.footerText, { color: Colors.success }]}>All trucks approved</Text>
+                </View>
+              );
+            }
+            if (approved > 0) {
+              return (
+                <View style={styles.footerItem}>
+                  <Ionicons name="people-outline" size={13} color={Colors.textMuted} />
+                  <Text style={styles.footerText}>{approved}/{needed} trucks</Text>
+                </View>
+              );
+            }
+            if (item.driverId) {
+              return (
+                <View style={styles.footerItem}>
+                  <Ionicons name="person-outline" size={13} color={Colors.textMuted} />
+                  <Text style={styles.footerText}>Assigned</Text>
+                </View>
+              );
+            }
+            return (
+              <View style={styles.footerItem}>
+                <Ionicons name="people-outline" size={13} color={Colors.textMuted} />
+                <Text style={styles.footerText}>No driver</Text>
+              </View>
+            );
+          })()}
           <Text style={styles.timeAgoText}>{timeAgo(item.createdAt)}</Text>
         </View>
       </Pressable>
