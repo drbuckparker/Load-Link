@@ -31,3 +31,22 @@ device/permission problem but was a missing import; no device setting could fix 
   not a manual `ios.infoPlist` entry, so both platforms get correct native manifests.
   Manifest/permission changes require a **new native build**; a JS-only import fix
   can ship via OTA.
+
+---
+
+## Companion add-on: "location is on but app says it's required"
+
+Distinct from the missing-import bug above. When the device's location is ON but
+the **app's own** foreground permission is denied, iOS returns `denied` from
+`requestForegroundPermissionsAsync()` **without re-prompting** — so a plain "try
+again" can never succeed. The clock-in failure path must distinguish this:
+- After a null location read, call `Location.getForegroundPermissionsAsync()`.
+- If `status !== 'granted'` → it's a permission block, not a GPS problem. Show an
+  "Open Settings" action (`Linking.openSettings()`) and tell the user to set
+  LoadLink's Location to "While Using the App". Do NOT tell them to just retry.
+- If granted but still null → real GPS timeout/no-signal; tell them to retry with
+  clear sky/window.
+
+Manual fix the user can do immediately (no new build needed): iPhone Settings →
+LoadLink → Location → "While Using the App". The code improvement is JS-only and
+can ship via OTA.

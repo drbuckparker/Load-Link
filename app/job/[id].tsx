@@ -1030,6 +1030,32 @@ export default function JobDetailScreen() {
     }
   }
 
+  // When a clock-in location read fails, tell the driver WHY and offer the real
+  // fix. The phone's location can be ON while LoadLink's own permission is
+  // denied — iOS won't re-prompt in that case, so a plain "try again" never
+  // works; the only fix is flipping the app's permission in Settings.
+  async function reportClockInLocationError() {
+    if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    if (Platform.OS === 'web') {
+      setClockInError('Location is required to clock in. Allow location access in your browser and try again.');
+      return;
+    }
+    const perm = await Location.getForegroundPermissionsAsync().catch(() => null);
+    if (perm && perm.status !== 'granted') {
+      setClockInError('LoadLink doesn\u2019t have permission to use your location. Open Settings \u2192 LoadLink \u2192 Location and choose \u201cWhile Using the App\u201d, then try again.');
+      Alert.alert(
+        'Allow LoadLink to use your location',
+        'Your phone\u2019s location is on, but LoadLink itself is blocked from using it, so we can\u2019t confirm you\u2019re at the job site. Open Settings and set LoadLink\u2019s location to \u201cWhile Using the App\u201d.',
+        [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => { Linking.openSettings().catch(() => {}); } },
+        ],
+      );
+      return;
+    }
+    setClockInError('We couldn\u2019t get your location. Make sure you\u2019re outdoors or near a window with a clear GPS signal, then try again.');
+  }
+
   function openTimePicker(mode: 'clock-in' | 'clock-out') {
     const now = new Date();
     const h = now.getHours();
@@ -1110,8 +1136,7 @@ export default function JobDetailScreen() {
     try {
       const loc = await getDriverLocation();
       if (!loc) {
-        setClockInError('Location is required to clock in. Please enable location services for LoadLink and try again.');
-        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        await reportClockInLocationError();
         return;
       }
       const adjusted = isTimeAdjusted();
@@ -1167,8 +1192,7 @@ export default function JobDetailScreen() {
     try {
       const loc = await getDriverLocation();
       if (!loc) {
-        setClockInError('Location is required to clock in. Please enable location services for LoadLink and try again.');
-        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        await reportClockInLocationError();
         return;
       }
       const adjusted = isTimeAdjusted();
