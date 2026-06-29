@@ -3682,6 +3682,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [id]);
       const project = result.rows[0];
 
+      // Register the project with the website, then persist its details.
+      // syncProjects() reconciles local projects against the website's
+      // /api/contractor-projects list and soft-deletes any it can't find, so an
+      // unpushed project gets wiped ~5 min later. Two steps are required:
+      //   1) POST creates/registers the project (site fields are NOT persisted
+      //      by the create endpoint).
+      //   2) PUT persists site_address/lat/lng + notes — without it the periodic
+      //      down-sync (upsertMany) overwrites the local row with the website's
+      //      site-less copy, wiping the address/coordinates.
+      (async () => {
+        await pushToWebsite("/api/contractor-projects", auth, {
+          method: "POST",
+          body: { id, name, site_address: siteAddress, site_lat: siteLat, site_lng: siteLng, contractorId: auth.userId },
+        });
+        await pushToWebsite(`/api/contractor-projects/${id}`, auth, {
+          method: "PUT",
+          body: { name, job_number: jobNumber, site_address: siteAddress, site_lat: siteLat, site_lng: siteLng, notes },
+        });
+      })().catch(() => {});
+
       return res.status(201).json(addDualKeys(project));
     } catch (e: any) {
       console.error("POST /api/projects error:", e.message);
@@ -3761,6 +3781,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Propagate the edit to the website so the reconcile keeps it in sync.
+      // Send canonical snake_case fields from the updated row — the website's
+      // validation rejects the client's camelCase shape (see POST above).
+      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, {
+        method: "PUT",
+        body: {
+          name: project.name,
+          job_number: project.job_number,
+          site_address: project.site_address,
+          site_lat: project.site_lat,
+          site_lng: project.site_lng,
+          notes: project.notes,
+        },
+      }).catch(() => {});
+
       return res.json({ ...addDualKeys(project), cascadedJobs: cascaded });
     } catch (e: any) {
       console.error("PUT /api/projects error:", e.message);
@@ -3777,6 +3812,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [req.params.id, auth.userId]
       );
       if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+
+      // Propagate the delete to the website so it drops out of the reconcile list too.
+      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, {
+        method: "DELETE",
+      }).catch(() => {});
+
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -3788,10 +3829,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const upd = await pool.query(
         `UPDATE contractor_projects SET status = 'active', deleted_at = NULL
-         WHERE id = $1 AND contractor_id::text = $2 RETURNING id`,
+         WHERE id = $1 AND contractor_id::text = $2 RETURNING *`,
         [req.params.id, auth.userId]
       );
       if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+
+      // Re-register with the website (the delete dropped it from their list), so
+      // the reconcile sees it again instead of soft-deleting it on the next sync.
+      // POST re-creates, then PUT persists the site fields (see POST route note).
+      const p = upd.rows[0];
+      (async () => {
+        await pushToWebsite("/api/contractor-projects", auth, {
+          method: "POST",
+          body: {
+            id: p.id,
+            name: p.name,
+            site_address: p.site_address,
+            site_lat: p.site_lat,
+            site_lng: p.site_lng,
+            contractorId: auth.userId,
+          },
+        });
+        await pushToWebsite(`/api/contractor-projects/${p.id}`, auth, {
+          method: "PUT",
+          body: {
+            name: p.name,
+            job_number: p.job_number,
+            site_address: p.site_address,
+            site_lat: p.site_lat,
+            site_lng: p.site_lng,
+            notes: p.notes,
+          },
+        });
+      })().catch(() => {});
+
       return res.json({ ok: true });
     } catch {
       return res.status(500).json({ message: "Failed to restore project" });
