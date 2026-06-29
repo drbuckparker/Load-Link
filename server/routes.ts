@@ -1025,6 +1025,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           [req.params.id, auth.userId]
         );
         await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+        // Auto-approved applicant: pull their other overlapping PENDING applications too.
+        await withdrawConflictingPendingApplications(String(req.params.id), Array.isArray(vehicleIds) ? vehicleIds : [], [auth.userId], auth);
         autoApproved = true;
       }
 
@@ -1333,6 +1335,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
       await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      // Pull this truck/driver's other overlapping PENDING applications so a second
+      // contractor never opens an application that can only 409 ("already booked").
+      await withdrawConflictingPendingApplications(String(req.params.id), [approveVid], [approveDid], auth);
       pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
@@ -3184,6 +3189,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return self
       ? `You're already booked${onJob} for ${pretty.join(', ')}. You can't be on two jobs the same day — finish or drop the other booking first.`
       : `That driver is already booked${onJob} for ${pretty.join(', ')}. Approve them on different dates or remove the other booking first.`;
+  }
+
+  // After a truck/driver becomes APPROVED on a job, automatically withdraw that
+  // same truck's (or driver's) still-PENDING applications on OTHER active jobs
+  // whose working days overlap. This stops a second contractor from ever opening
+  // a stuck application that can only error out ("already booked"), and clears it
+  // from their applicant list. The applicant (trucking company) is notified for
+  // each application that was pulled. Best-effort: failures never block approval.
+  async function withdrawConflictingPendingApplications(
+    targetJobId: string,
+    vehicleIds: (string | null | undefined)[],
+    driverIds: (string | null | undefined)[],
+    auth: { jwt: string; userId: string; user: any }
+  ): Promise<void> {
+    try {
+      const vIds = Array.from(new Set((vehicleIds || []).filter((v): v is string => !!v)));
+      const dIds = Array.from(new Set((driverIds || []).filter((v): v is string => !!v)));
+      if (vIds.length === 0 && dIds.length === 0) return;
+
+      const jr = await pool.query(
+        `SELECT material, scheduled_date, estimated_days, includes_weekends, includes_saturday, includes_sunday FROM jobs WHERE id = $1`,
+        [targetJobId]
+      );
+      const tj = jr.rows[0];
+      if (!tj || !tj.scheduled_date) return;
+      const targetDates = new Set(
+        getJobDateRange(
+          tj.scheduled_date,
+          Number(tj.estimated_days) || 1,
+          !!tj.includes_weekends,
+          tj.includes_saturday !== false,
+          tj.includes_sunday !== false
+        )
+      );
+      if (targetDates.size === 0) return;
+      const targetMaterial = tj.material || '';
+
+      const others = await pool.query(
+        `SELECT ja.id, ja.driver_id, ja.job_id, j.material AS job_material, j.scheduled_date,
+                j.estimated_days, j.includes_weekends, j.includes_saturday, j.includes_sunday
+         FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id
+         WHERE ja.job_id <> $1
+           AND ja.status::text = 'pending'
+           AND ( ja.vehicle_id::text = ANY($2::text[]) OR ja.driver_id::text = ANY($3::text[]) )
+           AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
+        [targetJobId, vIds, dIds]
+      );
+
+      const toWithdraw: { id: string; driverId: string; jobId: string; jobMaterial: string | null; dates: string[] }[] = [];
+      for (const r of others.rows) {
+        const otherDates = getJobDateRange(
+          r.scheduled_date,
+          Number(r.estimated_days) || 1,
+          !!r.includes_weekends,
+          r.includes_saturday !== false,
+          r.includes_sunday !== false
+        );
+        const overlap = otherDates.filter((d) => targetDates.has(d));
+        if (overlap.length > 0) {
+          toWithdraw.push({ id: String(r.id), driverId: String(r.driver_id), jobId: String(r.job_id), jobMaterial: r.job_material || null, dates: overlap });
+        }
+      }
+      if (toWithdraw.length === 0) return;
+
+      // Conditional withdraw: only flip rows that are STILL pending, so if another
+      // contractor approved one of these between our SELECT and UPDATE, we never
+      // clobber that approval. RETURNING tells us exactly which rows we pulled.
+      const updated = await pool.query(
+        `UPDATE job_assignments SET status = 'withdrawn'
+         WHERE id = ANY($1::varchar[]) AND status::text = 'pending'
+         RETURNING id`,
+        [toWithdraw.map((w) => w.id)]
+      );
+      const withdrawnIds = new Set(updated.rows.map((r: any) => String(r.id)));
+      const pulled = toWithdraw.filter((w) => withdrawnIds.has(w.id));
+      if (pulled.length === 0) return;
+
+      // Reopen any affected job that now has no remaining active applicants — but
+      // only from a still-fillable state, never demoting an accepted/in-progress job.
+      for (const jobId of Array.from(new Set(pulled.map((w) => w.jobId)))) {
+        const remaining = await pool.query(
+          `SELECT COUNT(*)::int AS c FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`,
+          [jobId]
+        );
+        if ((remaining.rows[0]?.c || 0) === 0) {
+          await pool.query(
+            `UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1 AND status::text IN ('open', 'pending')`,
+            [jobId]
+          );
+        }
+      }
+
+      // Notify the applicant (trucking company) for each application that was pulled.
+      const onJob = targetMaterial ? `a "${targetMaterial}" job` : 'another job';
+      for (const w of pulled) {
+        const dates = Array.from(new Set(w.dates)).sort().map((d) => { const [, m, day] = d.split('-'); return `${Number(m)}/${Number(day)}`; });
+        const title = 'Application withdrawn — double booking';
+        const body = `Your application${w.jobMaterial ? ` for the "${w.jobMaterial}" job` : ''} was automatically withdrawn because you were approved on ${onJob} that overlaps ${dates.join(', ')}.`;
+        try {
+          await pool.query(
+            `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+             VALUES ($1, $2, 'general', $3, $4, $5, false, NOW())`,
+            [crypto.randomUUID(), w.driverId, title, body, w.jobId]
+          );
+        } catch (e: any) {
+          console.error("Auto-withdraw notification insert error:", e.message);
+        }
+        sendPushNotification(w.driverId, title, body, { jobId: w.jobId, type: 'application_withdrawn' });
+      }
+    } catch (e: any) {
+      console.error("withdrawConflictingPendingApplications error:", e.message);
+    }
   }
 
   async function getJobsForCalendar(auth: { jwt: string; userId: string; user: any }, role: 'driver' | 'contractor'): Promise<any[]> {
