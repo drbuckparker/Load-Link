@@ -976,6 +976,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Fleets (trucking companies) run multiple trucks/drivers, so they're exempt
+      // from the DRIVER-level double-booking guard and driver-level auto-withdraw —
+      // only the per-truck guard applies. Computed once for reuse below.
+      const callerIsFleet = isAutoApprove ? await isFleetAccount(auth.userId) : false;
+
       // Double-booking guard: an auto-approved application is committed immediately
       // and the flip below approves ALL of this driver's pending assignments on the
       // job, not just the trucks in this request. So reject up-front if any truck
@@ -995,10 +1000,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (conflicts.length > 0) {
           return res.status(409).json({ message: bookingConflictMessage(conflicts), conflicts });
         }
-        // Driver double-booking: this driver can't be approved on two overlapping jobs.
-        const driverConflicts = await findApprovedDriverConflicts([auth.userId], String(req.params.id));
-        if (driverConflicts.length > 0) {
-          return res.status(409).json({ message: driverConflictMessage(driverConflicts, true), conflicts: driverConflicts });
+        // Driver double-booking: a SOLO driver can't be approved on two overlapping
+        // jobs. Fleets are exempt — they can run different trucks from their fleet on
+        // overlapping jobs (the per-truck guard above still blocks the SAME truck).
+        if (!callerIsFleet) {
+          const driverConflicts = await findApprovedDriverConflicts([auth.userId], String(req.params.id));
+          if (driverConflicts.length > 0) {
+            return res.status(409).json({ message: driverConflictMessage(driverConflicts, true), conflicts: driverConflicts });
+          }
         }
       }
 
@@ -1031,8 +1040,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           [req.params.id, auth.userId]
         );
         await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
-        // Auto-approved applicant: pull their other overlapping PENDING applications too.
-        await withdrawConflictingPendingApplications(String(req.params.id), Array.isArray(vehicleIds) ? vehicleIds : [], [auth.userId], auth);
+        // Auto-approved applicant: pull their other overlapping PENDING applications.
+        // Fleets only pull the SAME truck's other pending apps (driverIds omitted) so a
+        // company can keep DIFFERENT trucks pending on overlapping jobs.
+        await withdrawConflictingPendingApplications(String(req.params.id), Array.isArray(vehicleIds) ? vehicleIds : [], callerIsFleet ? [] : [auth.userId], auth);
         autoApproved = true;
       }
 
@@ -1327,13 +1338,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const vRow = await pool.query(`SELECT vehicle_id, driver_id FROM job_assignments WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
       const approveVid = vRow.rows[0]?.vehicle_id;
       const approveDid = vRow.rows[0]?.driver_id;
+      // Fleets can run different trucks on overlapping jobs, so the driver-level guard
+      // and driver-level auto-withdraw below don't apply to them (per-truck guard does).
+      const approvedIsFleet = await isFleetAccount(approveDid);
       if (approveVid) {
         const conflicts = await findApprovedTruckConflicts([approveVid], String(req.params.id));
         if (conflicts.length > 0) {
           return res.status(409).json({ message: bookingConflictMessage(conflicts), conflicts });
         }
       }
-      if (approveDid) {
+      if (approveDid && !approvedIsFleet) {
         const driverConflicts = await findApprovedDriverConflicts([approveDid], String(req.params.id));
         if (driverConflicts.length > 0) {
           return res.status(409).json({ message: driverConflictMessage(driverConflicts, false), conflicts: driverConflicts });
@@ -1343,7 +1357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       // Pull this truck/driver's other overlapping PENDING applications so a second
       // contractor never opens an application that can only 409 ("already booked").
-      await withdrawConflictingPendingApplications(String(req.params.id), [approveVid], [approveDid], auth);
+      await withdrawConflictingPendingApplications(String(req.params.id), [approveVid], approvedIsFleet ? [] : [approveDid], auth);
       pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {});
       return res.json({ ok: true });
     } catch (e: any) {
@@ -3127,6 +3141,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const material = conflicts.find((c) => c.jobMaterial)?.jobMaterial;
     const onJob = material ? ` on another "${material}" job` : ' on another job';
     return `That truck is already booked${onJob} for ${pretty.join(', ')}. Pick a different truck or remove the other booking first.`;
+  }
+
+  // A trucking company runs a FLEET — multiple trucks, multiple drivers — so it can
+  // legitimately have DIFFERENT trucks approved on overlapping jobs. The driver-level
+  // double-booking guard ("one human can't be in two places") must NOT apply to fleets;
+  // only the per-truck guard does. Detected from the account's role entitlement
+  // (users.role), which includes 'trucking_company' for every fleet-capable role.
+  async function isFleetAccount(userId: string | null | undefined): Promise<boolean> {
+    if (!userId) return false;
+    const r = await pool.query(`SELECT role FROM users WHERE id::text = $1`, [String(userId)]);
+    return String(r.rows[0]?.role || '').includes('trucking_company');
   }
 
   // Shared double-booking guard for DRIVERS. Mirrors findApprovedTruckConflicts
