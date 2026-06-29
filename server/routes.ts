@@ -592,39 +592,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paramIdx++;
       }
       // Hide jobs from Find Jobs when they're no longer truly available to apply to.
-      // EXCEPTION: never hide a job from the contractor who posted it — they should
-      // always be able to see their own postings in Find Jobs as a "this is live"
-      // confirmation, regardless of crewed/approved/cap status.
-      // Conditions for hiding (apply only when caller is NOT the contractor):
-      //   a) Fully crewed: approved trucks >= trucks_needed
-      //   b) Application cap hit: (pending+approved) >= cap AND caller hasn't applied
-      //      Cap by trucks_needed: 1 -> 5, 2 -> 8, 3+ -> 3 * trucks_needed
-      //   c) Caller is already an approved truck on this job — it lives on their
-      //      calendar now, not in Find Jobs.
+      // Conditions for hiding:
+      //   a) Fully crewed: approved trucks >= trucks_needed — hidden from EVERYONE,
+      //      including the contractor who posted it. A fully-staffed job is no longer
+      //      "available", so it should drop out of Find Jobs for all viewers.
+      //   b) (caller-only) Caller is already an approved truck on this job — it lives
+      //      on their calendar now, not in Find Jobs.
+      //   c) (caller-only) Application cap hit: (pending+approved) >= cap AND caller
+      //      hasn't applied. Cap by trucks_needed: 1 -> 5, 2 -> 8, 3+ -> 3 * needed.
+      // EXCEPTION: conditions (b) and (c) never apply to the contractor who posted the
+      // job — they still see their own NOT-YET-FULL postings as a "this is live"
+      // confirmation. Only (a) — truly full — hides a poster's own job.
       query += ` AND NOT (
-        j.contractor_id::text != $${paramIdx}
-        AND j.status::text IN ('open', 'accepted', 'pending')
+        j.status::text IN ('open', 'accepted', 'pending')
         AND (
           (SELECT COUNT(*) FROM job_assignments ja
             WHERE ja.job_id = j.id AND ja.status::text = 'approved')
           >= COALESCE(j.trucks_needed, 1)
-          OR EXISTS (
-            SELECT 1 FROM job_assignments ja
-            WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
-              AND ja.status::text = 'approved'
-          )
           OR (
-            (SELECT COUNT(*) FROM job_assignments ja
-              WHERE ja.job_id = j.id AND ja.status::text IN ('pending', 'approved'))
-            >= CASE
-                WHEN COALESCE(j.trucks_needed, 1) <= 1 THEN 5
-                WHEN COALESCE(j.trucks_needed, 1) = 2 THEN 8
-                ELSE 3 * COALESCE(j.trucks_needed, 1)
-              END
-            AND NOT EXISTS (
-              SELECT 1 FROM job_assignments ja
-              WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
-                AND ja.status::text IN ('pending', 'approved')
+            j.contractor_id::text != $${paramIdx}
+            AND (
+              EXISTS (
+                SELECT 1 FROM job_assignments ja
+                WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
+                  AND ja.status::text = 'approved'
+              )
+              OR (
+                (SELECT COUNT(*) FROM job_assignments ja
+                  WHERE ja.job_id = j.id AND ja.status::text IN ('pending', 'approved'))
+                >= CASE
+                    WHEN COALESCE(j.trucks_needed, 1) <= 1 THEN 5
+                    WHEN COALESCE(j.trucks_needed, 1) = 2 THEN 8
+                    ELSE 3 * COALESCE(j.trucks_needed, 1)
+                  END
+                AND NOT EXISTS (
+                  SELECT 1 FROM job_assignments ja
+                  WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
+                    AND ja.status::text IN ('pending', 'approved')
+                )
+              )
             )
           )
         )

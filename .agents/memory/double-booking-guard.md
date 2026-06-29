@@ -25,3 +25,7 @@ The double-booking feature now has TWO complementary halves — touching one wit
 
 ## Note: pre-existing double-bookings are not auto-cleaned
 The guard only prevents NEW dupes; it never modifies existing approved assignments. So overlapping approvals created before the guard can persist in the data. Detecting/cleaning them is a separate, user-authorized data fix (run `findApprovedTruckConflicts`-style query, confirm with the user, then un-approve the losing assignment) — not something the guard does.
+
+## Find Jobs availability hide filter (GET /api/jobs)
+The driver/browse "available jobs" list hides a job when any: (a) fully crewed (approved >= trucks_needed), (b) caller is already an approved truck on it, (c) application cap reached and caller hasn't applied. **Decision:** (a) hides for EVERYONE including the contractor who posted the job; (b)/(c) stay contractor-exempt so a poster still sees their own NOT-yet-full postings.
+**Why:** a fully-staffed job is no longer "available", so it should drop out for all viewers (was previously visible to the poster because the whole hide block was gated by `contractor_id != caller`). The demo compound-role account posts AND applies, which surfaced this.
