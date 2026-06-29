@@ -155,13 +155,24 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
   // cleared notifications reappear. Make is_read "sticky": once read locally or
   // upstream, it stays read.
   const readSticky = tableName === "notifications";
+  // Project site fields (address + coords) are companion-owned: the website's
+  // /api/contractor-projects PUT returns 200 but does NOT persist them, so its
+  // GET reports them back as null. A blind overwrite would wipe a contractor's
+  // locally-saved project address on the next sync. Preserve the local value
+  // whenever the website sends null/absent; let a real website value win.
+  const projectSiteSticky = tableName === "contractor_projects";
+  const PROJECT_SITE_FIELDS = new Set(["site_address", "site_lat", "site_lng"]);
   const updateClauses = keys
     .filter((k) => k !== idField)
-    .map((k) =>
-      readSticky && k === "is_read"
-        ? `is_read = (COALESCE(${tableName}.is_read, false) OR COALESCE(EXCLUDED.is_read, false))`
-        : `${k} = EXCLUDED.${k}`
-    );
+    .map((k) => {
+      if (readSticky && k === "is_read") {
+        return `is_read = (COALESCE(${tableName}.is_read, false) OR COALESCE(EXCLUDED.is_read, false))`;
+      }
+      if (projectSiteSticky && PROJECT_SITE_FIELDS.has(k)) {
+        return `${k} = COALESCE(EXCLUDED.${k}, ${tableName}.${k})`;
+      }
+      return `${k} = EXCLUDED.${k}`;
+    });
 
   const archiveGuard = ARCHIVE_PROTECTED_TABLES.has(tableName) && columns.has("archived_at");
   const withdrawnGuard = tableName === "job_assignments" && columns.has("status");

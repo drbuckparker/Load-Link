@@ -20,6 +20,15 @@ push upstream to the website's `/api/contractor-projects`, not just write the sh
    local row with the site-less website copy, erasing the address/coords. Only the
    website **PUT** persists site fields (proven: PUT-updated projects keep their address;
    POST-only ones lose it).
+3. **Edit-revert (down-sync clobber):** even with PUT, the website does NOT persist site
+   fields for many projects, so its `GET /api/contractor-projects` keeps returning
+   `site_address=null`. The plain down-sync upsert (`col = EXCLUDED.col`) then writes that
+   null back over a freshly-edited local address every cycle, so app edits "revert" within
+   ~2 min. Fix: `upsertRow` treats site fields as **sticky** — for `contractor_projects`,
+   `site_address/site_lat/site_lng` use `col = COALESCE(EXCLUDED.col, table.col)` so a
+   website null never clobbers a local value (mirrors the `is_read` readSticky pattern).
+   This makes the companion's local value the source of truth for site fields (the website
+   can still push a non-null update, but never wipe to null).
 
 **How to apply:**
 - Create and restore must push **POST (register) then PUT (persist site fields)**, in
