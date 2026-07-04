@@ -191,7 +191,12 @@ export default function JobDetailScreen() {
   });
 
   const job = jobData ? mapJob(jobData) : null;
-  const isMyPostedJob = isContractor && job?.contractorId === user?.id;
+  // A job's poster owns it regardless of which role they are currently viewing
+  // as. Basing this on isContractor hid the applications/management sections for
+  // trucking_company posters (isContractorRole excludes 'trucking_company') and
+  // whenever a compound-role user was viewing in fleet/driver mode. Ownership is
+  // the correct signal — if the job's contractor id is me, I posted it.
+  const isMyPostedJob = !!job && !!user && job.contractorId === user.id;
   const myAssignments = (jobData?.assignments || []).filter((a: any) => a.driver_id === user?.id);
   const myAssignment = myAssignments[0] || null;
   const hasApplied = myAssignments.length > 0;
