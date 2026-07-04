@@ -2528,13 +2528,19 @@ export default function JobDetailScreen() {
 
         {isMyPostedJob && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
           <View style={{ gap: 10, marginHorizontal: 16, marginTop: 10 }}>
-            <Pressable
-              style={({ pressed }) => [styles.completeJobBtn, pressed && { opacity: 0.85 }]}
-              onPress={handleMarkComplete}
-            >
-              <Ionicons name="checkmark-circle" size={20} color={Colors.success} />
-              <Text style={styles.completeJobBtnText}>MARK JOB COMPLETED</Text>
-            </Pressable>
+            {/* Marking a job complete is a contractor-only action. Trucking
+                companies (fleet managers) and drivers do the work but never
+                close out the job — even the poster only sees this in the
+                contractor role view. */}
+            {isContractor && (
+              <Pressable
+                style={({ pressed }) => [styles.completeJobBtn, pressed && { opacity: 0.85 }]}
+                onPress={handleMarkComplete}
+              >
+                <Ionicons name="checkmark-circle" size={20} color={Colors.success} />
+                <Text style={styles.completeJobBtnText}>MARK JOB COMPLETED</Text>
+              </Pressable>
+            )}
             <Pressable
               style={({ pressed }) => [styles.editJobBtn, pressed && { opacity: 0.85 }]}
               onPress={() => router.push(`/edit-job/${id}`)}
