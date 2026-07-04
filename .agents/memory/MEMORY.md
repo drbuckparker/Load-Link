@@ -17,4 +17,5 @@
 - [Contractor app-notifications](contractor-app-notifications.md) — bell badge/inbox read the `notifications` table, not pushes; `notification_type` enum is website-owned (no `job_application` — reuse `new_load`); truck-horn keys off push `data.type`.
 - [Driver/foreman invitations](driver-invitations.md) — companion reads invite list from shared DB but must proxy CREATE to website /api/invitations (it owns the accept-link email); send dual-keyed payloads.
 - [Geofence (0,0) coord trap](geofence-zero-coords.md) — a failed GPS read must resolve to null, never {0,0}; the clock-in geofence reads (0,0) as ~6000mi away and falsely blocks (Android-skewed).
+- [Clock-out persistence & billing parity](clockout-billing-parity.md) — clock-out must persist req.body (loads/end-loc/billed) via the local DB write; display/persisted/invoice billing must all use one per-run rule or numbers diverge.
 - [Clock-in early-time window](clock-in-time-window.md) — driver can clock in only ≤15min before start; enforced in BOTH the client button-note and the server TOO_EARLY guard — keep the two in lockstep.

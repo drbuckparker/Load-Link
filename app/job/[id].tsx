@@ -1654,10 +1654,33 @@ export default function JobDetailScreen() {
                 const allSeconds = getAllCompletedRunsSeconds();
                 if (allSeconds <= 0) return null;
                 const allMinutes = Math.floor(allSeconds / 60);
-                const allBilled = getBilledMinutes(allMinutes);
                 const allHrs = Math.floor(allMinutes / 60);
                 const allMins = allMinutes % 60;
                 const totalLoads = completedRuns.reduce((sum: number, r: any) => sum + (r.loads_hauled || 0), 0);
+                // Bill each run the same way the server (computeJobEarnings) does:
+                // prefer the persisted billed snapshot, then actual, then raw elapsed
+                // time — summed per run — so this summary always matches the invoice.
+                const runBilledMinutes = (r: any): number => {
+                  const billed = r.billed_duration_minutes ?? r.billedDurationMinutes;
+                  if (billed != null) return Number(billed);
+                  const actual = r.actual_duration_minutes ?? r.actualDurationMinutes;
+                  if (actual != null) return Number(actual);
+                  const s = new Date(r.started_at || r.startedAt).getTime();
+                  const e = new Date(r.ended_at || r.endedAt).getTime();
+                  if (s && e) return Math.max(0, (e - s) / 60000);
+                  return 0;
+                };
+                const allBilled = completedRuns.reduce((sum: number, r: any) => sum + runBilledMinutes(r), 0);
+                const rate = Number(job?.rate || 0);
+                const rt = String(job?.rateType || '');
+                let billedTotal = 0;
+                switch (rt) {
+                  case 'per_load': billedTotal = totalLoads * rate; break;
+                  case 'flat':
+                  case 'flat_rate':
+                  case 'per_job': billedTotal = rate; break;
+                  default: billedTotal = (allBilled / 60) * rate;
+                }
                 const dayGroups: Record<string, number> = {};
                 for (const r of completedRuns) {
                   const d = new Date(r.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -1678,7 +1701,7 @@ export default function JobDetailScreen() {
                         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Total Time</Text>
                       </View>
                       <View style={{ alignItems: 'center', flex: 1 }}>
-                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{allBilled}</Text>
+                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{Math.round(allBilled)}</Text>
                         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Min Billed</Text>
                       </View>
                       <View style={{ alignItems: 'center', flex: 1 }}>
@@ -1692,6 +1715,12 @@ export default function JobDetailScreen() {
                         </View>
                       )}
                     </View>
+                    {billedTotal > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,153,0,0.2)' }}>
+                        <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.textSecondary, letterSpacing: 0.5 }}>TOTAL BILLED</Text>
+                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 18, color: Colors.primary }}>${billedTotal.toFixed(2)}</Text>
+                      </View>
+                    )}
                   </View>
                 );
               })()}

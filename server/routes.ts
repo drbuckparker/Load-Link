@@ -195,6 +195,19 @@ function formatDuration(totalSeconds: number): string {
 }
 
 
+// Hourly billing rule: a 1-hour minimum, then rounded into 15-minute segments
+// (a segment counts once you're 5+ minutes into it). Mirrors getBilledMinutes()
+// in app/job/[id].tsx so the app display, the persisted billed minutes, and the
+// invoice totals all agree.
+function billedMinutesFrom(actualMinutes: number): number {
+  if (actualMinutes <= 60) return 60;
+  const overFirst = actualMinutes - 60;
+  const fullSegments = Math.floor(overFirst / 15);
+  const remainder = overFirst % 15;
+  const billedSegments = remainder >= 5 ? fullSegments + 1 : fullSegments;
+  return 60 + billedSegments * 15;
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   function requireAuth(req: Request, res: Response, next: Function) {
     const auth = getWebsiteAuth(req);
@@ -1665,18 +1678,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/job-runs/:runId/clock-out", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const runRow = await pool.query(`SELECT job_id, driver_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      const runRow = await pool.query(`SELECT job_id, driver_id, started_at FROM job_runs WHERE id = $1`, [req.params.runId]);
       if (runRow.rows.length === 0) return res.status(404).json({ message: "Run not found" });
-      const { job_id: jobIdForEnd, driver_id: runDriverId } = runRow.rows[0];
+      const { job_id: jobIdForEnd, driver_id: runDriverId, started_at: runStartedAt } = runRow.rows[0];
       if (String(runDriverId) !== auth.userId) {
         const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [jobIdForEnd]);
         if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
           return res.status(403).json({ message: "You do not have permission to clock out this run" });
         }
       }
-      await pool.query(`UPDATE job_runs SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE id = $1`, [req.params.runId]);
+
+      // Persist everything the client submits on clock-out. The previous version
+      // only set status + ended_at=NOW() and dropped the body, so loads_hauled,
+      // the end location, any manually-adjusted clock-out time, and the billed
+      // snapshot were all lost — loads showed 0 and earnings fell back to raw
+      // elapsed time instead of billed time.
+      const body: any = req.body || {};
+      const now = new Date();
+      const customTime = body.custom_time || body.customTime || null;
+      let endedAt = customTime ? new Date(customTime) : now;
+      if (isNaN(endedAt.getTime())) endedAt = now;
+
+      let actualMin: number | null = null;
+      let billedMin: number | null = null;
+      if (runStartedAt) {
+        actualMin = Math.max(0, Math.round((endedAt.getTime() - new Date(runStartedAt).getTime()) / 60000));
+        billedMin = billedMinutesFrom(actualMin);
+      }
+      const loads = body.loads_hauled != null ? Number(body.loads_hauled)
+        : body.loadsHauled != null ? Number(body.loadsHauled) : null;
+      const endLat = body.lat != null ? Number(body.lat)
+        : body.end_lat != null ? Number(body.end_lat) : null;
+      const endLng = body.lng != null ? Number(body.lng)
+        : body.end_lng != null ? Number(body.end_lng) : null;
+
+      await pool.query(
+        `UPDATE job_runs SET
+           status = 'completed',
+           ended_at = $2,
+           actual_duration_minutes = COALESCE($3::int, actual_duration_minutes),
+           billed_duration_minutes = COALESCE($4::int, billed_duration_minutes),
+           loads_hauled = COALESCE($5::int, loads_hauled),
+           end_lat = COALESCE($6::numeric, end_lat),
+           end_lng = COALESCE($7::numeric, end_lng),
+           updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.runId, endedAt, actualMin, billedMin, loads, endLat, endLng]
+      );
       if (jobIdForEnd) {
-        pushToWebsite(`/api/jobs/${jobIdForEnd}/end`, auth, { method: "POST", body: { ...(req.body || {}), runId: req.params.runId } }).catch(() => {});
+        pushToWebsite(`/api/jobs/${jobIdForEnd}/end`, auth, { method: "POST", body: { ...(body || {}), runId: req.params.runId } }).catch(() => {});
       }
       const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [req.params.runId]);
       return res.json(addDualKeys(result.rows[0] || { id: req.params.runId }));
@@ -1791,19 +1841,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/job-runs/:runId", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const runRow = await pool.query(`SELECT driver_id, job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      const runRow = await pool.query(`SELECT driver_id, job_id, started_at, ended_at FROM job_runs WHERE id = $1`, [req.params.runId]);
       if (runRow.rows.length === 0) return res.status(404).json({ message: "Run not found" });
-      const { driver_id: runDriverId, job_id: runJobId } = runRow.rows[0];
+      const { driver_id: runDriverId, job_id: runJobId, started_at: existingStart, ended_at: existingEnd } = runRow.rows[0];
       if (String(runDriverId) !== auth.userId) {
         const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [runJobId]);
         if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
           return res.status(403).json({ message: "You do not have permission to update this run" });
         }
       }
+      // When a run's times are edited, recompute the billed-duration snapshot so
+      // earnings and the job summary stay in sync with the new start/end.
+      const body: any = { ...req.body };
+      if ('started_at' in body || 'ended_at' in body || 'startedAt' in body || 'endedAt' in body) {
+        const s = body.started_at ?? body.startedAt ?? existingStart;
+        const e = body.ended_at ?? body.endedAt ?? existingEnd;
+        if (s && e) {
+          const sd = new Date(s), ed = new Date(e);
+          if (!isNaN(sd.getTime()) && !isNaN(ed.getTime()) && ed.getTime() > sd.getTime()) {
+            const actual = Math.max(0, Math.round((ed.getTime() - sd.getTime()) / 60000));
+            body.actual_duration_minutes = actual;
+            body.billed_duration_minutes = billedMinutesFrom(actual);
+          }
+        }
+      }
       const updates: string[] = [];
       const values: any[] = [];
       let idx = 1;
-      for (const [k, v] of Object.entries(req.body)) {
+      for (const [k, v] of Object.entries(body)) {
         if (v !== undefined) {
           updates.push(`${camelToSnake(k)} = $${idx}`);
           values.push(v);
