@@ -11,9 +11,10 @@ role (session-scoped view), not the compound entitlement. So a
 `user.role === 'trucking_company'`, and `isContractorRole` (
 `role.includes('contractor') && role !== 'trucking_company'`) is **false** there.
 
-**Rule:** Contractor-only job-management actions (e.g. MARK JOB COMPLETED) must
-gate on `isMyPostedJob && isContractor`, not ownership alone. Gating on ownership
-only made the button appear in the fleet/driver view of a job the account posted.
+**Rule:** Contractor-only job-management actions (MARK JOB COMPLETED, EDIT JOB,
+ARCHIVE JOB — the whole owner-actions block on job details) must gate on
+`isMyPostedJob && isContractor`, not ownership alone. Gating on ownership only
+made the buttons appear in the fleet/driver view of a job the account posted.
 **Why:** the poster owns the job in every view, so `isMyPostedJob` can't
 distinguish "acting as contractor" from "acting as fleet manager."
 
