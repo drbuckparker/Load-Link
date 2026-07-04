@@ -409,6 +409,16 @@ export default function JobDetailScreen() {
     };
   }, [isRunning]);
 
+  // While the driver is not clocked in, tick every 30s so the time-based
+  // clock-in restriction re-evaluates and the button unlocks on its own at the
+  // 15-minutes-before-start mark without needing a manual refresh.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    if (isRunning) return;
+    const t = setInterval(() => setNowTick(v => v + 1), 30000);
+    return () => clearInterval(t);
+  }, [isRunning]);
+
   if (isLoading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
@@ -493,14 +503,9 @@ export default function JobDetailScreen() {
       const [h, m] = job.pickupTime.split(':').map(Number);
       const jobStart = new Date(now);
       jobStart.setHours(h, m, 0, 0);
-      const earliest = new Date(jobStart.getTime() - 30 * 60 * 1000);
+      const earliest = new Date(jobStart.getTime() - 15 * 60 * 1000);
       if (now < earliest) {
-        const diff = Math.ceil((earliest.getTime() - now.getTime()) / 60000);
-        const timeStr = jobStart.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-        if (diff > 60) {
-          return `Clock in opens at ${new Date(earliest.getTime()).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
-        }
-        return `Clock in opens in ${diff} min (${timeStr} start)`;
+        return 'Clock-in is allowed up to 15 minutes before the start time.';
       }
     }
 

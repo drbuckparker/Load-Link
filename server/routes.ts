@@ -1531,7 +1531,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ code: "INVALID_TIME", message: "Clock-in time can't be in the future." });
       }
 
-      // Rule: cannot clock in more than 30 min before scheduled start
+      // Rule: cannot clock in more than 15 min before scheduled start
       if (job.scheduled_date) {
         const dateStr = String(job.scheduled_date).substring(0, 10);
         const [y, m, d] = dateStr.split('-').map(Number);
@@ -1543,7 +1543,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // No pickup time: treat midnight (start of day) as the scheduled start
           scheduledStart = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
         }
-        const earliest = new Date(scheduledStart.getTime() - 30 * 60 * 1000);
+        const earliest = new Date(scheduledStart.getTime() - 15 * 60 * 1000);
         if (startedAt < earliest) {
           const diffMin = Math.ceil((earliest.getTime() - startedAt.getTime()) / 60000);
           const startStr = scheduledStart.toLocaleString('en-US', {
@@ -1552,7 +1552,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           return res.status(400).json({
             code: "TOO_EARLY",
-            message: `Clock-in opens 30 min before the scheduled start (${startStr}). Try again in ${diffMin} min.`,
+            message: `Clock-in is allowed up to 15 minutes before the start time (${startStr}). Try again in ${diffMin} min.`,
             earliestAt: earliest.toISOString(),
             scheduledStartAt: scheduledStart.toISOString(),
           });
