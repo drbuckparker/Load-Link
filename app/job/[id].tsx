@@ -20,7 +20,6 @@ import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJob
 import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
 import RouteMapView from '@/components/RouteMapView';
 import { pointToRouteMiles, CLOCKOUT_GEOFENCE_MILES } from '@/lib/geo';
-import { parsePickupTime } from '@shared/time';
 import { startClockOutMonitor, stopClockOutMonitor } from '@/lib/clockout-monitor';
 
 function isContractorRole(role: string): boolean {
@@ -522,17 +521,11 @@ export default function JobDetailScreen() {
       }
     }
 
-    const pickup = parsePickupTime(job.pickupTime);
-    if (pickup) {
-      const jobStart = new Date(now);
-      jobStart.setHours(pickup.hours, pickup.minutes, 0, 0);
-      const earliest = new Date(jobStart.getTime() - 15 * 60 * 1000);
-      if (now < earliest) {
-        const startLabel = jobStart.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-        return `Clock-in opens 15 min before the ${startLabel} start time.`;
-      }
-    }
-
+    // Clock-in is available at ANY time of day on a scheduled work day. The
+    // pickup time (e.g. 5:00 PM) is the scheduled start shown to drivers, but it
+    // is informational only — a driver who arrives early or late can still clock
+    // in. The 15-mile geofence (enforced server-side) is the real guard that the
+    // driver is actually at the job, so no time-of-day window is enforced.
     return null;
   })();
 

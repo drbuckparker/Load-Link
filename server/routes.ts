@@ -7,7 +7,6 @@ import bcrypt from "bcrypt";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
-import { parsePickupTime } from "@shared/time";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -1558,69 +1557,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ code: "INVALID_TIME", message: "Clock-in time can't be in the future." });
       }
 
-      // Rule: cannot clock in more than 15 min before scheduled start.
-      // pickup_time is a WALL-CLOCK time (12h "9:00 AM" or 24h "07:00") in the
-      // job's local timezone. This server runs in UTC and does not know the
-      // driver's timezone, so we compare wall-clock to wall-clock: both the
-      // scheduled start and the driver's clock-in moment are expressed as
-      // UTC-based "wall clock" milliseconds via Date.UTC(). The driver's local
-      // wall clock is reconstructed from the true instant + the client-supplied
-      // tz offset (minutes east of UTC).
+      // NOTE: No time-of-day clock-in window is enforced. A driver may clock in
+      // at ANY time (24/7) on the job day. The pickup time is the scheduled start
+      // shown to drivers — informational only, not a hard gate.
+      //
+      // The only remaining timing guard is at the DAY level: you can't clock into
+      // a job that hasn't started yet. We compare calendar DATES with a full day
+      // of slack instead of the driver's exact timezone (which we can't trust) —
+      // no local timezone is ever a full day off from UTC, so a legitimate
+      // clock-in on the scheduled day is never wrongly blocked, while clocking
+      // into a job days early is. Clocking in late (on/after the job day) is
+      // always allowed.
       if (job.scheduled_date) {
         const dateStr = String(job.scheduled_date).substring(0, 10);
         const [y, m, d] = dateStr.split('-').map(Number);
-        const pickup = parsePickupTime(job.pickup_time);
-        // No pickup time => treat start of day (midnight) as the scheduled start.
-        const hh = pickup ? pickup.hours : 0;
-        const mm = pickup ? pickup.minutes : 0;
-        const scheduledWallMs = Date.UTC(y, (m || 1) - 1, d || 1, hh, mm, 0, 0);
-        const earliestWallMs = scheduledWallMs - 15 * 60 * 1000;
-
-        // Determine the driver's timezone offset (minutes east of UTC) used to
-        // reconstruct their local wall clock. tz_offset comes from the client and
-        // is UNTRUSTED, so we validate it AND sanity-check it against the pickup
-        // longitude. The geofence below already requires the driver to be
-        // physically near pickup, so the pickup's timezone ≈ the driver's — this
-        // stops a caller from spoofing a wild offset to slip past the "too early"
-        // guard by claiming a far-away timezone.
-        const originLng = job.origin_lng != null ? Number(job.origin_lng) : null;
-        const clientOffRaw = req.body?.tz_offset ?? req.body?.tzOffset;
-        const clientOff = clientOffRaw == null ? NaN : Math.round(Number(clientOffRaw));
-        // Approx offset from longitude: 15° of longitude ≈ 1 hour. Civil time can
-        // differ from solar time by up to ~2h (DST, wide/shifted political zones),
-        // so we allow the client value within ±180 min of the location estimate.
-        const approxOff = originLng != null && Number.isFinite(originLng)
-          ? Math.round(originLng / 15) * 60
-          : null;
-        let tzOffset: number | null = null;
-        if (
-          Number.isFinite(clientOff) && clientOff >= -720 && clientOff <= 840 &&
-          (approxOff == null || Math.abs(clientOff - approxOff) <= 180)
-        ) {
-          tzOffset = clientOff;   // trusted: valid range + consistent with pickup location
-        } else if (approxOff != null) {
-          tzOffset = approxOff;   // missing/spoofed: fall back to location-derived offset
-        }
-        // If we still have no offset (no client value AND no pickup coords) we
-        // cannot know local time; fall back to the raw UTC instant (legacy,
-        // lenient) rather than risk wrongly blocking a legitimate driver.
-        const driverWallMs = tzOffset == null
-          ? startedAt.getTime()
-          : startedAt.getTime() + tzOffset * 60 * 1000;
-
-        if (driverWallMs < earliestWallMs) {
-          const diffMin = Math.ceil((earliestWallMs - driverWallMs) / 60000);
-          const startStr = new Date(scheduledWallMs).toLocaleString('en-US', {
-            timeZone: 'UTC',
-            month: 'short', day: 'numeric',
-            hour: 'numeric', minute: '2-digit',
-          });
-          return res.status(400).json({
-            code: "TOO_EARLY",
-            message: `Clock-in is allowed up to 15 minutes before the start time (${startStr}). Try again in ${diffMin} min.`,
-            earliestAt: new Date(earliestWallMs).toISOString(),
-            scheduledStartAt: new Date(scheduledWallMs).toISOString(),
-          });
+        if (y && m && d) {
+          const scheduledDayUTC = Date.UTC(y, m - 1, d);
+          const earliestAllowed = scheduledDayUTC - 24 * 60 * 60 * 1000; // 1-day tz slack
+          if (startedAt.getTime() < earliestAllowed) {
+            const startStr = new Date(scheduledDayUTC).toLocaleDateString('en-US', {
+              timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric',
+            });
+            return res.status(400).json({
+              code: "NOT_STARTED",
+              message: `This job starts ${startStr}. You can clock in any time on the job day.`,
+              scheduledStartAt: new Date(scheduledDayUTC).toISOString(),
+            });
+          }
         }
       }
 
