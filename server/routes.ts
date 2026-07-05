@@ -1096,12 +1096,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const jobResult = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
       const job = jobResult.rows[0];
 
+      // Only APPROVED assignments block a truck — this must match the accept/approve
+      // guards exactly (pending applications are only re-checked at approval time), or
+      // the truck-select sheet would show a false "blocked" that the server then allows.
       const assignResult = await pool.query(
-        `SELECT ja.*, j.scheduled_date, j.estimated_days, j.material as job_material FROM job_assignments ja
+        `SELECT ja.*, j.scheduled_date, j.estimated_days, j.material as job_material,
+                j.includes_weekends, j.includes_saturday, j.includes_sunday FROM job_assignments ja
          JOIN jobs j ON ja.job_id = j.id
          WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
          AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')
-         AND ja.status::text NOT IN ('withdrawn', 'rejected', 'cancelled', 'expired')`,
+         AND ja.status::text = 'approved'`,
         [req.params.id]
       );
 
@@ -1123,16 +1127,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const requiresTarp = job?.requires_tarp || false;
       const requiredType = job?.truck_type || null;
 
-      const jobStart = job?.scheduled_date ? new Date(job.scheduled_date) : null;
-      const jobDays = Math.ceil(Number(job?.estimated_days) || 1);
-      const jobDateKeys: string[] = [];
-      if (jobStart) {
-        for (let i = 0; i < jobDays; i++) {
-          const d = new Date(jobStart);
-          d.setDate(d.getDate() + i);
-          jobDateKeys.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`);
-        }
-      }
+      // Use the SAME date expansion as the accept-time guards so the truck-select
+      // sheet's warnings never disagree with what the server will actually allow.
+      const jobDateKeys: string[] = job?.scheduled_date
+        ? getJobDateRange(
+            job.scheduled_date,
+            Number(job.estimated_days) || 1,
+            !!job.includes_weekends,
+            job.includes_saturday !== false,
+            job.includes_sunday !== false,
+          )
+        : [];
 
       const vehicleConflicts: Record<string, any> = {};
       for (const v of vehiclesResult.rows) {
@@ -1175,12 +1180,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         for (const a of assignResult.rows) {
           if (a.vehicle_id !== vId) continue;
-          const aStart = new Date(a.scheduled_date);
-          const aDays = Math.ceil(Number(a.estimated_days) || 1);
-          for (let i = 0; i < aDays; i++) {
-            const d = new Date(aStart);
-            d.setDate(d.getDate() + i);
-            const dKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+          const aDates = getJobDateRange(
+            a.scheduled_date,
+            Number(a.estimated_days) || 1,
+            !!a.includes_weekends,
+            a.includes_saturday !== false,
+            a.includes_sunday !== false,
+          );
+          for (const dKey of aDates) {
             if (jobDateKeys.includes(dKey)) {
               conflictDates.push(dKey);
               if (a.job_material && !conflictJobs.includes(a.job_material)) conflictJobs.push(a.job_material);
@@ -3129,9 +3136,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     while (added < days) {
       const dow = current.getUTCDay();
       const isWeekendDay = dow === 0 || dow === 6;
-      const dayAllowed = !isWeekendDay
+      // Day 1 is always the scheduled start date — a job set for Sat/Sun means that
+      // exact day. Weekend-skipping only applies to continuation days of multi-day
+      // jobs, so a single weekend job no longer slides to the next weekday.
+      const dayAllowed = added === 0
         ? true
-        : (includesWeekends && ((dow === 6 && includesSaturday) || (dow === 0 && includesSunday)));
+        : (!isWeekendDay
+          ? true
+          : (includesWeekends && ((dow === 6 && includesSaturday) || (dow === 0 && includesSunday))));
       if (dayAllowed) {
         const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
         dates.push(key);
@@ -3211,12 +3223,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // A trucking company runs a FLEET — multiple trucks, multiple drivers — so it can
   // legitimately have DIFFERENT trucks approved on overlapping jobs. The driver-level
   // double-booking guard ("one human can't be in two places") must NOT apply to fleets;
-  // only the per-truck guard does. Detected from the account's role entitlement
-  // (users.role), which includes 'trucking_company' for every fleet-capable role.
+  // only the per-truck guard does. A fleet is detected either from the role entitlement
+  // (users.role contains 'trucking_company') OR from owning multiple trucks — some fleet
+  // owners carry the 'contractor' role but still run several trucks independently.
   async function isFleetAccount(userId: string | null | undefined): Promise<boolean> {
     if (!userId) return false;
     const r = await pool.query(`SELECT role FROM users WHERE id::text = $1`, [String(userId)]);
-    return String(r.rows[0]?.role || '').includes('trucking_company');
+    if (String(r.rows[0]?.role || '').includes('trucking_company')) return true;
+    // A fleet is anyone running multiple trucks — including a "contractor" role
+    // account that owns a fleet. Each truck books independently (the per-truck
+    // guard still blocks a single truck being double-booked), so the "one human,
+    // one place at a time" DRIVER guard must not apply to a multi-truck owner.
+    const tc = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM trucks WHERE trucking_company_id::text = $1 AND archived_at IS NULL`,
+      [String(userId)]
+    );
+    return (tc.rows[0]?.n || 0) >= 2;
   }
 
   // Shared double-booking guard for DRIVERS. Mirrors findApprovedTruckConflicts

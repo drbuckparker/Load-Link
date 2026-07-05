@@ -116,9 +116,14 @@ function getJobDateRange(scheduledDate: string, estimatedDays: number | string |
   while (added < days) {
     const dow = current.getUTCDay();
     const isWeekendDay = dow === 0 || dow === 6;
-    const dayAllowed = !isWeekendDay
+    // Day 1 is always the scheduled start date — a job set for Sat/Sun means that
+    // exact day. Weekend-skipping only applies to continuation days of multi-day
+    // jobs, so a single weekend job no longer slides to the next weekday.
+    const dayAllowed = added === 0
       ? true
-      : (includesWeekends && ((dow === 6 && includesSaturday) || (dow === 0 && includesSunday)));
+      : (!isWeekendDay
+        ? true
+        : (includesWeekends && ((dow === 6 && includesSaturday) || (dow === 0 && includesSunday))));
     if (dayAllowed) {
       const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
       dates.push(key);
