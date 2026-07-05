@@ -907,7 +907,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
-      if (dateChanged) {
+      // Mirror EVERY update to the website, not just date changes. We share the DB
+      // with the website, but the periodic sync (`syncJobs`) re-pulls jobs from the
+      // website and upserts them, overwriting any column the website doesn't know
+      // about with its stale value. If we only push on date changes, a time-only
+      // edit (pickup_time) survives locally until the next sync, then reverts to
+      // the website's old value on refresh. Pushing all updates keeps them in sync.
+      if (updates.length > 0) {
         pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
       }
       return res.json(addDualKeys(result.rows[0] || { id: req.params.id }));

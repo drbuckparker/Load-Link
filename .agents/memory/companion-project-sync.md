@@ -41,6 +41,15 @@ push upstream to the website's `/api/contractor-projects`, not just write the sh
   project from the reconcile soft-delete, so transient upstream auth failures won't
   re-trigger auto-deletion; the queued write drains once the session JWT refreshes.
 
+**Same pattern bites JOB edits:** `PUT /api/jobs/:id` writes the shared DB, but
+`syncJobs()` re-pulls the website's jobs every ~60s and `upsertMany` overwrites
+every column. So a job field the website never learns about reverts on the next
+sync. The route originally only pushed `pushToWebsite(PUT /api/jobs/:id)` when the
+**date** changed, so **time-only** (`pickup_time`) edits reverted on refresh. Fix:
+push on ANY update (`updates.length > 0`), not just `dateChanged`. General rule:
+any companion write to a website-synced entity must be mirrored upstream or the
+down-sync clobbers it.
+
 **Frontend "Drop Pin on Map" edit gotcha:** the site-address `LocationPickerModal` is a
 `presentationStyle="fullScreen"` modal, so the project edit modal must be *closed* before
 it opens (two fullScreen iOS modals can't stack) — done via `setEditingProject(null)` then
