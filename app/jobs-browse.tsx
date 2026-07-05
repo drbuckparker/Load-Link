@@ -466,17 +466,25 @@ export default function JobsBrowseScreen() {
     const statusColor = getStatusColor(item.status);
     const jobTypeColor = getJobTypeColor(item.jobType);
     const pending = item.pendingApplications || 0;
-    const hasPending = pending > 0;
+    const isCompleted = String(item.status).toLowerCase() === 'completed';
+    const hasPending = pending > 0 && !isCompleted;
 
     return (
       <Pressable
         style={({ pressed }) => [
           styles.cardContainer,
           hasPending && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' as any, backgroundColor: Colors.warningBg },
+          isCompleted && { borderColor: Colors.success },
           pressed && styles.cardPressed,
         ]}
         onPress={() => router.push(`/job/${item.id}`)}
       >
+        {isCompleted && (
+          <View style={styles.completedBanner}>
+            <Ionicons name="checkmark-circle" size={13} color="#001a00" />
+            <Text style={styles.completedBannerText}>COMPLETED</Text>
+          </View>
+        )}
         {hasPending && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(245,158,11,0.25)' }}>
             <Ionicons name="alert-circle" size={14} color={Colors.warning} />
@@ -519,11 +527,13 @@ export default function JobsBrowseScreen() {
         )}
 
         <View style={styles.badgeRow}>
-          <View style={[styles.badge, { backgroundColor: statusColor.bg }]}>
-            <Text style={[styles.badgeText, { color: statusColor.text }]}>
-              {item.status.replace('_', ' ').toUpperCase()}
-            </Text>
-          </View>
+          {!isCompleted && (
+            <View style={[styles.badge, { backgroundColor: statusColor.bg }]}>
+              <Text style={[styles.badgeText, { color: statusColor.text }]}>
+                {item.status.replace('_', ' ').toUpperCase()}
+              </Text>
+            </View>
+          )}
           <View style={[styles.badge, { backgroundColor: jobTypeColor.bg }]}>
             <Text style={[styles.badgeText, { color: jobTypeColor.text }]}>{formatJobType(item.jobType, item.estimatedDays)}</Text>
           </View>
@@ -1719,6 +1729,24 @@ const styles = StyleSheet.create({
   cardPressed: {
     backgroundColor: Colors.cardHover,
     transform: [{ scale: 0.99 }],
+  },
+  completedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.success,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginBottom: 12,
+  },
+  completedBannerText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontWeight: '700',
+    fontSize: 11,
+    letterSpacing: 1,
+    color: '#001a00',
   },
   cardHeader: {
     flexDirection: 'row',
