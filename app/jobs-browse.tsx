@@ -474,7 +474,7 @@ export default function JobsBrowseScreen() {
         style={({ pressed }) => [
           styles.cardContainer,
           hasPending && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' as any, backgroundColor: Colors.warningBg },
-          isCompleted && { borderColor: Colors.success },
+          isCompleted && { borderColor: Colors.success, borderWidth: 1.5 },
           pressed && styles.cardPressed,
         ]}
         onPress={() => router.push(`/job/${item.id}`)}
