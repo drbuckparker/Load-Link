@@ -20,6 +20,7 @@ import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJob
 import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
 import RouteMapView from '@/components/RouteMapView';
 import { pointToRouteMiles, CLOCKOUT_GEOFENCE_MILES } from '@/lib/geo';
+import { parsePickupTime } from '@shared/time';
 import { startClockOutMonitor, stopClockOutMonitor } from '@/lib/clockout-monitor';
 
 function isContractorRole(role: string): boolean {
@@ -521,13 +522,14 @@ export default function JobDetailScreen() {
       }
     }
 
-    if (job.pickupTime) {
-      const [h, m] = job.pickupTime.split(':').map(Number);
+    const pickup = parsePickupTime(job.pickupTime);
+    if (pickup) {
       const jobStart = new Date(now);
-      jobStart.setHours(h, m, 0, 0);
+      jobStart.setHours(pickup.hours, pickup.minutes, 0, 0);
       const earliest = new Date(jobStart.getTime() - 15 * 60 * 1000);
       if (now < earliest) {
-        return 'Clock-in is allowed up to 15 minutes before the start time.';
+        const startLabel = jobStart.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        return `Clock-in opens 15 min before the ${startLabel} start time.`;
       }
     }
 
@@ -1167,7 +1169,7 @@ export default function JobDetailScreen() {
         return;
       }
       const adjusted = isTimeAdjusted();
-      const body: any = { ...loc };
+      const body: any = { ...loc, tz_offset: -new Date().getTimezoneOffset() };
       if (adjusted) {
         body.custom_time = getPickerDate().toISOString();
         body.time_manually_entered = true;
@@ -1230,7 +1232,7 @@ export default function JobDetailScreen() {
         return;
       }
       const adjusted = isTimeAdjusted();
-      const body: any = { ...loc };
+      const body: any = { ...loc, tz_offset: -new Date().getTimezoneOffset() };
       if (adjusted) {
         body.custom_time = getPickerDate().toISOString();
         body.time_manually_entered = true;
