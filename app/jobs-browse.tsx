@@ -85,7 +85,7 @@ interface ProjectItem {
 
 const DRIVER_FILTERS = ['Open', 'My Jobs', 'Completed', 'All'] as const;
 const CONTRACTOR_FILTERS = ['Open', 'Active', 'Completed', 'All'] as const;
-const TRUCK_TYPES = ['end_dump', 'side_dump', 'belly_dump', 'super_dump', 'tandem_dump', 'tri_axle'] as const;
+const TRUCK_TYPES = ['end_dump', 'side_dump', 'belly_dump'] as const;
 
 export default function JobsBrowseScreen() {
   const insets = useSafeAreaInsets();
