@@ -127,6 +127,42 @@ function getJobDateRange(scheduledDate: string, estimatedDays: number | string |
   return dates;
 }
 
+const CLOCKOUT_GEOFENCE_MILES = 15;
+
+// Distance (miles) from a point to the closest point on the pickup->dropoff
+// line segment. Mirrors the server clock-in geofence math (equirectangular
+// projection, accurate for short-haul distances). Returns null if any coord
+// is missing/zero so we never render a bogus warning.
+function pointToRouteMiles(
+  pLat: number, pLng: number,
+  aLat: number, aLng: number,
+  bLat: number, bLng: number,
+): number | null {
+  if (!pLat || !pLng) return null;
+  const haveA = !!aLat && !!aLng;
+  const haveB = !!bLat && !!bLng;
+  if (!haveA && !haveB) return null;
+  const meanLatRad = ((aLat || bLat) * Math.PI) / 180;
+  const mpdLat = 69.0;
+  const mpdLng = 69.0 * Math.cos(meanLatRad);
+  const px = pLng * mpdLng, py = pLat * mpdLat;
+  const dist = (x1: number, y1: number, x2: number, y2: number) =>
+    Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
+  // Only one endpoint known -> point-to-point distance.
+  if (!haveA || !haveB) {
+    const oLat = haveA ? aLat : bLat, oLng = haveA ? aLng : bLng;
+    return dist(px, py, oLng * mpdLng, oLat * mpdLat);
+  }
+  const ax = aLng * mpdLng, ay = aLat * mpdLat;
+  const bx = bLng * mpdLng, by = bLat * mpdLat;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return dist(px, py, ax, ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return dist(px, py, ax + t * dx, ay + t * dy);
+}
+
 function mapJob(j: any): Job {
   return {
     id: j.id,
@@ -1495,6 +1531,14 @@ export default function JobDetailScreen() {
                 const clockOutSubmittedAt = clockOutManual ? updatedAt : null;
                 const hasStartLoc = run.start_lat && run.start_lng && Number(run.start_lat) !== 0;
                 const hasEndLoc = !isActive && run.end_lat && run.end_lng && Number(run.end_lat) !== 0;
+                const endLocMiles = hasEndLoc && job
+                  ? pointToRouteMiles(
+                      Number(run.end_lat), Number(run.end_lng),
+                      Number(job.originLat), Number(job.originLng),
+                      Number(job.destinationLat), Number(job.destinationLng),
+                    )
+                  : null;
+                const endLocFar = endLocMiles != null && endLocMiles > CLOCKOUT_GEOFENCE_MILES;
                 const duration = isActive ? 0 : (run.actual_duration_minutes || (endTime ? Math.round((endTime.getTime() - startTime.getTime()) / 60000) : 0));
                 const hours = Math.floor(duration / 60);
                 const mins = duration % 60;
@@ -1643,6 +1687,14 @@ export default function JobDetailScreen() {
                                 View location
                               </Text>
                             </Pressable>
+                          ) : null}
+                          {endLocFar ? (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, backgroundColor: 'rgba(255,153,0,0.12)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, alignSelf: 'flex-start' }}>
+                              <Ionicons name="warning-outline" size={12} color={Colors.warning} />
+                              <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 11, color: Colors.warning, marginLeft: 4 }}>
+                                Clocked out {Math.round(endLocMiles!)} mi from job site
+                              </Text>
+                            </View>
                           ) : null}
                         </View>
                       </View>
