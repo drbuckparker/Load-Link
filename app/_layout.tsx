@@ -13,6 +13,7 @@ import { StatusBar } from "expo-status-bar";
 import { useFonts, ChakraPetch_600SemiBold, ChakraPetch_700Bold } from "@expo-google-fonts/chakra-petch";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
 import { playNotificationSound, playTruckHornSound } from "@/lib/sounds";
+import { resumeClockOutMonitor } from "@/lib/clockout-monitor";
 
 if (Platform.OS === 'web' && typeof window !== 'undefined') {
   window.addEventListener('unhandledrejection', (event) => {
@@ -109,6 +110,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (Platform.OS === 'web' || Platform.OS === 'android') return;
+    resumeClockOutMonitor();
     let notifSub: any = null;
     let responseSub: any = null;
     let cancelled = false;
@@ -127,7 +129,14 @@ export default function RootLayout() {
           queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
         });
         responseSub = N.addNotificationResponseReceivedListener((response) => {
-          const data = response.notification.request.content.data;
+          const data = response.notification.request.content.data as any;
+          if (data?.type === 'clockout_reminder') {
+            // "Still working" keeps the clock running (no-op); the "Clock out"
+            // button and tapping the reminder open the job to finish clocking out.
+            if (response.actionIdentifier === 'still_working') return;
+            if (data?.jobId) router.push(`/job/${data.jobId}?action=clockout`);
+            return;
+          }
           if (data?.type === 'message' && data?.jobId) {
             router.push(`/chat/${data.jobId}`);
           } else if (data?.jobId) {

@@ -54,7 +54,8 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "LoadLink uses your location to verify you are at the job site when you clock in and out, to show nearby trucking jobs sorted by distance, and to auto-fill pickup and drop-off addresses when you post a job. For example, when you tap Clock In at a delivery site, your current location confirms your arrival."
+          "locationWhenInUsePermission": "LoadLink uses your location to verify you are at the job site when you clock in and out, to show nearby trucking jobs sorted by distance, to auto-fill pickup and drop-off addresses when you post a job, and — only while you are clocked in — to remind you if you leave the job site without clocking out. For example, when you tap Clock In at a delivery site, your current location confirms your arrival.",
+          "isIosBackgroundLocationEnabled": true
         }
       ],
       [

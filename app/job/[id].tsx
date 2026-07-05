@@ -19,6 +19,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor } from '@/lib/mock-data';
 import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
 import RouteMapView from '@/components/RouteMapView';
+import { pointToRouteMiles, CLOCKOUT_GEOFENCE_MILES } from '@/lib/geo';
+import { startClockOutMonitor, stopClockOutMonitor } from '@/lib/clockout-monitor';
 
 function isContractorRole(role: string): boolean {
   return role.includes('contractor') && role !== 'trucking_company';
@@ -127,42 +129,6 @@ function getJobDateRange(scheduledDate: string, estimatedDays: number | string |
   return dates;
 }
 
-const CLOCKOUT_GEOFENCE_MILES = 15;
-
-// Distance (miles) from a point to the closest point on the pickup->dropoff
-// line segment. Mirrors the server clock-in geofence math (equirectangular
-// projection, accurate for short-haul distances). Returns null if any coord
-// is missing/zero so we never render a bogus warning.
-function pointToRouteMiles(
-  pLat: number, pLng: number,
-  aLat: number, aLng: number,
-  bLat: number, bLng: number,
-): number | null {
-  if (!pLat || !pLng) return null;
-  const haveA = !!aLat && !!aLng;
-  const haveB = !!bLat && !!bLng;
-  if (!haveA && !haveB) return null;
-  const meanLatRad = ((aLat || bLat) * Math.PI) / 180;
-  const mpdLat = 69.0;
-  const mpdLng = 69.0 * Math.cos(meanLatRad);
-  const px = pLng * mpdLng, py = pLat * mpdLat;
-  const dist = (x1: number, y1: number, x2: number, y2: number) =>
-    Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
-  // Only one endpoint known -> point-to-point distance.
-  if (!haveA || !haveB) {
-    const oLat = haveA ? aLat : bLat, oLng = haveA ? aLng : bLng;
-    return dist(px, py, oLng * mpdLng, oLat * mpdLat);
-  }
-  const ax = aLng * mpdLng, ay = aLat * mpdLat;
-  const bx = bLng * mpdLng, by = bLat * mpdLat;
-  const dx = bx - ax, dy = by - ay;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return dist(px, py, ax, ay);
-  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  return dist(px, py, ax + t * dx, ay + t * dy);
-}
-
 function mapJob(j: any): Job {
   return {
     id: j.id,
@@ -215,7 +181,7 @@ function mapJob(j: any): Job {
 }
 
 export default function JobDetailScreen() {
-  const { id, date: calendarDate } = useLocalSearchParams<{ id: string; date?: string }>();
+  const { id, date: calendarDate, action } = useLocalSearchParams<{ id: string; date?: string; action?: string }>();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
 
@@ -459,6 +425,16 @@ export default function JobDetailScreen() {
     const t = setInterval(() => setNowTick(v => v + 1), 30000);
     return () => clearInterval(t);
   }, [isRunning]);
+
+  // When the driver taps "Clock out" on the location reminder, the app opens the
+  // job with ?action=clockout — start the clock-out flow. We clear the param
+  // afterward so a later reminder tap re-opens it.
+  useEffect(() => {
+    if (action === 'clockout' && isRunning) {
+      openTimePicker('clock-out');
+      router.setParams({ action: undefined });
+    }
+  }, [action, isRunning]);
 
   if (isLoading) {
     return (
@@ -1199,6 +1175,13 @@ export default function JobDetailScreen() {
       setJobStatus('in_progress');
       setIsRunning(true);
       scheduleClockOutReminder();
+      startClockOutMonitor({
+        jobId: String(id),
+        originLat: Number(job?.originLat) || 0,
+        originLng: Number(job?.originLng) || 0,
+        destLat: Number(job?.destinationLat) || 0,
+        destLng: Number(job?.destinationLng) || 0,
+      });
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
@@ -1256,6 +1239,13 @@ export default function JobDetailScreen() {
       setJobStatus('in_progress');
       setIsRunning(true);
       scheduleClockOutReminder();
+      startClockOutMonitor({
+        jobId: String(id),
+        originLat: Number(job?.originLat) || 0,
+        originLng: Number(job?.originLng) || 0,
+        destLat: Number(job?.destinationLat) || 0,
+        destLng: Number(job?.destinationLng) || 0,
+      });
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
     } catch (e: any) {
@@ -1284,6 +1274,10 @@ export default function JobDetailScreen() {
         }
         await apiRequest('POST', `/api/job-runs/${activeRun.id}/clock-out`, body);
       }
+      // Only stop the reminder monitor once clock-out is confirmed — if the
+      // request above throws, the monitor keeps running so the driver is still
+      // reminded that they are on the clock.
+      await stopClockOutMonitor();
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsRunning(false);
       setJobStatus('completed');
