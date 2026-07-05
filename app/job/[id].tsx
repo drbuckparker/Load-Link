@@ -1539,6 +1539,10 @@ export default function JobDetailScreen() {
                     )
                   : null;
                 const endLocFar = endLocMiles != null && endLocMiles > CLOCKOUT_GEOFENCE_MILES;
+                // Actual moment the GPS was captured (the real clock-in/out action),
+                // independent of any manually-adjusted time. Reveals a rolled-back time.
+                const startLocTimeLabel = (createdAt || startTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                const endLocTimeLabel = (updatedAt || endTime)?.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) || '';
                 const duration = isActive ? 0 : (run.actual_duration_minutes || (endTime ? Math.round((endTime.getTime() - startTime.getTime()) / 60000) : 0));
                 const hours = Math.floor(duration / 60);
                 const mins = duration % 60;
@@ -1651,6 +1655,9 @@ export default function JobDetailScreen() {
                             <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.info, marginLeft: 4, textDecorationLine: 'underline' }}>
                               View location
                             </Text>
+                            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginLeft: 6 }}>
+                              · {startLocTimeLabel}
+                            </Text>
                           </Pressable>
                         ) : null}
                       </View>
@@ -1686,6 +1693,11 @@ export default function JobDetailScreen() {
                               <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.info, marginLeft: 4, textDecorationLine: 'underline' }}>
                                 View location
                               </Text>
+                              {endLocTimeLabel ? (
+                                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginLeft: 6 }}>
+                                  · {endLocTimeLabel}
+                                </Text>
+                              ) : null}
                             </Pressable>
                           ) : null}
                           {endLocFar ? (
