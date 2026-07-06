@@ -50,6 +50,31 @@ push on ANY update (`updates.length > 0`), not just `dateChanged`. General rule:
 any companion write to a website-synced entity must be mirrored upstream or the
 down-sync clobbers it.
 
+**Pushing is NOT enough for a job's terminal status.** Marking a job
+`completed` (contractor `PUT /api/jobs/:id {status:'completed'}`) writes the
+shared DB and pushes upstream, yet the job still "vanished for ~60s then
+reappeared under Open." The website's `GET /api/jobs` keeps reporting the job
+`open` (it doesn't treat a companion completion as terminal), so the next
+`syncJobs` upsert reverts `status` to open. Fix: a **`jobTerminalGuard`** in
+`upsertRow` (mirrors `withdrawnGuard`) — when the *incoming* website status is
+NOT `completed`/`cancelled`, append `WHERE jobs.status::text NOT IN
+('completed','cancelled')` so a non-terminal website row can never overwrite a
+locally-terminal job. A genuine website completion (incoming terminal) still
+wins; local reinstate is a direct UPDATE (not an upsert) so it still works; the
+reconcile block already skips terminal jobs. General rule: a companion-owned
+*terminal* state needs a down-sync guard, not just an upstream push, because the
+website may never agree it's terminal.
+
+**Count/list parity:** any contractor dashboard count (e.g. "OPEN JOBS") must
+reuse the *exact* predicate its tapped-in list uses, or the number diverges from
+what the user sees. The Open predicate lives in `lib/job-filters.ts`
+(`isOpenTabJob`) and is shared by the dashboard stat and the My Jobs > Open tab.
+The dashboard fetches `/api/contractor/jobs` with NO status param (all statuses),
+so the shared predicate must positively gate status to `open|accepted|pending`
+(both tab endpoints already restrict `?status=open` to those three, so the gate
+is a no-op there but essential to exclude `in_progress` on the dashboard's full
+list).
+
 **Frontend "Drop Pin on Map" edit gotcha:** the site-address `LocationPickerModal` is a
 `presentationStyle="fullScreen"` modal, so the project edit modal must be *closed* before
 it opens (two fullScreen iOS modals can't stack) — done via `setEditingProject(null)` then

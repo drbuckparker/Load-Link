@@ -176,6 +176,13 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
 
   const archiveGuard = ARCHIVE_PROTECTED_TABLES.has(tableName) && columns.has("archived_at");
   const withdrawnGuard = tableName === "job_assignments" && columns.has("status");
+  // Marking a job completed (or cancelled) is a companion-side terminal action.
+  // The website's /api/jobs can still report the job as non-terminal (open/
+  // accepted/pending), so a blind upsert would revert a just-completed job back
+  // to Open on the next ~60s sync (it vanishes from Completed and reappears
+  // under Open). Never let a non-terminal website status overwrite a locally
+  // terminal job; a real website completion/cancellation still wins.
+  const jobTerminalGuard = tableName === "jobs" && columns.has("status");
 
   if (updateClauses.length === 0) {
     const sql = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO NOTHING`;
@@ -191,6 +198,13 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
     if (withdrawnGuard) {
       const prefix = whereClause ? " AND " : " WHERE ";
       whereClause += `${prefix}${tableName}.status::text != 'withdrawn'`;
+    }
+    if (jobTerminalGuard) {
+      const incomingStatus = String(normalized["status"] ?? "").toLowerCase();
+      if (incomingStatus !== "completed" && incomingStatus !== "cancelled") {
+        const prefix = whereClause ? " AND " : " WHERE ";
+        whereClause += `${prefix}${tableName}.status::text NOT IN ('completed', 'cancelled')`;
+      }
     }
     const sql = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO UPDATE SET ${updateClauses.join(", ")}${whereClause}`;
     await pool.query(sql, values);

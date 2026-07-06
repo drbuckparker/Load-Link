@@ -13,6 +13,7 @@ import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJob
 import { apiRequest, getApiUrl } from '@/lib/query-client';
 import JobCard from '@/components/JobCard';
 import LocationPickerModal from '@/components/LocationPickerModal';
+import { isOpenTabJob } from '@/lib/job-filters';
 
 function isContractorRole(role?: string): boolean {
   return (role?.includes('contractor') && role !== 'trucking_company') ?? false;
@@ -355,35 +356,10 @@ export default function JobsBrowseScreen() {
       });
     }
     if (activeFilter === 'Open') {
-      const now = new Date();
-      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      // Same predicate the dashboard "OPEN JOBS" stat uses, so the count there
+      // matches the number of cards shown here.
       const callerId = user?.id ? String(user.id) : null;
-      mapped = mapped.filter(j => {
-        const status = String(j.status || '').toLowerCase();
-        if (status === 'completed' || status === 'cancelled' || status === 'canceled' || status === 'expired' || status === 'closed') return false;
-        const requested = Number(j.trucksNeeded) || 0;
-        const assigned = Number(j.approvedAssignments) || 0;
-        const isOwn = !!callerId && String(j.contractorId) === callerId;
-        // Always show your own postings on Open, even when fully crewed.
-        if (!isOwn && requested > 0 && assigned >= requested) return false;
-        if (!j.scheduledDate) return true;
-        const raw = String(j.scheduledDate);
-        const dateStr = raw.length >= 10 ? raw.substring(0, 10) : raw;
-        const days = parseFloat(String(j.estimatedDays || '1')) || 1;
-        if (days <= 1) {
-          return dateStr >= todayStr;
-        }
-        const [y, m, d] = dateStr.split('-').map(Number);
-        const start = new Date(y, m - 1, d);
-        let added = 0;
-        let cur = new Date(start);
-        while (added < days - 1) {
-          cur.setDate(cur.getDate() + 1);
-          if (cur.getDay() !== 0 && cur.getDay() !== 6) added++;
-        }
-        const endStr = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
-        return endStr >= todayStr;
-      });
+      mapped = mapped.filter(j => isOpenTabJob(j, callerId));
     }
     if (dateFilter) {
       mapped = mapped.filter(j => {

@@ -11,6 +11,7 @@ import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest, queryClient } from '@/lib/query-client';
 import { timeAgo } from '@/lib/mock-data';
+import { isOpenTabJob } from '@/lib/job-filters';
 import MapSection from '@/components/MapSection';
 
 function isContractorRole(role: string): boolean {
@@ -245,7 +246,9 @@ export default function DashboardScreen() {
 
   function renderContractorStats() {
     const jobs = contractorJobs || [];
-    const openJobs = jobs.filter((j: any) => j.status === 'open').length;
+    // Count Open the same way the My Jobs > Open tab does (hides past-dated and
+    // fully-crewed jobs) so this stat matches the list the user sees on tap-in.
+    const openJobs = jobs.filter((j: any) => isOpenTabJob(j, user?.id)).length;
     const inProgress = jobs.filter((j: any) => j.status === 'in_progress' || j.status === 'accepted').length;
     const completed = jobs.filter((j: any) => j.status === 'completed').length;
     const totalApps = jobs.reduce((sum: number, j: any) => sum + (Number(j.application_count) || 0), 0);
