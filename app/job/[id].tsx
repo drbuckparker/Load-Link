@@ -1557,6 +1557,9 @@ export default function JobDetailScreen() {
                         <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: isActive ? Colors.success : Colors.textMuted, letterSpacing: 1 }}>
                           SESSION {idx + 1}
                         </Text>
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 11, color: Colors.textSecondary }}>
+                          {startTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </Text>
                         {driverCompany ? (
                           <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 11, color: Colors.textSecondary }}>
                             — {driverCompany}
