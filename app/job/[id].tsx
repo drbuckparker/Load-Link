@@ -307,7 +307,7 @@ export default function JobDetailScreen() {
 
   const { data: weightTicketsData } = useQuery<any[]>({
     queryKey: [`/api/jobs/${id}/weight-tickets`],
-    enabled: !!id && jobRequiresWeightTickets,
+    enabled: !!id,
   });
 
   const { data: favoritesData } = useQuery<any[]>({
@@ -1379,7 +1379,14 @@ export default function JobDetailScreen() {
       setShowTicketPrompt(false);
       setPreviewUri(null);
       setPreviewBase64(null);
-      Alert.alert('Uploaded', 'Weight ticket uploaded successfully.');
+      Alert.alert(
+        'Ticket Uploaded',
+        'Do you have another ticket to add?',
+        [
+          { text: "That's All", style: 'cancel' },
+          { text: 'Add Another', onPress: () => setWeightTicketModalVisible(true) },
+        ],
+      );
     } catch (err) {
       console.error('Weight ticket upload error:', err);
       Alert.alert('Error', 'Failed to upload weight ticket. Please try again.');
@@ -2004,7 +2011,7 @@ export default function JobDetailScreen() {
         </View>
         )}
 
-        {jobRequiresWeightTickets && (jobStatus === 'completed' || (weightTicketsData && weightTicketsData.length > 0)) && (
+        {((weightTicketsData && weightTicketsData.length > 0) || (jobRequiresWeightTickets && jobStatus === 'completed')) && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>WEIGHT TICKETS ({weightTicketsData?.length || 0})</Text>
             {(weightTicketsData || []).map((ticket: any, idx: number) => (

@@ -100,6 +100,16 @@ raw status ("OPEN"). This lives independently on each surface (e.g. the dashboar
 `trucksNeeded` supplied by `/api/dashboard`), so keep the precedence consistent
 wherever a contractor status pill is rendered.
 
+**Weight/load tickets serve two paths — don't gate on the "required" flag.** The
+same job-detail ticket section + `/api/jobs/:jobId/weight-tickets` query handle
+both mandatory *weight* tickets and the OPTIONAL post-clock-out "Any load tickets?"
+upload. Gating either the fetch (`enabled`) or the display on
+`jobRequiresWeightTickets` silently hides optional uploads, so drivers "can't find
+where the tickets went." Fetch/show whenever tickets exist (query `enabled: !!id`;
+server route stays `requireAuth` + participant check). Also: ticket upload should
+loop ("Add Another" reopens the picker) — a single upload that closes the flow
+looks like it only accepts one ticket.
+
 **Frontend "Drop Pin on Map" edit gotcha:** the site-address `LocationPickerModal` is a
 `presentationStyle="fullScreen"` modal, so the project edit modal must be *closed* before
 it opens (two fullScreen iOS modals can't stack) — done via `setEditingProject(null)` then
