@@ -26,6 +26,7 @@
     },
     "android": {
       "package": "com.loadlink.app",
+      "googleServicesFile": "./google-services.json",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyD0k24WGEPooosI-AB0dkewtiBTp_DScdI"

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "638185879591",
+    "project_id": "load-link-4341d",
+    "storage_bucket": "load-link-4341d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:638185879591:android:0607bc4c2169ef14093602",
+        "android_client_info": {
+          "package_name": "com.loadlink.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKmSkNcOn76ENrN_HHQKoaJgNkBL-QoAo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
