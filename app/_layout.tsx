@@ -121,7 +121,8 @@ export default function RootLayout() {
         if (cancelled) return;
         notifSub = N.addNotificationReceivedListener((notification) => {
           const data = notification?.request?.content?.data as any;
-          if (data?.type === 'job_application') {
+          if (data?.type === 'new_job') {
+            // Truck horn alerts drivers to a new job in their area.
             playTruckHornSound();
           } else {
             playNotificationSound();

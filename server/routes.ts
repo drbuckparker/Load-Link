@@ -31,6 +31,112 @@ async function sendPushNotification(userId: string, title: string, body: string,
   }
 }
 
+// Alert drivers with a truck horn when a new job is posted within their area so
+// they can apply as soon as possible. "Their area" = the job's pickup location
+// falling within a driver's search_radius_miles of any of their saved locations
+// (primary/secondary/tertiary) or their last known GPS position. Sends a push
+// (custom truckhorn.wav sound, data.type 'new_job' so the app plays the horn in
+// the foreground) AND inserts an in-app notification row so it shows in the bell/
+// inbox. Fire-and-forget: never blocks or fails the job-post response.
+async function notifyNearbyDriversOfNewJob(job: any) {
+  try {
+    const jobLat = job?.origin_lat != null ? Number(job.origin_lat) : NaN;
+    const jobLng = job?.origin_lng != null ? Number(job.origin_lng) : NaN;
+    if (!Number.isFinite(jobLat) || !Number.isFinite(jobLng)) return;
+
+    const drivers = await pool.query(
+      `SELECT id::text AS id, expo_push_token,
+              COALESCE(search_radius_miles, 50) AS radius,
+              primary_location_lat, primary_location_lng,
+              secondary_location_lat, secondary_location_lng,
+              tertiary_location_lat, tertiary_location_lng,
+              last_known_lat, last_known_lng
+       FROM users
+       WHERE role ILIKE '%driver%'
+         AND expo_push_token IS NOT NULL
+         AND id::text <> $1`,
+      [String(job.contractor_id)]
+    );
+    if (drivers.rows.length === 0) return;
+
+    const R = 3958.7613; // earth radius in miles
+    const toRad = (v: number) => (v * Math.PI) / 180;
+    const milesBetween = (aLat: number, aLng: number, bLat: number, bLng: number) => {
+      const dLat = toRad(bLat - aLat);
+      const dLng = toRad(bLng - aLng);
+      const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+      return R * 2 * Math.asin(Math.sqrt(s));
+    };
+
+    const material = (job.material || 'load').toString();
+    const origin = (job.origin_address || 'a nearby location').toString();
+    const title = 'New load near you';
+    const body = `A ${material} haul was posted near ${origin}. Tap to apply.`;
+
+    const messages: any[] = [];
+    const rowValues: any[] = [];
+    for (const d of drivers.rows) {
+      const pairs: [any, any][] = [
+        [d.primary_location_lat, d.primary_location_lng],
+        [d.secondary_location_lat, d.secondary_location_lng],
+        [d.tertiary_location_lat, d.tertiary_location_lng],
+        [d.last_known_lat, d.last_known_lng],
+      ];
+      let nearest = Infinity;
+      for (const [la, ln] of pairs) {
+        const dLat = la != null ? Number(la) : NaN;
+        const dLng = ln != null ? Number(ln) : NaN;
+        if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) continue;
+        if (dLat === 0 && dLng === 0) continue;
+        nearest = Math.min(nearest, milesBetween(dLat, dLng, jobLat, jobLng));
+      }
+      const radius = Number(d.radius) || 50;
+      if (nearest <= radius) {
+        messages.push({
+          to: d.expo_push_token,
+          sound: 'truckhorn.wav',
+          title,
+          body,
+          data: { type: 'new_job', jobId: String(job.id) },
+        });
+        rowValues.push(d.id);
+      }
+    }
+
+    if (messages.length === 0) return;
+
+    // In-app notification rows for the bell/inbox (reuses 'new_load' — the shared
+    // notification_type enum's value for a new job posting).
+    try {
+      const placeholders: string[] = [];
+      const params: any[] = [];
+      rowValues.forEach((driverId, i) => {
+        const base = i * 5;
+        placeholders.push(`($${base + 1}, $${base + 2}, 'new_load', $${base + 3}, $${base + 4}, $${base + 5}, false, NOW())`);
+        params.push(crypto.randomUUID(), driverId, title, body, String(job.id));
+      });
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at) VALUES ${placeholders.join(', ')}`,
+        params
+      );
+    } catch (e: any) {
+      console.error('New-job driver notification insert error:', e.message);
+    }
+
+    // Expo accepts up to 100 messages per request.
+    for (let i = 0; i < messages.length; i += 100) {
+      const chunk = messages.slice(i, i + 100);
+      await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(chunk),
+      }).catch(() => {});
+    }
+  } catch (e: any) {
+    console.error('notifyNearbyDriversOfNewJob error:', e.message);
+  }
+}
+
 function loadJsonMap<T>(filename: string): Map<string, T> {
   try {
     const raw = readFileSync(join(DATA_DIR, filename), "utf-8");
@@ -828,6 +934,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`POST /api/jobs pushing to website with projectId=${pushBody.projectId || pushBody.project_id || 'none'}, id=${id}`);
       pushToWebsite("/api/jobs", auth, { method: "POST", body: pushBody }).catch(() => {});
 
+      // Truck-horn alert to drivers whose area covers this job's pickup location.
+      notifyNearbyDriversOfNewJob(job).catch(() => {});
+
       return res.status(201).json(addDualKeys(job));
     } catch (e: any) {
       console.error("POST /api/jobs error:", e.message);
@@ -1086,8 +1195,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch (e: any) {
           console.error("Job-application notification insert error:", e.message);
         }
-        // Truck-horn sound on the contractor's device for new applications.
-        sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: 'job_application' }, 'truckhorn.wav');
+        // Standard notification sound on the contractor's device for new
+        // applications (the truck horn is reserved for alerting drivers to new
+        // jobs in their area, not for application receipts).
+        sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: 'job_application' });
       }
       return res.json({ ...addDualKeys(jobForNotif || { id: req.params.id, status: 'pending' }), autoApproved });
     } catch (e: any) {
