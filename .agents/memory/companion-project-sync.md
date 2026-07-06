@@ -110,6 +110,16 @@ server route stays `requireAuth` + participant check). Also: ticket upload shoul
 loop ("Add Another" reopens the picker) — a single upload that closes the flow
 looks like it only accepts one ticket.
 
+**Ticket-image upload key mismatch (silent NULL image).** The weight-ticket
+upload stored `image_data = NULL` because the client POSTs the photo as
+`image_base64` but the server INSERT read only `imageData || image_data`. No error
+surfaced (upload 201s, card renders with a blank thumbnail, tapping shows
+nothing). **Why:** addDualKeys is applied to *responses*, not request bodies, so a
+request field only exists under the exact key the client sent. **How to apply:**
+when a companion write persists a client-supplied field, confirm the server reads
+the *same* key name the client sends (or accept all variants), and verify the
+column is actually non-NULL in the DB — a silent NULL looks like a rendering bug.
+
 **Frontend "Drop Pin on Map" edit gotcha:** the site-address `LocationPickerModal` is a
 `presentationStyle="fullScreen"` modal, so the project edit modal must be *closed* before
 it opens (two fullScreen iOS modals can't stack) — done via `setEditingProject(null)` then

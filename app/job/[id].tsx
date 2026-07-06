@@ -251,6 +251,7 @@ export default function JobDetailScreen() {
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [clockInError, setClockInError] = useState('');
   const [previewBase64, setPreviewBase64] = useState<string | null>(null);
+  const [viewTicketUri, setViewTicketUri] = useState<string | null>(null);
   const [showNextDayBanner, setShowNextDayBanner] = useState(false);
   const [nextDayDate, setNextDayDate] = useState<string>('');
   const [backingOut, setBackingOut] = useState(false);
@@ -2015,9 +2016,21 @@ export default function JobDetailScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>WEIGHT TICKETS ({weightTicketsData?.length || 0})</Text>
             {(weightTicketsData || []).map((ticket: any, idx: number) => (
-              <View key={ticket.id} style={styles.weightTicketCard}>
-                {ticket.image_data && (
+              <Pressable
+                key={ticket.id}
+                style={styles.weightTicketCard}
+                onPress={() => {
+                  if (!ticket.image_data) return;
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setViewTicketUri(ticket.image_data);
+                }}
+              >
+                {ticket.image_data ? (
                   <Image source={{ uri: ticket.image_data }} style={styles.weightTicketImage} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.weightTicketImage, styles.weightTicketImagePlaceholder]}>
+                    <Ionicons name="document-text-outline" size={28} color={Colors.textMuted} />
+                  </View>
                 )}
                 <View style={styles.weightTicketInfo}>
                   <Text style={styles.weightTicketLabel}>Ticket #{idx + 1}</Text>
@@ -2025,7 +2038,10 @@ export default function JobDetailScreen() {
                     {new Date(ticket.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                   </Text>
                 </View>
-              </View>
+                {ticket.image_data && (
+                  <Ionicons name="expand-outline" size={20} color={Colors.textMuted} style={{ alignSelf: 'center', marginRight: 14 }} />
+                )}
+              </Pressable>
             ))}
             {!isContractor && completedRunId && (
               <Pressable
@@ -2483,6 +2499,17 @@ export default function JobDetailScreen() {
               )}
             </View>
           </View>
+        </Modal>
+
+        <Modal visible={!!viewTicketUri} transparent animationType="fade" onRequestClose={() => setViewTicketUri(null)}>
+          <Pressable style={styles.ticketViewerOverlay} onPress={() => setViewTicketUri(null)}>
+            {viewTicketUri && (
+              <Image source={{ uri: viewTicketUri }} style={styles.ticketViewerImage} resizeMode="contain" />
+            )}
+            <Pressable style={styles.ticketViewerClose} onPress={() => setViewTicketUri(null)}>
+              <Ionicons name="close" size={28} color="#fff" />
+            </Pressable>
+          </Pressable>
         </Modal>
 
         <View style={styles.section}>
@@ -4973,6 +5000,32 @@ const styles = StyleSheet.create({
   weightTicketImage: {
     width: 80,
     height: 80,
+  },
+  weightTicketImagePlaceholder: {
+    backgroundColor: Colors.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ticketViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ticketViewerImage: {
+    width: '100%' as any,
+    height: '80%' as any,
+  },
+  ticketViewerClose: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   weightTicketInfo: {
     flex: 1,

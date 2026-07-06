@@ -2054,7 +2054,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await pool.query(
         `INSERT INTO weight_tickets (id, job_run_id, job_id, driver_id, weight_value, notes, image_data, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-        [id, req.params.runId, jobId, auth.userId, req.body.weightValue || req.body.weight_value, req.body.notes, req.body.imageData || req.body.image_data]
+        [id, req.params.runId, jobId, auth.userId, req.body.weightValue || req.body.weight_value, req.body.notes, req.body.imageData || req.body.image_data || req.body.image_base64 || req.body.imageBase64]
       );
       const result = await pool.query(`SELECT * FROM weight_tickets WHERE id = $1`, [id]);
       return res.status(201).json(addDualKeys(result.rows[0]));
