@@ -217,6 +217,7 @@ export default function JobDetailScreen() {
   const assignments: Assignment[] = (assignmentsData || []).map(mapAssignment);
   const pendingAssignments = assignments.filter(a => a.status === 'pending');
   const approvedAssignments = assignments.filter(a => a.status === 'approved');
+  const activeApplicationCount = pendingAssignments.length + approvedAssignments.length;
 
   const [jobStatus, setJobStatus] = useState<string>('');
   const [isRunning, setIsRunning] = useState(false);
@@ -2538,8 +2539,8 @@ export default function JobDetailScreen() {
 
         {isMyPostedJob && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>DRIVER APPLICATIONS ({assignments.length})</Text>
-            {assignments.length > 0 ? (
+            <Text style={styles.sectionTitle}>DRIVER APPLICATIONS ({activeApplicationCount})</Text>
+            {activeApplicationCount > 0 ? (
               <>
                 {approvedAssignments.map(a => {
                   const companyName = a.truckingCompanyName || a.driverCompany || '';

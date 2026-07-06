@@ -14,3 +14,11 @@ The mobile app hardcodes option lists (truck types, statuses, material types, et
 **Why:** companion is a thin client over the website's shared DB; the website is the source of truth for enum domains.
 
 **How to apply:** when a filter/label over synced data misbehaves, check the live distinct DB values (`SELECT DISTINCT <col> FROM <table>`) against the app's hardcoded list AND confirm the server route actually reads/applies the query param — don't assume either side is complete.
+
+## UI count vs. rendered-subset drift
+
+**Symptom:** a header/badge count (e.g. "DRIVER APPLICATIONS (1)") shows N but there are fewer (or zero) items to interact with below it.
+
+**Cause:** the count is derived from the raw fetch while the list below renders only a subset. The `/api/jobs/:id/assignments` (and similar) endpoints return ALL statuses; the job-detail applications UI renders only `pending`+`approved` cards. A single `withdrawn`/`rejected`/`cancelled` assignment inflated the header count with no clickable card.
+
+**How to apply:** any count shown next to a filtered/subset list must be derived from the SAME filtered set, not the raw response. Keep the companion's displayed "applied/active applications" definition aligned with the server list count (pending+approved, i.e. non-withdrawn/non-rejected).
