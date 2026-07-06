@@ -67,7 +67,7 @@ interface DashboardData {
       jobId?: string; jobMaterial?: string; jobStatus?: string;
       contractorName?: string; contractorCompany?: string; projectName?: string;
     }[];
-    jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[];
+    jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; activeRunCount?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[];
   }[];
   recentActivity: { id: string; type: string; title: string; message: string; createdAt: string; isRead: boolean }[];
 }
@@ -581,17 +581,22 @@ export default function DashboardScreen() {
                           ) : null}
                           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Text style={styles.weekJobMaterial} numberOfLines={1}>{job.material}</Text>
-                            {contractor ? (
-                              <View style={[styles.weekJobStatusBadge, {
-                                backgroundColor: job.status === 'open' || job.status === 'pending' ? Colors.successBg :
-                                  job.status === 'in_progress' ? Colors.warningBg : Colors.infoBg
-                              }]}>
-                                <Text style={[styles.weekJobStatusText, {
-                                  color: job.status === 'open' || job.status === 'pending' ? Colors.success :
-                                    job.status === 'in_progress' ? Colors.warning : Colors.info
-                                }]}>{job.status === 'in_progress' ? 'ACTIVE' : job.status.toUpperCase()}</Text>
-                              </View>
-                            ) : (
+                            {contractor ? (() => {
+                              const isWorking = (job.activeRunCount || 0) > 0 || job.status === 'in_progress';
+                              const isFilled = !isWorking && job.trucksNeeded > 0 && (job.assigned || 0) >= job.trucksNeeded &&
+                                job.status !== 'completed' && job.status !== 'cancelled';
+                              const label = isWorking ? 'ACTIVE' : isFilled ? 'FILLED' : job.status.toUpperCase();
+                              const isOpenLike = !isWorking && !isFilled && (job.status === 'open' || job.status === 'pending');
+                              return (
+                                <View style={[styles.weekJobStatusBadge, {
+                                  backgroundColor: isWorking ? Colors.warningBg : isOpenLike ? Colors.successBg : Colors.infoBg
+                                }]}>
+                                  <Text style={[styles.weekJobStatusText, {
+                                    color: isWorking ? Colors.warning : isOpenLike ? Colors.success : Colors.info
+                                  }]}>{label}</Text>
+                                </View>
+                              );
+                            })() : (
                               <View style={[styles.weekJobStatusBadge, {
                                 backgroundColor: job.assignmentStatus === 'pending' ? Colors.warningBg :
                                   job.status === 'in_progress' ? Colors.warningBg : Colors.successBg

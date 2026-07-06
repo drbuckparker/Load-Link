@@ -2871,7 +2871,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     (SELECT COUNT(*)::int FROM job_assignments ja
                        WHERE ja.job_id = j.id AND ja.status::text = 'approved') AS trucks_assigned,
                     (SELECT COUNT(*)::int FROM job_assignments ja
-                       WHERE ja.job_id = j.id) AS applications_count
+                       WHERE ja.job_id = j.id) AS applications_count,
+                    (SELECT COUNT(*)::int FROM job_runs jr
+                       WHERE jr.job_id = j.id AND jr.status::text = 'active') AS active_run_count
                FROM jobs j
                LEFT JOIN contractor_projects cp ON j.project_id = cp.id
               WHERE j.contractor_id = $1
@@ -3010,6 +3012,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               trucksNeeded: j.trucks_needed || 1,
               assigned: j.trucks_assigned || 0,
               applied: j.applications_count || 0,
+              activeRunCount: j.active_run_count || 0,
               status: j.job_status,
             })),
           });

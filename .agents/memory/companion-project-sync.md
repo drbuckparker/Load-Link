@@ -90,6 +90,16 @@ the dashboard tile counts `active_run_count>0`. `/api/jobs` (driver browse +
 contractor calendar day-view) was deliberately left unchanged to avoid altering
 driver browsing — the field is absent there and reads as 0.
 
+**Contractor job-status badges are display-derived, not just `job.status`.** The
+job's stored status stays `open` even when a truck is clocked in or all trucks are
+approved, so any surface that shows a status pill must derive it. Precedence the
+user wants: working (active job_run or `in_progress`) → "ACTIVE" > fully crewed
+(`approved assignments >= trucks_needed`, not completed/cancelled) → "FILLED" >
+raw status ("OPEN"). This lives independently on each surface (e.g. the dashboard
+"UPCOMING JOBS" widget derives it client-side from `activeRunCount`/`assigned`/
+`trucksNeeded` supplied by `/api/dashboard`), so keep the precedence consistent
+wherever a contractor status pill is rendered.
+
 **Frontend "Drop Pin on Map" edit gotcha:** the site-address `LocationPickerModal` is a
 `presentationStyle="fullScreen"` modal, so the project edit modal must be *closed* before
 it opens (two fullScreen iOS modals can't stack) — done via `setEditingProject(null)` then
