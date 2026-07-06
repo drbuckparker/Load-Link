@@ -1,11 +1,12 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { apiRequest } from '@/lib/query-client';
 
 let Notifications: typeof import('expo-notifications') | null = null;
 
 async function getNotifications() {
   if (Notifications) return Notifications;
-  if (Platform.OS === 'web' || Platform.OS === 'android') return null;
+  if (Platform.OS === 'web') return null;
   try {
     Notifications = await import('expo-notifications');
     Notifications.setNotificationHandler({
@@ -17,13 +18,41 @@ async function getNotifications() {
         shouldShowList: true,
       }),
     });
+
+    if (Platform.OS === 'android') {
+      // Android routes notifications through channels. A channel's importance,
+      // vibration and sound are fixed at creation and OVERRIDE the per-message
+      // values, so we need one channel per alert style.
+      //
+      // 'job-alerts': MAX importance so new-job alerts pop a heads-up banner and
+      // vibrate even on silent, and play the truck horn. Used by the new-job
+      // driver push (channelId 'job-alerts').
+      await Notifications.setNotificationChannelAsync('job-alerts', {
+        name: 'New Job Alerts',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 400, 200, 400],
+        enableVibrate: true,
+        sound: 'truckhorn.wav',
+        lightColor: '#FF9900',
+      });
+      // 'default': everything else — still shows a banner and vibrates, but with
+      // the standard notification sound.
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'General',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        enableVibrate: true,
+        lightColor: '#FF9900',
+      });
+    }
+
     return Notifications;
   } catch {
     return null;
   }
 }
 
-if (Platform.OS === 'ios') {
+if (Platform.OS !== 'web') {
   getNotifications();
 }
 
@@ -44,9 +73,10 @@ export async function registerForPushNotifications(): Promise<string | null> {
       return null;
     }
 
-    const tokenData = await N.getExpoPushTokenAsync({
-      projectId: undefined,
-    });
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ??
+      '06835a51-8023-416f-948f-d8450c3495bf';
+    const tokenData = await N.getExpoPushTokenAsync({ projectId });
     const token = tokenData.data;
 
     try {

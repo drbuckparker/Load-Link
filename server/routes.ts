@@ -19,7 +19,9 @@ async function sendPushNotification(userId: string, title: string, body: string,
     const result = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
     const token = result.rows[0]?.expo_push_token;
     if (!token) return;
-    const message = { to: token, sound, title, body, data: data || {} };
+    // channelId/priority are Android-only (ignored by iOS): 'default' channel
+    // shows a heads-up banner + vibration with the standard sound.
+    const message = { to: token, sound, title, body, data: data || {}, channelId: 'default', priority: 'high' };
     const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -70,7 +72,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
 
     const material = (job.material || 'load').toString();
     const origin = (job.origin_address || 'a nearby location').toString();
-    const title = 'New load near you';
+    const title = 'New Job Alert';
     const body = `A ${material} haul was posted near ${origin}. Tap to apply.`;
 
     const messages: any[] = [];
@@ -98,6 +100,10 @@ async function notifyNearbyDriversOfNewJob(job: any) {
           title,
           body,
           data: { type: 'new_job', jobId: String(job.id) },
+          // Android: MAX-importance channel (heads-up banner + vibrate on silent
+          // + truck horn). Ignored by iOS. priority 'high' for immediate delivery.
+          channelId: 'job-alerts',
+          priority: 'high',
         });
         rowValues.push(d.id);
       }
