@@ -65,15 +65,30 @@ reconcile block already skips terminal jobs. General rule: a companion-owned
 *terminal* state needs a down-sync guard, not just an upstream push, because the
 website may never agree it's terminal.
 
-**Count/list parity:** any contractor dashboard count (e.g. "OPEN JOBS") must
-reuse the *exact* predicate its tapped-in list uses, or the number diverges from
-what the user sees. The Open predicate lives in `lib/job-filters.ts`
-(`isOpenTabJob`) and is shared by the dashboard stat and the My Jobs > Open tab.
-The dashboard fetches `/api/contractor/jobs` with NO status param (all statuses),
-so the shared predicate must positively gate status to `open|accepted|pending`
-(both tab endpoints already restrict `?status=open` to those three, so the gate
-is a no-op there but essential to exclude `in_progress` on the dashboard's full
-list).
+**Count/list parity:** any contractor dashboard count (e.g. "OPEN JOBS",
+"ACTIVE") must reuse the *exact* definition its tapped-in list uses, or the
+number diverges from what the user sees. The Open predicate lives in
+`lib/job-filters.ts` (`isOpenTabJob`) and is shared by the dashboard stat and the
+My Jobs > Open tab. The dashboard fetches `/api/contractor/jobs` with NO status
+param (all statuses), so the shared predicate must positively gate status to
+`open|accepted|pending` (both tab endpoints already restrict `?status=open` to
+those three, so the gate is a no-op there but essential to exclude `in_progress`
+on the dashboard's full list). Same trap bit "ACTIVE": the server Active filter
+includes `pending` but the dashboard tile originally omitted it — keep the tile's
+filter and the `?status=active` server WHERE in sync (in_progress/accepted/
+pending + active-run, minus completed/cancelled).
+
+**"Active" must include jobs with a live work session, not just status.** A truck
+clocking in creates a `job_runs` row `status='active'` but the job's own status
+stays `open` (it never flips to in_progress). So a job being actively worked was
+invisible to both the dashboard ACTIVE tile and the My Jobs > Active tab (both
+keyed only on job status). Fix: `/api/contractor/jobs` exposes `active_run_count`
+(subquery) and its status filters treat an active `job_run` as Active
+(`?status=active` includes `EXISTS(active run)`; `?status=open` **excludes** it so
+the job moves Open→Active, not both); `isOpenTabJob` drops `active_run_count>0`;
+the dashboard tile counts `active_run_count>0`. `/api/jobs` (driver browse +
+contractor calendar day-view) was deliberately left unchanged to avoid altering
+driver browsing — the field is absent there and reads as 0.
 
 **Frontend "Drop Pin on Map" edit gotcha:** the site-address `LocationPickerModal` is a
 `presentationStyle="fullScreen"` modal, so the project edit modal must be *closed* before

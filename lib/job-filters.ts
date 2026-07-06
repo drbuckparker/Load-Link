@@ -16,6 +16,12 @@ export function isOpenTabJob(job: any, callerId?: string | null): boolean {
   // terminal (completed/cancelled) or already working (in_progress) is excluded.
   if (status !== 'open' && status !== 'accepted' && status !== 'pending') return false;
 
+  // A job with a truck currently clocked in (an active work session / job_run)
+  // is being worked right now, so it belongs in Active — not Open. The count is
+  // only present on /api/contractor/jobs rows; when absent it reads as 0.
+  const activeRuns = Number(job.activeRunCount ?? job.active_run_count ?? 0) || 0;
+  if (activeRuns > 0) return false;
+
   const requested = Number(job.trucksNeeded ?? job.trucks_needed ?? 0) || 0;
   const assigned = Number(job.approvedAssignments ?? job.approved_assignments ?? 0) || 0;
   const contractorId = job.contractorId ?? job.contractor_id;

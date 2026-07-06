@@ -249,7 +249,16 @@ export default function DashboardScreen() {
     // Count Open the same way the My Jobs > Open tab does (hides past-dated and
     // fully-crewed jobs) so this stat matches the list the user sees on tap-in.
     const openJobs = jobs.filter((j: any) => isOpenTabJob(j, user?.id)).length;
-    const inProgress = jobs.filter((j: any) => j.status === 'in_progress' || j.status === 'accepted').length;
+    // A job counts as Active if it's in_progress/accepted/pending OR a truck is
+    // currently clocked in on it (active job_run), even while its stored status
+    // is 'open'. Mirrors the /api/contractor/jobs?status=active server filter so
+    // this tile always matches the My Jobs > Active list.
+    const inProgress = jobs.filter((j: any) => {
+      const st = String(j.status ?? '').toLowerCase();
+      if (st === 'completed' || st === 'cancelled') return false;
+      const activeRuns = Number(j.activeRunCount ?? j.active_run_count ?? 0) > 0;
+      return st === 'in_progress' || st === 'accepted' || st === 'pending' || activeRuns;
+    }).length;
     const completed = jobs.filter((j: any) => j.status === 'completed').length;
     const totalApps = jobs.reduce((sum: number, j: any) => sum + (Number(j.application_count) || 0), 0);
 

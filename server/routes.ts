@@ -3179,7 +3179,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let query = `SELECT j.*, cp.name as project_name,
           COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'pending'), 0) as pending_applications,
-          COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'approved'), 0) as approved_assignments
+          COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'approved'), 0) as approved_assignments,
+          COALESCE((SELECT COUNT(*)::int FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active'), 0) as active_run_count
         FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
       const params: any[] = [contractorId];
       let paramIdx = 2;
@@ -3205,9 +3206,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (status) {
         const statusLower = status.toLowerCase();
         if (statusLower === 'in_progress' || statusLower === 'active') {
-          query += ` AND j.status::text IN ('in_progress', 'accepted', 'pending')`;
+          // A job counts as Active if its status is in_progress/accepted/pending
+          // OR a truck is currently clocked in on it (active job_run), even while
+          // the job's stored status is still 'open'. A completed/cancelled job is
+          // never Active even if a stray active run exists.
+          query += ` AND (j.status::text IN ('in_progress', 'accepted', 'pending')
+            OR (j.status::text NOT IN ('completed', 'cancelled')
+                AND EXISTS (SELECT 1 FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active')))`;
         } else if (statusLower === 'open') {
-          query += ` AND j.status::text IN ('open', 'accepted', 'pending')`;
+          // Exclude jobs being actively worked so they surface under Active
+          // instead of Open (mirrors isOpenTabJob on the client).
+          query += ` AND j.status::text IN ('open', 'accepted', 'pending')
+            AND NOT EXISTS (SELECT 1 FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active')`;
         } else {
           query += ` AND j.status::text = $${paramIdx}`;
           params.push(statusLower);
