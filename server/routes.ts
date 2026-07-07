@@ -2699,6 +2699,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (type !== "driver" && type !== "foreman") {
       return res.status(400).json({ message: "Invitation type must be 'driver' or 'foreman'." });
     }
+    // Enforce the parent-linkage model: trucking companies invite drivers,
+    // contractors invite foremen (a combined role can do both). Client-side
+    // gating is UX only; this server check is the source of truth so a crafted
+    // request can't create an orphaned (unlinked) driver/foreman account.
+    if (type === "driver" && !role.includes("trucking_company")) {
+      return res.status(403).json({ message: "Only trucking companies can invite drivers." });
+    }
+    if (type === "foreman" && !role.includes("contractor")) {
+      return res.status(403).json({ message: "Only contractors can invite foremen." });
+    }
     const firstName = (req.body?.firstName || req.body?.driverFirstName || "").trim();
     const lastName = (req.body?.lastName || req.body?.driverLastName || "").trim();
     const phone = (req.body?.phone || req.body?.driverPhone || "").trim();

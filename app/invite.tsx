@@ -6,6 +6,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient } from '@/lib/query-client';
+import { useAuth } from '@/contexts/AuthContext';
 
 type InviteType = 'driver' | 'foreman';
 
@@ -43,8 +44,20 @@ function statusColor(status: string): { bg: string; fg: string } {
 
 export default function InviteScreen() {
   const insets = useSafeAreaInsets();
-  const [form, setForm] = useState({ ...EMPTY_FORM });
+  const { user } = useAuth();
+  const role = (user?.role || '') as string;
+  const canInviteDriver = role.includes('trucking_company');
+  const canInviteForeman = role.includes('contractor');
+  const allowedTypes: InviteType[] = [
+    ...(canInviteDriver ? (['driver'] as InviteType[]) : []),
+    ...(canInviteForeman ? (['foreman'] as InviteType[]) : []),
+  ];
+  const inviteTypes: InviteType[] = allowedTypes.length ? allowedTypes : (['driver', 'foreman'] as InviteType[]);
+  const defaultInviteType: InviteType = inviteTypes[0];
+  const inviteNoun = inviteTypes.length === 1 ? (inviteTypes[0] === 'driver' ? 'a driver' : 'a foreman') : 'a driver or foreman';
+  const [form, setForm] = useState(() => ({ ...EMPTY_FORM, type: defaultInviteType }));
   const [error, setError] = useState('');
+  const effectiveType: InviteType = inviteTypes.includes(form.type) ? form.type : defaultInviteType;
   const [refreshing, setRefreshing] = useState(false);
 
   const topInset = Platform.OS === 'web' ? 67 : insets.top;
@@ -58,7 +71,7 @@ export default function InviteScreen() {
   const sendMutation = useMutation({
     mutationFn: async () => {
       return apiRequest('POST', '/api/driver-invitations', {
-        type: form.type,
+        type: effectiveType,
         email: form.email.trim(),
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
@@ -68,9 +81,9 @@ export default function InviteScreen() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/driver-invitations'] });
-      const label = form.type === 'foreman' ? 'Foreman' : 'Driver';
+      const label = effectiveType === 'foreman' ? 'Foreman' : 'Driver';
       const sentTo = form.email.trim();
-      setForm({ ...EMPTY_FORM });
+      setForm({ ...EMPTY_FORM, type: defaultInviteType });
       setError('');
       if (Platform.OS === 'web') {
         window.alert(`${label} invitation sent to ${sentTo}.`);
@@ -117,23 +130,23 @@ export default function InviteScreen() {
         <View style={styles.formContainer}>
           <Text style={styles.formTitle}>Send an Invitation</Text>
           <Text style={styles.formSubtitle}>
-            Invite a driver or foreman by email. They'll get a link to create their LoadLink profile and connect with you.
+            Invite {inviteNoun} by email. They'll get a link to create their LoadLink profile and be automatically linked to your account.
           </Text>
 
           <Text style={styles.fieldLabel}>WHO ARE YOU INVITING?</Text>
           <View style={styles.chipRow}>
-            {(['driver', 'foreman'] as InviteType[]).map((t) => (
+            {inviteTypes.map((t) => (
               <Pressable
                 key={t}
-                style={[styles.chip, form.type === t && styles.chipActive]}
+                style={[styles.chip, effectiveType === t && styles.chipActive]}
                 onPress={() => setForm((f) => ({ ...f, type: t }))}
               >
                 <Ionicons
                   name={t === 'driver' ? 'car-outline' : 'clipboard-outline'}
                   size={16}
-                  color={form.type === t ? Colors.primary : Colors.textSecondary}
+                  color={effectiveType === t ? Colors.primary : Colors.textSecondary}
                 />
-                <Text style={[styles.chipText, form.type === t && styles.chipTextActive]}>
+                <Text style={[styles.chipText, effectiveType === t && styles.chipTextActive]}>
                   {t === 'driver' ? 'Driver' : 'Foreman'}
                 </Text>
               </Pressable>

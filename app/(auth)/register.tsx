@@ -8,9 +8,9 @@ import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 
 const ROLES = [
-  { key: 'driver', label: 'Owner Operator', desc: 'Independent driver', icon: 'car-sport' as const },
   { key: 'trucking_company', label: 'Trucking Company', desc: 'Fleet manager', icon: 'bus' as const },
   { key: 'contractor', label: 'Contractor', desc: 'Post jobs & projects', icon: 'construct' as const },
+  { key: 'trucking_company_contractor', label: 'Trucking Co. + Contractor', desc: 'Fleet & post jobs', icon: 'business' as const },
 ];
 
 export default function RegisterScreen() {
@@ -20,7 +20,7 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('driver');
+  const [role, setRole] = useState('trucking_company');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
