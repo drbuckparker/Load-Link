@@ -1501,6 +1501,29 @@ export default function JobDetailScreen() {
           const allRuns = (jobData?.runs || []).filter((r: any) => r.status === 'completed' || r.status === 'active').sort((a: any, b: any) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
           if (allRuns.length === 0) return null;
           const completedRuns = allRuns.filter((r: any) => r.status === 'completed' && r.ended_at);
+          // Working days for this job, so each session can be labelled
+          // "DAY N OF X" (clearer than "SESSION N" for multi-day jobs).
+          const jobWorkingDates = job?.scheduledDate
+            ? getJobDateRange(
+                String(job.scheduledDate),
+                jobData?.listed_days || job.estimatedDays,
+                jobData?.includes_weekends ?? false,
+                (jobData as any)?.includes_saturday !== false,
+                (jobData as any)?.includes_sunday !== false
+              )
+            : [];
+          const totalJobDays = jobWorkingDates.length;
+          // Which working day (1-based) a run falls on, or null if its date
+          // isn't one of the scheduled days (then we fall back to session #).
+          const dayNumberForRun = (startedAt: string): number | null => {
+            if (totalJobDays <= 1) return null;
+            const s = new Date(startedAt);
+            if (isNaN(s.getTime())) return null;
+            const localKey = `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}`;
+            const utcKey = `${s.getUTCFullYear()}-${String(s.getUTCMonth() + 1).padStart(2, '0')}-${String(s.getUTCDate()).padStart(2, '0')}`;
+            const i = jobWorkingDates.findIndex((d) => d === localKey || d === utcKey);
+            return i >= 0 ? i + 1 : null;
+          };
           const openLocationMap = (lat: number, lng: number) => {
             if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
             const googleMapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
@@ -1556,7 +1579,10 @@ export default function JobDetailScreen() {
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                         <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: isActive ? Colors.success : Colors.textMuted, letterSpacing: 1 }}>
-                          SESSION {idx + 1}
+                          {(() => {
+                            const dayNum = dayNumberForRun(run.started_at);
+                            return dayNum ? `DAY ${dayNum} OF ${totalJobDays}` : `SESSION ${idx + 1}`;
+                          })()}
                         </Text>
                         <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 11, color: Colors.textSecondary }}>
                           {startTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
