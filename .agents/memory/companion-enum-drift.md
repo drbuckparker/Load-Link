@@ -22,3 +22,11 @@ The mobile app hardcodes option lists (truck types, statuses, material types, et
 **Cause:** the count is derived from the raw fetch while the list below renders only a subset. The `/api/jobs/:id/assignments` (and similar) endpoints return ALL statuses; the job-detail applications UI renders only `pending`+`approved` cards. A single `withdrawn`/`rejected`/`cancelled` assignment inflated the header count with no clickable card.
 
 **How to apply:** any count shown next to a filtered/subset list must be derived from the SAME filtered set, not the raw response. Keep the companion's displayed "applied/active applications" definition aligned with the server list count (pending+approved, i.e. non-withdrawn/non-rejected).
+
+## Signup role keys must be canonical
+
+**Symptom:** picking a specific role on Create Account silently fails ("can't sign in"), while other role buttons work.
+
+**Cause:** a signup role button used a non-canonical key (`owner_operator`) that isn't in the platform's role domain. Canonical roles: `driver`, `contractor`, `trucking_company`, and compounds (`driver_contractor`, `driver_trucking_company`, `trucking_company_contractor`, `driver_trucking_company_contractor`) — see `allowedRolesForUser`. "Owner Operator" is just a friendly label for an independent `driver`.
+
+**How to apply:** the role KEY submitted at registration must be one the server/website recognizes; keep display labels decorative but map them to a canonical role key. When a role-related signup/login misbehaves, check the submitted key against `allowedRolesForUser`, not the label.
