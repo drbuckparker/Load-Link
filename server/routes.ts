@@ -2321,24 +2321,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // after prior view-switches. For sessions created before this field was
     // added, fall back to the stored user role.
     const baseRole = (auth as any).originalRole || auth.user.role;
-    const permitted = allowedRolesForUser(String(baseRole));
-    if (!permitted.includes(String(role))) {
+    const entitlementRoles = allowedRolesForUser(String(baseRole));
+    // The three self-serve company roles are all sign-up-eligible and carry the
+    // same trust level, so an account holding one of them may change to any of
+    // the three. This is how a user fixes a role they picked wrong at sign-up.
+    // Driver/foreman are invite-only and linked to a parent account, so they are
+    // NEVER a valid switch target here — they're only reachable via invitation.
+    const SELF_SERVE_COMPANY_ROLES = ["trucking_company", "contractor", "trucking_company_contractor"];
+    const permitted = new Set<string>(entitlementRoles);
+    if (SELF_SERVE_COMPANY_ROLES.includes(String(baseRole))) {
+      SELF_SERVE_COMPANY_ROLES.forEach((r) => permitted.add(r));
+    }
+    if (!permitted.has(String(role))) {
       return res.status(403).json({ message: "You are not authorized to switch to this role." });
     }
     auth.user.role = role;
-    // The `role` column is the account's entitlement source on every re-login
-    // (the companion shares the website's DB, and both read users.role at login
-    // to derive allowed roles). Persisting the switched *view* here would
-    // collapse a compound entitlement (e.g. driver_trucking_company_contractor)
-    // down to the single active role and trap the account on next login. So we
-    // never persist for compound-entitled accounts (or dev-local sessions) —
-    // the active view lives only in the session. A genuine single-role account
-    // can't switch anyway (permitted has one entry), so persisting is a no-op
-    // there; we keep it only to preserve the historical write path.
-    const isCompoundEntitlement = allowedRolesForUser(String(baseRole)).length > 1;
-    if (!String(auth.jwt).startsWith("dev-local:") && !isCompoundEntitlement) {
+    // Persist a genuine account-type change so it survives re-login (users.role
+    // is the entitlement source both this app and the website read at login).
+    // But keep a compound account's view-switch (e.g. a
+    // driver_trucking_company_contractor toggling between its component views)
+    // session-only — persisting one component would collapse the compound
+    // entitlement and trap the account. Dev-local sessions are never persisted.
+    const isCompoundViewSwitch = entitlementRoles.length > 1 && entitlementRoles.includes(String(role));
+    if (!String(auth.jwt).startsWith("dev-local:") && !isCompoundViewSwitch) {
       try {
         await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
+        (auth as any).originalRole = role;
       } catch {}
     }
     const localToken = req.headers.authorization?.slice(7) || "";

@@ -27,6 +27,27 @@ function getAccountRoleKey(user: any): string {
   return ROLES.some(r => r.key === accountRole) ? accountRole : (user?.role || '');
 }
 
+const SELF_SERVE_COMPANY_ROLES = ['trucking_company', 'contractor', 'trucking_company_contractor'];
+
+// Which role cards this account may select on the Role screen. Mirrors the
+// server permission in PUT /api/profile/role: a self-serve company account can
+// change among the three company roles; a compound account can toggle its
+// component views; driver/foreman are fixed (set by invitation) and can't switch.
+function selectableRoleKeys(user: any): string[] {
+  const accountRole = user?.accountRole || user?.role || '';
+  const compound: Record<string, string[]> = {
+    driver_contractor: ['driver', 'contractor'],
+    driver_trucking_company: ['driver', 'trucking_company'],
+    trucking_company_contractor: ['trucking_company', 'contractor'],
+    driver_trucking_company_contractor: ['driver', 'trucking_company', 'contractor'],
+  };
+  const keys = new Set<string>(compound[accountRole] || [accountRole]);
+  if (SELF_SERVE_COMPANY_ROLES.includes(accountRole)) {
+    SELF_SERVE_COMPANY_ROLES.forEach((r) => keys.add(r));
+  }
+  return Array.from(keys);
+}
+
 type SettingsTab = 'profile' | 'role' | 'earnings' | 'help' | 'account' | 'billing';
 
 const TABS: { key: SettingsTab; label: string; icon: string }[] = [
@@ -177,9 +198,9 @@ export default function ProfileScreen() {
       doSwitch();
       return;
     }
-    Alert.alert('Switch Role', `Switch your role to ${role.replace(/_/g, ' ')}? The app will adjust to show features for this role.`, [
+    Alert.alert('Change Role', `Change your role to ${formatRoleLabel(role)}? This updates the features and permissions you see in the app.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Switch', onPress: doSwitch },
+      { text: 'Change', onPress: doSwitch },
     ]);
   }
 
@@ -463,6 +484,7 @@ export default function ProfileScreen() {
   }
 
   function renderRoleTab() {
+    const selectable = selectableRoleKeys(user);
     return (
       <>
         <View style={styles.roleHeader}>
@@ -498,7 +520,7 @@ export default function ProfileScreen() {
         )}
 
         <View style={styles.roleGrid}>
-          {ROLES.map(r => {
+          {ROLES.filter(r => selectable.includes(r.key)).map(r => {
             const isActive = getAccountRoleKey(user) === r.key;
             return (
               <Pressable
@@ -525,6 +547,11 @@ export default function ProfileScreen() {
             );
           })}
         </View>
+        {selectable.length <= 1 && (
+          <Text style={[styles.roleHeaderDesc, { marginTop: 16, paddingHorizontal: 4 }]}>
+            Your role is set by your account. If a company invited you, contact them to change it.
+          </Text>
+        )}
       </>
     );
   }
