@@ -4349,14 +4349,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Job not found or not completed" });
       }
       const job = jobRow.rows[0];
-      const callerIsContractor = job.contractor_id === auth.userId;
-      const callerIsDriver = job.driver_id === auth.userId;
+
+      // The job's driver is usually held on the approved job_assignment, not
+      // jobs.driver_id (which is typically NULL). For review authorization only
+      // an APPROVED assignment counts as the finalized hauler — a pending/other
+      // applicant must never be treated as a participant or reviewee.
+      let resolvedDriverId = job.driver_id;
+      if (!resolvedDriverId) {
+        const a = await pool.query(
+          `SELECT driver_id FROM job_assignments WHERE job_id = $1
+           AND status::text = 'approved'
+           ORDER BY approved_at DESC NULLS LAST, created_at DESC
+           LIMIT 1`,
+          [jobId]
+        );
+        resolvedDriverId = a.rows[0]?.driver_id || null;
+      }
+
+      const callerIsContractor = String(job.contractor_id) === String(auth.userId);
+      const callerIsDriver = resolvedDriverId != null && String(resolvedDriverId) === String(auth.userId);
       if (!callerIsContractor && !callerIsDriver) {
         return res.status(403).json({ message: "You did not participate in this job" });
       }
       // The reviewee must be the legitimate counterparty.
-      const expectedReviewee = callerIsContractor ? job.driver_id : job.contractor_id;
-      if (revieweeId !== expectedReviewee) {
+      const expectedReviewee = callerIsContractor ? resolvedDriverId : job.contractor_id;
+      if (!expectedReviewee) {
+        return res.status(409).json({ message: "This job has no finalized hauler to review yet." });
+      }
+      if (String(revieweeId) !== String(expectedReviewee)) {
         return res.status(400).json({ message: "Invalid reviewee for this job" });
       }
       // Prevent duplicate reviews.

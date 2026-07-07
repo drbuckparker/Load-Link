@@ -95,6 +95,7 @@ export default function ReviewScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [addFavorite, setAddFavorite] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const alreadyFavorite = favData?.isFavorite ?? false;
 
@@ -111,13 +112,22 @@ export default function ReviewScreen() {
   const lowRating = rating > 0 && rating < 3;
 
   async function handleSubmit() {
+    setErrorMsg('');
+
     if (rating === 0) {
+      setErrorMsg('Please select a star rating before submitting.');
       Alert.alert('Rating Required', 'Please select a star rating before submitting.');
       return;
     }
 
     if (rating < 3 && comment.trim().length < 10) {
+      setErrorMsg('For ratings below 3 stars, please add at least 10 characters of feedback.');
       Alert.alert('Feedback Required', 'For ratings below 3 stars, please provide constructive feedback (at least 10 characters) so they can improve.');
+      return;
+    }
+
+    if (!resolvedRevieweeId) {
+      setErrorMsg("We couldn't find who to review for this job. Please go back and try again.");
       return;
     }
 
@@ -153,6 +163,7 @@ export default function ReviewScreen() {
       }, 1500);
     } catch (err: any) {
       const msg = err?.message || 'Failed to submit review';
+      setErrorMsg(msg);
       Alert.alert('Error', msg);
     } finally {
       setSubmitting(false);
@@ -298,6 +309,10 @@ export default function ReviewScreen() {
               </Text>
             </View>
           )}
+
+          {errorMsg ? (
+            <Text style={styles.errorText}>{errorMsg}</Text>
+          ) : null}
 
           <Pressable
             style={({ pressed }) => [
@@ -519,6 +534,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#000',
     letterSpacing: 1,
+  },
+  errorText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.destructive,
+    textAlign: 'center',
+    marginBottom: 12,
   },
   skipBtn: {
     alignItems: 'center',

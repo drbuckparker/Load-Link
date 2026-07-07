@@ -30,3 +30,12 @@ through assignment resolution, not `jobs.driver_id` alone.
 the feeding endpoint resolves via assignments; `/api/jobs/:id` now returns
 `driver_name` + `driver_company` this way, and it also returns `assignments[]`
 with `driver_full_name`/`driver_company` for client-side fallback.
+
+**Display vs authorization — do not use the same resolution:** for *display*
+it's fine to fall back to the most-recent active applicant. For any
+*authorization/permission* check (e.g. who may post/receive a review, act as
+the driver-of-record), only an `approved` assignment (or `jobs.driver_id`)
+counts — never a pending/other-active applicant, or a pending applicant on a
+completed job can slip through the participant/counterparty check. Any endpoint
+that validates a job's counterparty against `jobs.driver_id` alone is buggy
+because that column is usually NULL.
