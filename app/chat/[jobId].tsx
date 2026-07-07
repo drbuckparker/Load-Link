@@ -62,6 +62,9 @@ export default function ChatScreen() {
   const chatPartnerName = isMyPostedJob
     ? (jobData?.driver_name ?? jobData?.driverName ?? 'Driver')
     : (jobData?.contractor_name ?? jobData?.contractorName ?? 'Chat');
+  const chatPartnerCompany = isMyPostedJob
+    ? (jobData?.driver_company ?? jobData?.driverCompany ?? '')
+    : '';
   const jobMaterial = jobData?.material ?? '';
   const jobDate = jobData?.scheduled_date ?? jobData?.scheduledDate;
   const jobPickup = jobData?.origin_address ?? jobData?.originAddress ?? '';
@@ -123,8 +126,8 @@ export default function ChatScreen() {
           <Text style={styles.topBarName} numberOfLines={1}>
             {chatPartnerName}
           </Text>
-          {jobMaterial ? (
-            <Text style={styles.topBarSub}>{jobMaterial}</Text>
+          {(chatPartnerCompany || jobMaterial) ? (
+            <Text style={styles.topBarSub} numberOfLines={1}>{chatPartnerCompany || jobMaterial}</Text>
           ) : null}
         </View>
         <View style={{ width: 40 }} />

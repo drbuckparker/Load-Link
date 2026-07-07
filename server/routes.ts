@@ -841,7 +841,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.id = $1`,
+        `SELECT j.*, cp.name as project_name, u.company as contractor_name,
+                d.full_name as driver_name,
+                COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company
+         FROM jobs j
+         LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+         LEFT JOIN users u ON j.contractor_id::text = u.id::text
+         LEFT JOIN users d ON j.driver_id::text = d.id::text
+         LEFT JOIN users dtc ON d.trucking_company_id::text = dtc.id::text
+         WHERE j.id = $1`,
         [req.params.id]
       );
       if (result.rows.length > 0) {
@@ -864,8 +872,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const assignResult = await pool.query(
             `SELECT ja.*, t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
                     t.truck_number as vehicle_truck_number, t.license_plate as vehicle_license_plate,
-                    t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp
-             FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id WHERE ja.job_id = $1`, [req.params.id]);
+                    t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp,
+                    du.full_name as driver_full_name,
+                    COALESCE(NULLIF(dutc.company, ''), NULLIF(du.company, '')) as driver_company
+             FROM job_assignments ja
+             LEFT JOIN trucks t ON ja.vehicle_id = t.id
+             LEFT JOIN users du ON ja.driver_id::text = du.id::text
+             LEFT JOIN users dutc ON du.trucking_company_id::text = dutc.id::text
+             WHERE ja.job_id = $1
+             ORDER BY (ja.status::text = 'approved') DESC, ja.approved_at DESC NULLS LAST, ja.created_at DESC`, [req.params.id]);
           const runsResult = await pool.query(`SELECT * FROM job_runs WHERE job_id = $1 ORDER BY created_at DESC`, [req.params.id]);
           const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
           job.assignments = assignResult.rows.map(row => {
@@ -888,6 +903,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
           job.runs = job.jobRuns;
           job.weightTickets = weightResult.rows.map(addDualKeys);
           job.weight_tickets = job.weightTickets;
+
+          // When the job has no directly-assigned driver_id (the common case —
+          // haulers apply via job_assignments), resolve the "driver" for display
+          // from the best assignment: prefer an approved one, else the most
+          // recent still-active application.
+          if (!job.driver_name || !job.driver_company) {
+            const activeAssigns = assignResult.rows.filter(
+              (r: any) => !['rejected', 'withdrawn', 'cancelled', 'expired'].includes(String(r.status))
+            );
+            const primary =
+              activeAssigns.find((r: any) => String(r.status) === 'approved') ||
+              activeAssigns[0] ||
+              null;
+            if (primary) {
+              if (!job.driver_name) job.driver_name = primary.driver_full_name || null;
+              if (!job.driver_company) job.driver_company = primary.driver_company || null;
+            }
+          }
         } else {
           job.assignments = [];
           job.jobRuns = [];

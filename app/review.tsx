@@ -28,10 +28,37 @@ export default function ReviewScreen() {
     enabled: !!params.jobId && !params.revieweeId,
   });
 
+  // Resolve the driver for a job. The job rarely has a direct driver_id —
+  // haulers apply via job_assignments — so fall back to the best assignment
+  // (approved first, else the most recent still-active application).
+  const pickDriverFromJob = (job: any) => {
+    const directName = job.driver_name || job.driverName;
+    if (job.driver_id && directName) {
+      return {
+        id: job.driver_id,
+        name: directName,
+        company: job.driver_company || job.driverCompany || '',
+      };
+    }
+    const assigns: any[] = job.assignments || job.jobAssignments || [];
+    const active = assigns.filter(
+      (a) => !['rejected', 'withdrawn', 'cancelled', 'expired'].includes(String(a.status))
+    );
+    const primary = active.find((a) => String(a.status) === 'approved') || active[0];
+    if (primary) {
+      return {
+        id: primary.driver_id || primary.driverId || '',
+        name: primary.driver_full_name || primary.driverFullName || directName || '',
+        company: primary.driver_company || primary.driverCompany || job.driver_company || job.driverCompany || '',
+      };
+    }
+    return { id: job.driver_id || '', name: directName || '', company: job.driver_company || job.driverCompany || '' };
+  };
+
   const resolvedRevieweeId = params.revieweeId || (() => {
     if (!jobData || !user) return '';
     const job = jobData.job || jobData;
-    return job.contractor_id === user.id ? (job.driver_id || '') : (job.contractor_id || '');
+    return job.contractor_id === user.id ? (pickDriverFromJob(job).id || '') : (job.contractor_id || '');
   })();
 
   const resolvedRevieweeName = params.revieweeName || (() => {
@@ -39,7 +66,7 @@ export default function ReviewScreen() {
     const job = jobData.job || jobData;
     const contractor = jobData.contractor || job.contractor;
     if (job.contractor_id === user.id) {
-      return job.driver_name || job.driver?.full_name || 'Driver';
+      return pickDriverFromJob(job).name || 'Driver';
     }
     return contractor?.company || contractor?.full_name || 'Contractor';
   })();
@@ -49,7 +76,7 @@ export default function ReviewScreen() {
     const job = jobData.job || jobData;
     const contractor = jobData.contractor || job.contractor;
     if (job.contractor_id === user.id) {
-      return job.driver_company || '';
+      return pickDriverFromJob(job).company || '';
     }
     return contractor?.company || '';
   })();
