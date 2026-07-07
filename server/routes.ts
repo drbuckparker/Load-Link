@@ -2303,6 +2303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       "insuranceInfo", "insurance_info",
       "company",
       "website",
+      "alsoDriver", "also_driver",
       "notificationPreferences", "notification_preferences",
       "expoPushToken", "expo_push_token",
     ]);
@@ -2311,6 +2312,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     for (const [k, v] of Object.entries(req.body || {})) {
       if (PROFILE_ALLOWLIST.has(k)) {
         safeBody[k] = v;
+      }
+    }
+
+    // "I also drive" (also_driver) makes an account driver-discoverable
+    // (/api/drivers/search treats also_driver = true as driver-eligible), so it
+    // must be gated to trucking-company-type accounts server-side — the UI
+    // gating is not a security control. Reject the write for any other account.
+    if ('also_driver' in safeBody || 'alsoDriver' in safeBody) {
+      const accountRole = String(auth.originalRole || auth.user?.role || '');
+      if (!accountRole.includes('trucking_company')) {
+        return res.status(403).json({ message: "Only trucking company accounts can enable 'I also drive'." });
       }
     }
 

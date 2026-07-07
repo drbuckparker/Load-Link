@@ -22,6 +22,7 @@ export interface User {
   licensePlate?: string;
   searchRadiusMiles: number;
   isConnected: boolean;
+  alsoDriver?: boolean;
   rating: number;
   totalJobs: number;
   primaryLocationAddress?: string;
@@ -66,6 +67,7 @@ function mapDbUser(dbUser: any): User {
     licensePlate: dbUser.license_plate || dbUser.licensePlate,
     searchRadiusMiles: dbUser.search_radius_miles ?? dbUser.searchRadiusMiles ?? 50,
     isConnected: dbUser.is_connected ?? dbUser.isConnected ?? true,
+    alsoDriver: dbUser.also_driver ?? dbUser.alsoDriver ?? false,
     rating: Number(dbUser.rating) || 0,
     totalJobs: dbUser.total_jobs ?? dbUser.totalJobs ?? 0,
     primaryLocationAddress: dbUser.primary_location_address || dbUser.primaryLocationAddress,
@@ -252,6 +254,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (updates.truckYear !== undefined) dbUpdates.truck_year = updates.truckYear;
     if (updates.licensePlate !== undefined) dbUpdates.license_plate = updates.licensePlate;
     if (updates.searchRadiusMiles !== undefined) dbUpdates.search_radius_miles = updates.searchRadiusMiles;
+    if (updates.alsoDriver !== undefined) dbUpdates.also_driver = updates.alsoDriver;
     if (updates.primaryLocationAddress !== undefined) dbUpdates.primary_location_address = updates.primaryLocationAddress;
     if (updates.primaryLocationLat !== undefined) dbUpdates.primary_location_lat = updates.primaryLocationLat;
     if (updates.primaryLocationLng !== undefined) dbUpdates.primary_location_lng = updates.primaryLocationLng;

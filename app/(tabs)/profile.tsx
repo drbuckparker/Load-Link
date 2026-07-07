@@ -492,7 +492,7 @@ export default function ProfileScreen() {
           <Text style={styles.roleHeaderDesc}>Change how you use LoadLink. Your current role is highlighted.</Text>
         </View>
 
-        {(user.role === 'trucking_company' || user.role === 'trucking_company_contractor') && (
+        {(() => { const ar = getAccountRoleKey(user); return ar === 'trucking_company' || ar === 'trucking_company_contractor'; })() && (
           <View style={styles.statusCard}>
             <View style={styles.statusLeft}>
               <Ionicons name="car" size={20} color={Colors.success} />
