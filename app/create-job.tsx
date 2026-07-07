@@ -1396,7 +1396,7 @@ export default function CreateJobScreen() {
                     </View>
                   )}
 
-                  <Text style={styles.routeNote}>Travel time adjusted for dump truck speeds (1.4x). {tripsPerDay} trips/day based on 10-hour workdays.</Text>
+                  <Text style={styles.routeNote}>Travel time adjusted for dump truck speeds (1.25x). {tripsPerDay} trips/day based on 10-hour workdays.</Text>
                 </>
               ) : null}
             </View>

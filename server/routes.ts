@@ -4634,7 +4634,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const durationSeconds = leg.duration.value;
         const distanceMeters = leg.distance.value;
         const distanceMiles = (distanceMeters / 1609.34).toFixed(1);
-        const truckDurationSeconds = Math.round(durationSeconds * 1.4);
+        const truckDurationSeconds = Math.round(durationSeconds * 1.25);
 
         return res.json({
           duration_seconds: durationSeconds,
