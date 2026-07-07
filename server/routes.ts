@@ -2879,7 +2879,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // are booked on which approved job (so they can drill in). Users with
       // zero trucks (e.g. pure drivers) get an empty `trucks` array and the
       // client falls back to its existing "Available / OPEN" rendering.
-      const today = new Date();
+      // Compute "today" in the USER'S local timezone, not the server's UTC
+      // clock. The client sends X-TZ-Offset (minutes from UTC, per JS
+      // Date.getTimezoneOffset). Shifting now by that offset makes the Date's
+      // UTC wall-clock read the user's local time, so setHours(0,0,0,0) lands on
+      // the user's local midnight (server runs in UTC on Replit).
+      const rawTz = Number(req.header("X-TZ-Offset"));
+      const tzOffsetMin = Number.isFinite(rawTz) ? rawTz : 0;
+      const today = new Date(Date.now() - tzOffsetMin * 60000);
       today.setHours(0, 0, 0, 0);
       const horizonDays = 7;
       const lastDay = new Date(today);

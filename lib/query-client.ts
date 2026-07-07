@@ -72,6 +72,12 @@ function getHeaders(includeContent?: boolean): Record<string, string> {
   if (_authToken) {
     headers["Authorization"] = `Bearer ${_authToken}`;
   }
+  // Tell the server the user's local timezone (minutes offset from UTC, as
+  // returned by Date.getTimezoneOffset) so day-based views like the dashboard
+  // compute "today" in the user's local time, not the server's UTC clock.
+  try {
+    headers["X-TZ-Offset"] = String(new Date().getTimezoneOffset());
+  } catch {}
   return headers;
 }
 
