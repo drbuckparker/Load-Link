@@ -19,6 +19,7 @@ import { useQuery } from '@tanstack/react-query';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '@/constants/colors';
+import { useAuth } from '@/contexts/AuthContext';
 import MapPickerView from '@/components/MapPickerView';
 import { apiRequest, queryClient, getApiUrl, getAuthToken } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
@@ -93,6 +94,7 @@ function getMaterialWeightPerYard(mat: string): number {
 
 export default function CreateJobScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const routeParams = useLocalSearchParams<{ projectId?: string }>();
   const [submitting, setSubmitting] = useState(false);
 
@@ -284,6 +286,7 @@ export default function CreateJobScreen() {
     setProjectId(id);
     setProjectName(name);
     setShowProjectDropdown(false);
+    setValidationErrors(prev => { const n = new Set(prev); n.delete('project'); return n; });
     const proj = projects.find((p: any) => String(p.id) === id);
     if (proj) {
       setPendingProject(proj);
@@ -320,6 +323,7 @@ export default function CreateJobScreen() {
 
   function handleProjectNameChange(text: string) {
     setProjectName(text);
+    if (text.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('project'); return n; });
     if (!text.trim()) {
       setProjectId('');
     } else {
@@ -847,7 +851,26 @@ export default function CreateJobScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   async function handleSubmit() {
+    // Billing-info gate: anyone who accepts this job needs to know who they're
+    // working for and how to reach the poster to get paid. Require the poster's
+    // company name + phone on their account before they can post.
+    const missingBilling: string[] = [];
+    if (!user?.company || !user.company.trim()) missingBilling.push('company name');
+    if (!user?.phone || !user.phone.trim()) missingBilling.push('phone number');
+    if (missingBilling.length > 0) {
+      Alert.alert(
+        'Add Your Billing Info First',
+        `Before you can post a job, add your ${missingBilling.join(' and ')} to your profile. Drivers who accept your job need this to know who they're working for and how to get paid.`,
+        [
+          { text: 'Not Now', style: 'cancel' },
+          { text: 'Go to Profile', onPress: () => router.push('/(tabs)/profile') },
+        ]
+      );
+      return;
+    }
+
     const errors = new Set<string>();
+    if (!projectId && !projectName.trim()) errors.add('project');
     if (!material.trim()) errors.add('material');
     if (!originAddress.trim()) errors.add('origin');
     if (!destinationAddress.trim()) errors.add('destination');
@@ -856,6 +879,14 @@ export default function CreateJobScreen() {
 
     if (errors.size > 0) {
       setValidationErrors(errors);
+      if (errors.has('project')) {
+        Alert.alert(
+          'Project Required',
+          'This job must be tied to a project. Select an existing project or type a name to create one.'
+        );
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+        return;
+      }
       const firstError = errors.has('material') ? 'Material' 
         : errors.has('origin') ? 'Origin address'
         : errors.has('destination') ? 'Destination address'
@@ -993,6 +1024,7 @@ export default function CreateJobScreen() {
         <View style={[
           styles.projectBar,
           selectedProject && styles.projectBarSelected,
+          validationErrors.has('project') && styles.inputError,
         ]}>
           <Ionicons
             name={selectedProject ? 'folder' : 'folder-outline'}

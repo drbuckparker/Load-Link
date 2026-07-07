@@ -842,6 +842,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
         `SELECT j.*, cp.name as project_name, u.company as contractor_name,
+                u.company as contractor_company,
+                u.full_name as contractor_full_name,
+                u.phone as contractor_phone,
+                u.email as contractor_email,
                 d.full_name as driver_name,
                 COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company
          FROM jobs j
@@ -928,6 +932,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           job.runs = [];
           job.weightTickets = [];
           job.weight_tickets = [];
+          // Poster contact details (personal name, phone, email) are PII and
+          // only meant for participants/applicants who need to coordinate
+          // payment. A non-applicant browsing the job still sees the company
+          // name (contractor_name), but not the personal contact info.
+          delete job.contractor_full_name;
+          delete job.contractor_phone;
+          delete job.contractor_email;
         }
         return res.json(addDualKeys(job));
       }

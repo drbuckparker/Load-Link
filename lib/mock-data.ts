@@ -3,6 +3,9 @@ export interface Job {
   contractorId: string;
   contractorName: string;
   contractorCompany: string;
+  contractorFullName?: string;
+  contractorPhone?: string;
+  contractorEmail?: string;
   driverId?: string;
   jobType: 'single_load' | 'full_day' | 'multi_day';
   material: string;

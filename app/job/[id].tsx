@@ -140,6 +140,9 @@ function mapJob(j: any): Job {
     contractorId: j.contractor_id ?? j.contractorId ?? '',
     contractorName: j.contractor_name ?? j.contractorName ?? '',
     contractorCompany: j.contractor_company ?? j.contractorCompany ?? '',
+    contractorFullName: j.contractor_full_name ?? j.contractorFullName ?? '',
+    contractorPhone: j.contractor_phone ?? j.contractorPhone ?? '',
+    contractorEmail: j.contractor_email ?? j.contractorEmail ?? '',
     driverId: j.driver_id ?? j.driverId,
     jobType: j.job_type ?? j.jobType ?? 'single_load',
     material: j.material ?? '',
@@ -2544,23 +2547,51 @@ export default function JobDetailScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>POSTED BY</Text>
-          <View style={styles.contractorCard}>
-            <View style={styles.contractorAvatar}>
-              <Text style={styles.contractorAvatarText}>{job.contractorName.charAt(0)}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.contractorName}>{job.contractorName}</Text>
-              <Text style={styles.contractorCompany}>{job.contractorCompany}</Text>
-            </View>
-            {myAssignments.some((a: any) => a.status === 'approved') && (
-              <Pressable
-                style={styles.contractorMsgBtn}
-                onPress={() => router.push(`/chat/${id}`)}
-              >
-                <Ionicons name="chatbubble-ellipses" size={20} color={Colors.primary} />
-              </Pressable>
-            )}
-          </View>
+          {(() => {
+            const company = (job.contractorCompany || job.contractorName || '').trim();
+            const fullName = (job.contractorFullName || '').trim();
+            const displayName = company || fullName || 'Job poster';
+            const secondaryName = company && fullName && company !== fullName ? fullName : '';
+            const phone = (job.contractorPhone || '').trim();
+            const email = (job.contractorEmail || '').trim();
+            return (
+              <View style={styles.contractorCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <View style={styles.contractorAvatar}>
+                    <Text style={styles.contractorAvatarText}>{displayName.charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.contractorName}>{displayName}</Text>
+                    {secondaryName ? <Text style={styles.contractorCompany}>{secondaryName}</Text> : null}
+                  </View>
+                  {myAssignments.some((a: any) => a.status === 'approved') && (
+                    <Pressable
+                      style={styles.contractorMsgBtn}
+                      onPress={() => router.push(`/chat/${id}`)}
+                    >
+                      <Ionicons name="chatbubble-ellipses" size={20} color={Colors.primary} />
+                    </Pressable>
+                  )}
+                </View>
+                {(phone || email) ? (
+                  <View style={{ marginTop: 12, gap: 8, borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 12 }}>
+                    {phone ? (
+                      <Pressable style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 }} onPress={() => Linking.openURL(`tel:${phone.replace(/[^0-9+]/g, '')}`)}>
+                        <Ionicons name="call-outline" size={18} color={Colors.primary} />
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 15, color: Colors.text }}>{phone}</Text>
+                      </Pressable>
+                    ) : null}
+                    {email ? (
+                      <Pressable style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 }} onPress={() => Linking.openURL(`mailto:${email}`)}>
+                        <Ionicons name="mail-outline" size={18} color={Colors.primary} />
+                        <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 15, color: Colors.text }} numberOfLines={1}>{email}</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ) : null}
+              </View>
+            );
+          })()}
         </View>
 
         {isMyPostedJob && (
