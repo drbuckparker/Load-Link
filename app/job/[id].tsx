@@ -550,6 +550,16 @@ export default function JobDetailScreen() {
     return 60 + billedSegments * 15;
   }
 
+  // Billed time is displayed as decimal hours in quarter-hour steps (2.25, 4.5,
+  // 6.75) — nobody bills by the minute. Billed minutes are normally already a
+  // multiple of 15; any fallback value (raw elapsed time) is rounded UP to the
+  // next quarter hour so the display never undercuts what gets invoiced.
+  function formatBilledHours(billedMinutes: number) {
+    const quarterMins = Math.ceil(billedMinutes / 15) * 15;
+    const hrs = quarterMins / 60;
+    return String(Math.round(hrs * 100) / 100);
+  }
+
   async function handleApproveAssignment(assignmentId: string, skipTruckPicker?: boolean) {
     const assignment = assignments.find(a => a.id === assignmentId);
     if (!assignment) return;
@@ -1475,14 +1485,14 @@ export default function JobDetailScreen() {
                 <View style={styles.timerStatDivider} />
                 <View style={styles.timerStat}>
                   <Text style={styles.timerStatLabel}>Billed</Text>
-                  <Text style={styles.timerStatValue}>{billedMinutes} min</Text>
+                  <Text style={styles.timerStatValue}>{formatBilledHours(billedMinutes)} hrs</Text>
                 </View>
               </View>
               {showTotal && (
                 <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6 }}>
                   <Ionicons name="time-outline" size={14} color={Colors.textSecondary} />
                   <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textSecondary }}>
-                    Total Job Time: {formatElapsed(totalJobSeconds)} ({totalJobBilled} min billed)
+                    Total Job Time: {formatElapsed(totalJobSeconds)} ({formatBilledHours(totalJobBilled)} hrs billed)
                   </Text>
                 </View>
               )}
@@ -1495,7 +1505,7 @@ export default function JobDetailScreen() {
             <Ionicons name="checkmark-circle" size={32} color={Colors.success} />
             <Text style={styles.completedTitle}>JOB COMPLETED</Text>
             <Text style={styles.completedText}>
-              Time worked: {formatElapsed(elapsedSeconds)} ({billedMinutes} min billed)
+              Time worked: {formatElapsed(elapsedSeconds)} ({formatBilledHours(billedMinutes)} hrs billed)
             </Text>
           </Pressable>
         )}
@@ -1646,7 +1656,7 @@ export default function JobDetailScreen() {
                     )}
                     {!isActive && (
                       <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textSecondary, marginBottom: 8 }}>
-                        {hours > 0 ? `${hours}h ${mins}m` : `${mins}m`} · {run.billed_duration_minutes || duration} min billed
+                        {hours > 0 ? `${hours}h ${mins}m` : `${mins}m`} · {formatBilledHours(run.billed_duration_minutes || duration)} hrs billed
                         {run.loads_hauled ? ` · ${run.loads_hauled} load${run.loads_hauled !== 1 ? 's' : ''}` : ''}
                       </Text>
                     )}
@@ -1800,8 +1810,8 @@ export default function JobDetailScreen() {
                         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Total Time</Text>
                       </View>
                       <View style={{ alignItems: 'center', flex: 1 }}>
-                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{Math.round(allBilled)}</Text>
-                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Min Billed</Text>
+                        <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{formatBilledHours(allBilled)}</Text>
+                        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: Colors.textSecondary }}>Hrs Billed</Text>
                       </View>
                       <View style={{ alignItems: 'center', flex: 1 }}>
                         <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 16, color: Colors.text }}>{totalLoads}</Text>
