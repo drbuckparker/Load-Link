@@ -568,6 +568,29 @@ export default function EditJobScreen() {
                 </View>
               )}
             </View>
+
+            {roundTripMinutes > 0 && (
+              <>
+                <View style={styles.roundTripSummary}>
+                  <Ionicons name="repeat" size={16} color={Colors.primary} />
+                  <Text style={styles.roundTripText}>
+                    Round Trip: <Text style={{ color: Colors.primary, fontFamily: 'Inter_700Bold' }}>
+                      {roundTripLabel}
+                    </Text>
+                    {'  ·  '}
+                    <Text style={{ color: Colors.text, fontFamily: 'Inter_700Bold' }}>
+                      {tripsPerDay} trips/day
+                    </Text>
+                    <Text style={{ color: Colors.textMuted }}> per truck</Text>
+                  </Text>
+                </View>
+                {calculatedTrips > 0 && (
+                  <Text style={styles.roundTripNote}>
+                    {trucksNeeded} truck{trucksNeeded > 1 ? 's' : ''} × {tripsPerTruck} trip{tripsPerTruck > 1 ? 's' : ''} × {roundTripLabel} round trip
+                  </Text>
+                )}
+              </>
+            )}
           </View>
         </View>
 
@@ -749,29 +772,6 @@ export default function EditJobScreen() {
               onChangeText={setEstimatedTrips}
               keyboardType="numeric"
             />
-
-            {roundTripMinutes > 0 && (
-              <>
-                <View style={styles.roundTripSummary}>
-                  <Ionicons name="repeat" size={16} color={Colors.primary} />
-                  <Text style={styles.roundTripText}>
-                    Round Trip: <Text style={{ color: Colors.primary, fontFamily: 'Inter_700Bold' }}>
-                      {roundTripLabel}
-                    </Text>
-                    {'  ·  '}
-                    <Text style={{ color: Colors.text, fontFamily: 'Inter_700Bold' }}>
-                      {tripsPerDay} trips/day
-                    </Text>
-                    <Text style={{ color: Colors.textMuted }}> per truck</Text>
-                  </Text>
-                </View>
-                {calculatedTrips > 0 && (
-                  <Text style={styles.roundTripNote}>
-                    {trucksNeeded} truck{trucksNeeded > 1 ? 's' : ''} × {tripsPerTruck} trip{tripsPerTruck > 1 ? 's' : ''} × {roundTripLabel} round trip
-                  </Text>
-                )}
-              </>
-            )}
 
             <Text style={[styles.label, { marginTop: 14 }]}>Total Tons Needed</Text>
             <TextInput
