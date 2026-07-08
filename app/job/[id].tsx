@@ -854,6 +854,13 @@ export default function JobDetailScreen() {
       const startH24 = editStartAmPm === 'PM' ? (editStartHour === 12 ? 12 : editStartHour + 12) : (editStartHour === 12 ? 0 : editStartHour);
       const newStart = new Date(editStartDate.getFullYear(), editStartDate.getMonth(), editStartDate.getDate(), startH24, editStartMinute, 0, 0);
 
+      // Minute-level change detection (the pickers are minute-granular, while
+      // the stored timestamps can carry seconds).
+      const minuteOf = (t: number) => Math.floor(t / 60000);
+      const origStart = new Date(editingRun.started_at);
+      const startChanged = minuteOf(newStart.getTime()) !== minuteOf(origStart.getTime());
+      let endChanged = false;
+
       const isActiveEdit = editingRun.status === 'active' && !editingRun.ended_at;
       let patchBody: any;
       if (!isActiveEdit) {
@@ -864,6 +871,8 @@ export default function JobDetailScreen() {
           setSavingEdit(false);
           return;
         }
+        const origEnd = editingRun.ended_at ? new Date(editingRun.ended_at) : null;
+        endChanged = !origEnd || minuteOf(newEnd.getTime()) !== minuteOf(origEnd.getTime());
         patchBody = {
           started_at: newStart.toISOString(),
           ended_at: newEnd.toISOString(),
@@ -877,6 +886,29 @@ export default function JobDetailScreen() {
         patchBody = {
           started_at: newStart.toISOString(),
         };
+      }
+
+      // A manually adjusted time must carry the location the driver was at
+      // WHEN HE ENTERED the new time — not the stale pin from the original
+      // clock-in/out. Only the driver can open this editor (the edit buttons
+      // are gated to isDriverOwner && !isContractor), so the device location
+      // here is always the driver's. A failed GPS read resolves to null and
+      // the old pin is kept rather than writing a bogus location.
+      if (startChanged || endChanged) {
+        const loc = await getDriverLocation();
+        if (loc) {
+          if (startChanged) {
+            patchBody.start_lat = loc.lat;
+            patchBody.start_lng = loc.lng;
+          }
+          if (endChanged) {
+            patchBody.end_lat = loc.lat;
+            patchBody.end_lng = loc.lng;
+          }
+        }
+        // The "Time manually entered at ..." badge reads created_at, so stamp
+        // it with the moment of this edit to match the refreshed location.
+        if (startChanged) patchBody.created_at = new Date().toISOString();
       }
 
       await apiRequest('PATCH', `/api/job-runs/${editingRun.id}`, patchBody);
