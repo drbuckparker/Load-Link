@@ -2034,18 +2034,30 @@ export default function JobDetailScreen() {
             {(() => {
               const trips = Number(job.estimatedTrips) || 0;
               const dist = Number(job.distance) || 0;
-              if (trips <= 0 || dist <= 0) return null;
+              if (dist <= 0) return null;
               const oneWayDriveMin = (dist / 25) * 60;
               const loadMin = Number(job.loadTimeMinutes) || 10;
               const unloadMin = Number(job.unloadTimeMinutes) || 10;
               const roundTripMin = (oneWayDriveMin * 2) + loadMin + unloadMin;
+              const roundTripLabel = roundTripMin < 60
+                ? `${Math.round(roundTripMin)} min`
+                : `${Math.floor(roundTripMin / 60)}h ${Math.round(roundTripMin % 60)}m`;
               const totalHours = (roundTripMin * trips) / 60;
               return (
-                <View style={styles.detailItem}>
-                  <Ionicons name="hourglass" size={16} color={Colors.textMuted} />
-                  <Text style={styles.detailLabel}>Est. Hours</Text>
-                  <Text style={styles.detailValue}>{totalHours.toFixed(1)}</Text>
-                </View>
+                <>
+                  <View style={styles.detailItem}>
+                    <Ionicons name="time" size={16} color={Colors.textMuted} />
+                    <Text style={styles.detailLabel}>Est. Round Trip</Text>
+                    <Text style={styles.detailValue}>{roundTripLabel}</Text>
+                  </View>
+                  {trips > 0 && (
+                    <View style={styles.detailItem}>
+                      <Ionicons name="hourglass" size={16} color={Colors.textMuted} />
+                      <Text style={styles.detailLabel}>Est. Hours</Text>
+                      <Text style={styles.detailValue}>{totalHours.toFixed(1)}</Text>
+                    </View>
+                  )}
+                </>
               );
             })()}
           </View>

@@ -86,6 +86,7 @@ export default function EditJobScreen() {
   const [requiresWeightTickets, setRequiresWeightTickets] = useState(false);
   const [urgent, setUrgent] = useState(false);
   const [capacityNeeded, setCapacityNeeded] = useState('');
+  const [routeInfo, setRouteInfo] = useState<any>(null);
 
   const { data: jobData, isLoading } = useQuery<any>({
     queryKey: [`/api/jobs/${id}`],
@@ -158,6 +159,47 @@ export default function EditJobScreen() {
       setLoaded(true);
     }
   }, [jobData, loaded]);
+
+  async function fetchRouteInfo(oLat: number, oLng: number, dLat: number, dLng: number) {
+    try {
+      const baseUrl = getApiUrl();
+      const routeHeaders: Record<string, string> = {};
+      const routeToken = getAuthToken();
+      if (routeToken) routeHeaders['Authorization'] = `Bearer ${routeToken}`;
+      const url = new URL('/api/directions', baseUrl);
+      url.searchParams.set('origin_lat', String(oLat));
+      url.searchParams.set('origin_lng', String(oLng));
+      url.searchParams.set('dest_lat', String(dLat));
+      url.searchParams.set('dest_lng', String(dLng));
+      const res = await fetch(url.toString(), { credentials: 'include', headers: routeHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        setRouteInfo(data);
+      }
+    } catch {}
+  }
+
+  useEffect(() => {
+    if (originLat && originLng && destLat && destLng) {
+      fetchRouteInfo(originLat, originLng, destLat, destLng);
+    }
+  }, [originLat, originLng, destLat, destLng]);
+
+  const loadTime = Number(jobData?.load_time_minutes) || 10;
+  const unloadTime = Number(jobData?.unload_time_minutes) || 10;
+  const oneWayMinutes = routeInfo ? routeInfo.truck_duration_seconds / 60 : 0;
+  const roundTripMinutes = routeInfo ? (oneWayMinutes * 2) + loadTime + unloadTime : 0;
+  const roundTripLabel = roundTripMinutes < 60
+    ? `${Math.round(roundTripMinutes)} min`
+    : `${Math.floor(roundTripMinutes / 60)}h ${Math.round(roundTripMinutes % 60)}m`;
+  const tripsPerDay = roundTripMinutes > 0 ? Math.floor((10 * 60) / roundTripMinutes) : 0;
+  const calculatedTrips = (() => {
+    const tons = parseFloat(totalTonsNeeded) || 0;
+    const cap = parseFloat(capacityNeeded) || 0;
+    if (tons > 0 && cap > 0) return Math.ceil(tons / cap);
+    return parseInt(estimatedTrips, 10) || 0;
+  })();
+  const tripsPerTruck = trucksNeeded > 0 ? Math.ceil(calculatedTrips / trucksNeeded) : calculatedTrips;
 
   const filteredMaterials = material.trim()
     ? pastMaterials.filter((m) =>
@@ -708,6 +750,29 @@ export default function EditJobScreen() {
               keyboardType="numeric"
             />
 
+            {roundTripMinutes > 0 && (
+              <>
+                <View style={styles.roundTripSummary}>
+                  <Ionicons name="repeat" size={16} color={Colors.primary} />
+                  <Text style={styles.roundTripText}>
+                    Round Trip: <Text style={{ color: Colors.primary, fontFamily: 'Inter_700Bold' }}>
+                      {roundTripLabel}
+                    </Text>
+                    {'  ·  '}
+                    <Text style={{ color: Colors.text, fontFamily: 'Inter_700Bold' }}>
+                      {tripsPerDay} trips/day
+                    </Text>
+                    <Text style={{ color: Colors.textMuted }}> per truck</Text>
+                  </Text>
+                </View>
+                {calculatedTrips > 0 && (
+                  <Text style={styles.roundTripNote}>
+                    {trucksNeeded} truck{trucksNeeded > 1 ? 's' : ''} × {tripsPerTruck} trip{tripsPerTruck > 1 ? 's' : ''} × {roundTripLabel} round trip
+                  </Text>
+                )}
+              </>
+            )}
+
             <Text style={[styles.label, { marginTop: 14 }]}>Total Tons Needed</Text>
             <TextInput
               style={styles.input}
@@ -1011,6 +1076,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
+  },
+  roundTripSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
+  },
+  roundTripText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  roundTripNote: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    marginTop: 6,
   },
   stepperBtn: {
     width: 40,
