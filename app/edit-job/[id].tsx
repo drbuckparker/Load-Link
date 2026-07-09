@@ -19,6 +19,7 @@ import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient, getApiUrl, getAuthToken } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
+import MapPickerView from '@/components/MapPickerView';
 
 const JOB_TYPES = [
   { label: 'Single Load', value: 'single_load' },
@@ -61,6 +62,10 @@ export default function EditJobScreen() {
   const [showDestSuggestions, setShowDestSuggestions] = useState(false);
   const [userLat, setUserLat] = useState<number | null>(null);
   const [userLng, setUserLng] = useState<number | null>(null);
+  const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | null>(null);
+  const [mapPin, setMapPin] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [reversingGeocode, setReversingGeocode] = useState(false);
+  const mapPickerOpRef = useRef(0);
   const originDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scheduledDate, setScheduledDate] = useState('');
@@ -292,6 +297,76 @@ export default function EditJobScreen() {
     setDestLng(null);
     if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
     destDebounceRef.current = setTimeout(() => fetchSuggestions(text, 'destination'), 300);
+  }
+
+  async function openMapPicker(target: 'origin' | 'destination') {
+    if (Platform.OS !== 'web') {
+      try {
+        const Location = await import('expo-location');
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission needed', 'Location permission helps center the map on your area.');
+        }
+      } catch {}
+    }
+
+    let initialPin: { latitude: number; longitude: number } | null = null;
+    if (target === 'origin' && originLat && originLng) {
+      initialPin = { latitude: originLat, longitude: originLng };
+    } else if (target === 'destination' && destLat && destLng) {
+      initialPin = { latitude: destLat, longitude: destLng };
+    }
+    setMapPin(initialPin);
+    setMapPickerTarget(target);
+  }
+
+  function handleMapPress(e: any) {
+    setMapPin(e.nativeEvent.coordinate);
+  }
+
+  async function confirmMapPin() {
+    if (!mapPin || !mapPickerTarget) return;
+
+    const opToken = ++mapPickerOpRef.current;
+    setReversingGeocode(true);
+    let address = `${mapPin.latitude.toFixed(5)}, ${mapPin.longitude.toFixed(5)}`;
+
+    try {
+      if (Platform.OS !== 'web') {
+        const Location = await import('expo-location');
+        const results = await Location.reverseGeocodeAsync({
+          latitude: mapPin.latitude,
+          longitude: mapPin.longitude,
+        });
+        if (results.length > 0) {
+          const r = results[0];
+          const parts = [r.streetNumber, r.street, r.city, r.region].filter(Boolean);
+          if (parts.length > 0) address = parts.join(', ');
+        }
+      }
+    } catch {}
+
+    // If the user closed the picker while we were reverse-geocoding, discard
+    // the result instead of applying a location edit they cancelled.
+    if (mapPickerOpRef.current !== opToken) return;
+
+    if (mapPickerTarget === 'origin') {
+      setOriginAddress(address);
+      setOriginLat(mapPin.latitude);
+      setOriginLng(mapPin.longitude);
+      setOriginSuggestions([]);
+      setShowOriginSuggestions(false);
+    } else {
+      setDestinationAddress(address);
+      setDestLat(mapPin.latitude);
+      setDestLng(mapPin.longitude);
+      setDestSuggestions([]);
+      setShowDestSuggestions(false);
+    }
+
+    setReversingGeocode(false);
+    setMapPickerTarget(null);
+    setMapPin(null);
   }
 
   async function selectSuggestion(placeId: string, description: string, target: 'origin' | 'destination') {
@@ -528,7 +603,15 @@ export default function EditJobScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>LOCATIONS</Text>
           <View style={styles.sectionCard}>
-            <Text style={styles.label}>Pickup Location</Text>
+            <View style={styles.labelRow}>
+              <Text style={[styles.label, { marginBottom: 0 }]}>Pickup Location</Text>
+              <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('origin')}>
+                <Ionicons name="location" size={16} color={originLat ? Colors.primary : Colors.textSecondary} />
+                <Text style={[styles.mapPinLinkText, !!originLat && { color: Colors.primary }]}>
+                  {originLat ? 'Pin Set' : 'Drop Pin on Map'}
+                </Text>
+              </Pressable>
+            </View>
             <View style={{ zIndex: 10 }}>
               <View style={styles.addressRow}>
                 <TextInput
@@ -574,7 +657,15 @@ export default function EditJobScreen() {
               )}
             </View>
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Dropoff Location</Text>
+            <View style={[styles.labelRow, { marginTop: 14 }]}>
+              <Text style={[styles.label, { marginBottom: 0 }]}>Dropoff Location</Text>
+              <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('destination')}>
+                <Ionicons name="location" size={16} color={destLat ? Colors.primary : Colors.textSecondary} />
+                <Text style={[styles.mapPinLinkText, !!destLat && { color: Colors.primary }]}>
+                  {destLat ? 'Pin Set' : 'Drop Pin on Map'}
+                </Text>
+              </Pressable>
+            </View>
             <View style={{ zIndex: 9 }}>
               <View style={styles.addressRow}>
                 <TextInput
@@ -996,6 +1087,57 @@ export default function EditJobScreen() {
             </View>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      <Modal
+        visible={mapPickerTarget !== null}
+        animationType="slide"
+        onRequestClose={() => { mapPickerOpRef.current++; setReversingGeocode(false); setMapPickerTarget(null); setMapPin(null); }}
+      >
+        <View style={styles.mapContainer}>
+          <View style={[styles.mapHeader, { paddingTop: Platform.OS === 'web' ? 20 : insets.top }]}>
+            <Pressable onPress={() => { mapPickerOpRef.current++; setReversingGeocode(false); setMapPickerTarget(null); setMapPin(null); }} style={styles.backBtn}>
+              <Ionicons name="close" size={24} color={Colors.text} />
+            </Pressable>
+            <Text style={styles.mapHeaderTitle}>
+              {mapPickerTarget === 'origin' ? 'Set Pickup' : 'Set Dropoff'}
+            </Text>
+            <View style={{ width: 40 }} />
+          </View>
+
+          <Text style={styles.mapHint}>Tap the map to drop a pin</Text>
+
+          <MapPickerView
+            mapPin={mapPin}
+            onMapPress={handleMapPress}
+            userLat={userLat}
+            userLng={userLng}
+            originLat={originLat}
+            originLng={originLng}
+          />
+
+          {mapPin && (
+            <View style={[styles.mapFooter, { paddingBottom: Platform.OS === 'web' ? 20 : insets.bottom + 16 }]}>
+              <View style={styles.mapCoordRow}>
+                <Ionicons name="location" size={16} color={Colors.primary} />
+                <Text style={styles.mapCoordText}>
+                  {mapPin.latitude.toFixed(5)}, {mapPin.longitude.toFixed(5)}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.mapConfirmBtn}
+                onPress={confirmMapPin}
+                disabled={reversingGeocode}
+              >
+                {reversingGeocode ? (
+                  <ActivityIndicator color={Colors.primaryForeground} />
+                ) : (
+                  <Text style={styles.mapConfirmText}>CONFIRM LOCATION</Text>
+                )}
+              </Pressable>
+            </View>
+          )}
+        </View>
       </Modal>
     </View>
   );
@@ -1420,5 +1562,83 @@ const styles = StyleSheet.create({
   },
   amPmTextActive: {
     color: Colors.primary,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  mapPinLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  mapPinLinkText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  mapContainer: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  mapHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: Colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  mapHeaderTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    letterSpacing: 1,
+  },
+  mapHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    paddingVertical: 10,
+    backgroundColor: Colors.card,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  mapFooter: {
+    backgroundColor: Colors.card,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  mapCoordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  mapCoordText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  mapConfirmBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapConfirmText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.primaryForeground,
   },
 });
