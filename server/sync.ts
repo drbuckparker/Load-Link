@@ -476,7 +476,13 @@ export async function syncNotifications(auth: SyncAuth): Promise<number> {
 export async function syncUser(auth: SyncAuth): Promise<void> {
   try {
     if (auth.user && auth.user.id) {
-      await upsertRow("users", auth.user);
+      // Never write session-scoped or security-sensitive fields back to the
+      // shared users table. `role` in particular can be a temporary in-session
+      // view switch (e.g. a compound driver_trucking_company_contractor account
+      // viewing as trucking_company); persisting it collapses the compound
+      // entitlement — the exact trap PUT /api/profile/role guards against.
+      const { role, password, is_admin, isAdmin, is_suspended, isSuspended, ...safeUser } = auth.user;
+      await upsertRow("users", safeUser);
     }
   } catch (e: any) {
     console.error("syncUser error:", e.message);

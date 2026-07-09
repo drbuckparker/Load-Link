@@ -32,6 +32,10 @@ export interface User {
   secondaryLocationLat?: number;
   secondaryLocationLng?: number;
   tertiaryLocationAddress?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
 }
 
 interface AuthContextValue {
@@ -77,6 +81,10 @@ function mapDbUser(dbUser: any): User {
     secondaryLocationLat: dbUser.secondary_location_lat ? Number(dbUser.secondary_location_lat) : undefined,
     secondaryLocationLng: dbUser.secondary_location_lng ? Number(dbUser.secondary_location_lng) : undefined,
     tertiaryLocationAddress: dbUser.tertiary_location_address || dbUser.tertiaryLocationAddress,
+    address: dbUser.address,
+    city: dbUser.city,
+    state: dbUser.state,
+    zipCode: dbUser.zip_code || dbUser.zipCode,
   };
 }
 
@@ -262,6 +270,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (updates.secondaryLocationLat !== undefined) dbUpdates.secondary_location_lat = updates.secondaryLocationLat;
     if (updates.secondaryLocationLng !== undefined) dbUpdates.secondary_location_lng = updates.secondaryLocationLng;
     if (updates.tertiaryLocationAddress !== undefined) dbUpdates.tertiary_location_address = updates.tertiaryLocationAddress;
+    if (updates.address !== undefined) dbUpdates.address = updates.address;
+    if (updates.city !== undefined) dbUpdates.city = updates.city;
+    if (updates.state !== undefined) dbUpdates.state = updates.state;
+    if (updates.zipCode !== undefined) dbUpdates.zip_code = updates.zipCode;
 
     try {
       const res = await apiRequest('PUT', '/api/profile', dbUpdates);

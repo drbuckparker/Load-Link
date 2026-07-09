@@ -247,7 +247,33 @@ function addDualKeys(obj: any): any {
 // `accountRole` for the account type shown in Settings, so toggling the
 // home-page view no longer rewrites what Settings displays.
 function userPayload(user: any, originalRole?: string): any {
-  return addDualKeys({ ...user, accountRole: originalRole || user?.role });
+  // Never expose the password hash — session users can carry the full DB row
+  // (dev-local login and hydrateUserFromDb both source from SELECT *).
+  const { password, ...safe } = user || {};
+  return addDualKeys({ ...safe, accountRole: originalRole || user?.role });
+}
+
+// The website's companion login response only includes a minimal user object
+// (id, email, fullName, role, truckType) — no phone, company, address, etc.
+// The shared users table is the source of truth for profile fields, so merge
+// the DB row into the session user or saved fields "disappear" after every
+// (silent) re-login. Excludes: password (sensitive) and role (session-scoped
+// view switching must not be clobbered by a lazy hydration).
+const USER_HYDRATE_EXCLUDE = new Set(["password", "role"]);
+async function hydrateUserFromDb(user: any): Promise<any> {
+  if (!user?.id) return user;
+  try {
+    const { rows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [user.id]);
+    if (rows.length > 0) {
+      for (const [k, v] of Object.entries(rows[0])) {
+        if (USER_HYDRATE_EXCLUDE.has(k)) continue;
+        if (v !== null && v !== undefined) user[k] = v;
+      }
+    }
+  } catch (e: any) {
+    console.log("hydrateUserFromDb error:", e?.message);
+  }
+  return user;
 }
 
 function getWebsiteAuth(req: Request): { jwt: string; userId: string; user: any; originalRole?: string } | null {
@@ -395,6 +421,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ message: "Invalid response from auth service" });
       }
 
+      await hydrateUserFromDb(user);
+
       const localToken = crypto.randomBytes(32).toString("hex");
       const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
       tokenToJwt.set(localToken, authEntry);
@@ -454,6 +482,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    // Lazy hydration also repairs pre-existing sessions minted before login
+    // started merging the DB row into the session user.
+    await hydrateUserFromDb(auth.user);
     return res.json({ user: userPayload(auth.user, auth.originalRole) });
   });
 
@@ -2301,6 +2332,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/profile", requireAuth, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    // Lazy hydration also repairs pre-existing sessions minted before login
+    // started merging the DB row into the session user.
+    await hydrateUserFromDb(auth.user);
     return res.json(userPayload(auth.user, auth.originalRole));
   });
 
@@ -2324,6 +2358,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       "insuranceInfo", "insurance_info",
       "company",
       "website",
+      "address",
+      "city",
+      "state",
+      "zipCode", "zip_code",
       "alsoDriver", "also_driver",
       "notificationPreferences", "notification_preferences",
       "expoPushToken", "expo_push_token",

@@ -92,6 +92,11 @@ export default function ProfileScreen() {
   const [editField, setEditField] = useState<{ label: string; key: string; value: string; apiKey: string; keyboard?: string } | null>(null);
   const [editValue, setEditValue] = useState('');
   const [saving, setSaving] = useState(false);
+  const [addressEditorOpen, setAddressEditorOpen] = useState(false);
+  const [addrStreet, setAddrStreet] = useState('');
+  const [addrCity, setAddrCity] = useState('');
+  const [addrState, setAddrState] = useState('');
+  const [addrZip, setAddrZip] = useState('');
   const [earningsPeriod, setEarningsPeriod] = useState<'week' | 'month' | 'all'>('month');
   const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -165,6 +170,39 @@ export default function ProfileScreen() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function openAddressEditor() {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setAddrStreet(user?.address || '');
+    setAddrCity(user?.city || '');
+    setAddrState(user?.state || '');
+    setAddrZip(user?.zipCode || '');
+    setAddressEditorOpen(true);
+  }
+
+  async function saveAddressEdit() {
+    setSaving(true);
+    try {
+      await updateUser({
+        address: addrStreet.trim(),
+        city: addrCity.trim(),
+        state: addrState.trim(),
+        zipCode: addrZip.trim(),
+      });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setAddressEditorOpen(false);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to update address');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function mailingAddressSummary(): string {
+    const line = [user?.address, user?.city, user?.state].filter(Boolean).join(', ');
+    const withZip = [line, user?.zipCode].filter(Boolean).join(' ');
+    return withZip || 'Not set';
   }
 
   async function handleStatusToggle(value: boolean) {
@@ -328,6 +366,12 @@ export default function ProfileScreen() {
             <Ionicons name="business-outline" size={18} color={Colors.textMuted} />
             <Text style={styles.infoLabel}>Company</Text>
             <Text style={[styles.infoValue, !user.company && styles.infoValueMuted]} numberOfLines={1}>{user.company || 'Not set'}</Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+          </Pressable>
+          <Pressable style={styles.infoRow} onPress={openAddressEditor} testID="mailing-address-row">
+            <Ionicons name="home-outline" size={18} color={Colors.textMuted} />
+            <Text style={styles.infoLabel}>Address</Text>
+            <Text style={[styles.infoValue, mailingAddressSummary() === 'Not set' && styles.infoValueMuted]} numberOfLines={1}>{mailingAddressSummary()}</Text>
             <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
           </Pressable>
         </View>
@@ -856,6 +900,83 @@ export default function ProfileScreen() {
                   returnKeyType="done"
                   onSubmitEditing={saveFieldEdit}
                 />
+              </View>
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={addressEditorOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddressEditorOpen(false)}
+      >
+        <Pressable style={styles.editOverlay} onPress={() => setAddressEditorOpen(false)}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.editKeyboard}>
+            <Pressable style={styles.editSheet} onPress={() => {}}>
+              <View style={styles.editHeader}>
+                <Pressable onPress={() => setAddressEditorOpen(false)}>
+                  <Text style={styles.editCancel}>Cancel</Text>
+                </Pressable>
+                <Text style={styles.editTitle}>Mailing Address</Text>
+                <Pressable onPress={saveAddressEdit} disabled={saving} testID="save-address">
+                  <Text style={[styles.editDone, saving && { opacity: 0.5 }]}>Save</Text>
+                </Pressable>
+              </View>
+              <View style={[styles.editInputWrap, { marginBottom: 10 }]}>
+                <TextInput
+                  style={styles.editInput}
+                  value={addrStreet}
+                  onChangeText={setAddrStreet}
+                  placeholder="Street address"
+                  placeholderTextColor={Colors.textMuted}
+                  autoFocus
+                  autoCapitalize="words"
+                  returnKeyType="next"
+                  testID="address-street"
+                />
+              </View>
+              <View style={[styles.editInputWrap, { marginBottom: 10 }]}>
+                <TextInput
+                  style={styles.editInput}
+                  value={addrCity}
+                  onChangeText={setAddrCity}
+                  placeholder="City"
+                  placeholderTextColor={Colors.textMuted}
+                  autoCapitalize="words"
+                  returnKeyType="next"
+                  testID="address-city"
+                />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <View style={[styles.editInputWrap, { flex: 1 }]}>
+                  <TextInput
+                    style={styles.editInput}
+                    value={addrState}
+                    onChangeText={setAddrState}
+                    placeholder="State"
+                    placeholderTextColor={Colors.textMuted}
+                    autoCapitalize="characters"
+                    maxLength={2}
+                    returnKeyType="next"
+                    testID="address-state"
+                  />
+                </View>
+                <View style={[styles.editInputWrap, { flex: 1.5 }]}>
+                  <TextInput
+                    style={styles.editInput}
+                    value={addrZip}
+                    onChangeText={setAddrZip}
+                    placeholder="ZIP code"
+                    placeholderTextColor={Colors.textMuted}
+                    keyboardType="number-pad"
+                    maxLength={10}
+                    returnKeyType="done"
+                    onSubmitEditing={saveAddressEdit}
+                    testID="address-zip"
+                  />
+                </View>
               </View>
             </Pressable>
           </KeyboardAvoidingView>

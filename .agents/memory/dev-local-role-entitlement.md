@@ -20,3 +20,11 @@ The active view lives in `auth.user.role` (mutated by the home-page toggle / `PU
 **Why:** without exposing `accountRole`, the client only saw `role` (the active view), so toggling the home view rewrote the Settings account type. Two gotchas that bite here: (1) `originalRole` is captured ONLY at login — changing `users.role` in the DB does NOT update a live session, so the user must sign out and back in for a new entitlement to register; (2) `AuthContext.mapDbUser` maps a fixed allowlist of fields, so any new user field (like `accountRole`) is silently dropped unless explicitly added there AND returned by every user-returning endpoint (login, register, /auth/me, GET/PUT /profile, /profile/status, /profile/role) — easiest via a single `userPayload(user, originalRole)` helper.
 
 **How to apply:** client `getAccountRoleKey(user)` falls back to `user.role` when `accountRole` isn't one of the listed role cards, so single-role and driver-inclusive compound accounts not in the ROLES list are unaffected.
+
+## Role-clobber via background sync (second bite)
+
+`PUT /api/profile/role` was not the only writer: the sync engine's user upsert (`syncUser`) blindly wrote the whole session user back to the shared `users` table, persisting the session-only switched `role` and collapsing the demo account's compound entitlement AGAIN.
+
+**Rule:** any code path that writes the session user to the `users` table must strip session-scoped/security fields first — at minimum `role`, `password`, admin/suspension flags.
+
+**How to apply:** if a compound account's role collapses in the DB with no `PUT /api/profile/role` culprit, audit every `upsertRow("users", ...)`/UPDATE writer; repair via `UPDATE users SET role='<compound>' WHERE id=...` (or re-run the demo seed).
