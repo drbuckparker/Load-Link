@@ -1072,7 +1072,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // edit (pickup_time) survives locally until the next sync, then reverts to
       // the website's old value on refresh. Pushing all updates keeps them in sync.
       if (updates.length > 0) {
-        pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {});
+        // The website's PUT validation is strict about key casing AND value
+        // types (proven empirically via sync_queue replays): keys must be
+        // camelCase, decimal/numeric columns must be strings ("32.3"), and
+        // integer columns must be numbers (estimatedTrips: 3). A snake_case
+        // body or a wrongly-typed value gets HTTP 400 "Validation error", the
+        // push never lands, and the next periodic down-sync reverts the edit.
+        // Sourcing values from the freshly-updated DB row guarantees correct
+        // types, because pg returns numeric columns as strings and integer
+        // columns as numbers — the same column types the website validates
+        // against (shared schema).
+        const updatedRow = result.rows[0] || {};
+        const pushBody: Record<string, any> = {};
+        for (const k of Object.keys(req.body)) {
+          if (req.body[k] === undefined) continue;
+          const col = camelToSnake(k);
+          let v = Object.prototype.hasOwnProperty.call(updatedRow, col) ? updatedRow[col] : req.body[k];
+          if (v instanceof Date) {
+            v = col === 'scheduled_date' ? v.toISOString().slice(0, 10) : v.toISOString();
+          }
+          pushBody[snakeToCamel(k)] = v;
+        }
+        pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: pushBody }).catch(() => {});
       }
       return res.json(addDualKeys(result.rows[0] || { id: req.params.id }));
     } catch (e: any) {

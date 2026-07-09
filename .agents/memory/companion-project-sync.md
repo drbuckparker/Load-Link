@@ -50,6 +50,19 @@ push on ANY update (`updates.length > 0`), not just `dateChanged`. General rule:
 any companion write to a website-synced entity must be mirrored upstream or the
 down-sync clobbers it.
 
+**Job PUT push payload: strict casing AND value types.** The website's
+`PUT /api/jobs/:id` validation (drizzle-zod style) silently 400s ("Validation
+error", no field named) unless: keys are **camelCase**, decimal/numeric columns
+are **strings** (`"32.3"`, rate/lat/lng/distance/estimatedCost/estimatedDays/
+totalTonsNeeded), and integer columns are **numbers** (`estimatedTrips: 3`,
+`trucksNeeded: 1`). A failed push means the next ~60s down-sync reverts the
+user's edit — looks like "my edit didn't save." **How to apply:** build the push
+body from the freshly-updated **pg row** (pg returns numeric→string,
+integer→number, matching the website's shared column types), camelize keys,
+Date→ISO (scheduled_date sliced to date-only). Debug tip: bisect the payload by
+replaying a failed `sync_queue` row (reset `attempts=0`, edit `body`) — the
+user's periodic drain retries it with their real session within ~60s.
+
 **Pushing is NOT enough for a job's terminal status.** Marking a job
 `completed` (contractor `PUT /api/jobs/:id {status:'completed'}`) writes the
 shared DB and pushes upstream, yet the job still "vanished for ~60s then

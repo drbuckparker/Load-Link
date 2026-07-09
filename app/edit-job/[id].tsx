@@ -278,12 +278,18 @@ export default function EditJobScreen() {
 
   function handleOriginTextChange(text: string) {
     setOriginAddress(text);
+    // Hand-typed text invalidates any previously-selected coordinates; clearing
+    // them makes handleSave's geocode fallback re-resolve the new address.
+    setOriginLat(null);
+    setOriginLng(null);
     if (originDebounceRef.current) clearTimeout(originDebounceRef.current);
     originDebounceRef.current = setTimeout(() => fetchSuggestions(text, 'origin'), 300);
   }
 
   function handleDestTextChange(text: string) {
     setDestinationAddress(text);
+    setDestLat(null);
+    setDestLng(null);
     if (destDebounceRef.current) clearTimeout(destDebounceRef.current);
     destDebounceRef.current = setTimeout(() => fetchSuggestions(text, 'destination'), 300);
   }
@@ -330,6 +336,32 @@ export default function EditJobScreen() {
 
     setSubmitting(true);
     try {
+      // If an address was typed by hand (no suggestion tapped), its coordinates
+      // are missing — geocode it so the map pin and mileage stay correct.
+      let oLat = originLat, oLng = originLng, dLat = destLat, dLng = destLng;
+      const geoHeaders: Record<string, string> = {};
+      const geoToken = getAuthToken();
+      if (geoToken) geoHeaders['Authorization'] = `Bearer ${geoToken}`;
+      async function geocode(address: string): Promise<{ lat: number; lng: number } | null> {
+        try {
+          const url = new URL('/api/places/geocode', getApiUrl());
+          url.searchParams.set('address', address);
+          const res = await fetch(url.toString(), { headers: geoHeaders });
+          if (!res.ok) return null;
+          const data = await res.json();
+          if (typeof data.lat === 'number' && typeof data.lng === 'number') return { lat: data.lat, lng: data.lng };
+          return null;
+        } catch { return null; }
+      }
+      if ((!oLat || !oLng) && originAddress.trim()) {
+        const g = await geocode(originAddress.trim());
+        if (g) { oLat = g.lat; oLng = g.lng; setOriginLat(g.lat); setOriginLng(g.lng); }
+      }
+      if ((!dLat || !dLng) && destinationAddress.trim()) {
+        const g = await geocode(destinationAddress.trim());
+        if (g) { dLat = g.lat; dLng = g.lng; setDestLat(g.lat); setDestLng(g.lng); }
+      }
+
       const body: Record<string, any> = {
         material: material.trim(),
         job_type: jobType,
@@ -344,10 +376,29 @@ export default function EditJobScreen() {
         urgent,
       };
 
-      if (originLat) body.origin_lat = originLat;
-      if (originLng) body.origin_lng = originLng;
-      if (destLat) body.destination_lat = destLat;
-      if (destLng) body.destination_lng = destLng;
+      if (oLat) body.origin_lat = oLat;
+      if (oLng) body.origin_lng = oLng;
+      if (dLat) body.destination_lat = dLat;
+      if (dLng) body.destination_lng = dLng;
+
+      // Refresh the stored mileage when the route endpoints changed.
+      const coordsChanged =
+        Number(jobData?.origin_lat) !== oLat || Number(jobData?.origin_lng) !== oLng ||
+        Number(jobData?.destination_lat) !== dLat || Number(jobData?.destination_lng) !== dLng;
+      if (oLat && oLng && dLat && dLng && coordsChanged) {
+        try {
+          const dirUrl = new URL('/api/directions', getApiUrl());
+          dirUrl.searchParams.set('origin_lat', String(oLat));
+          dirUrl.searchParams.set('origin_lng', String(oLng));
+          dirUrl.searchParams.set('dest_lat', String(dLat));
+          dirUrl.searchParams.set('dest_lng', String(dLng));
+          const dirRes = await fetch(dirUrl.toString(), { credentials: 'include', headers: geoHeaders });
+          if (dirRes.ok) {
+            const dirData = await dirRes.json();
+            if (dirData.distance_miles != null) body.distance = dirData.distance_miles;
+          }
+        } catch {}
+      }
       if (scheduledDate) body.scheduled_date = scheduledDate.trim();
       if (pickupTime) body.pickup_time = pickupTime.trim();
       if (jobType === 'multi_day') {
