@@ -16,6 +16,8 @@ interface RawInvoice {
   contractor_company?: string;
   driver_name?: string;
   driver_company?: string;
+  driver_parent_company_id?: string | null;
+  driver_parent_company_name?: string | null;
   total_amount: any;
   status: string;
   created_at: string;
@@ -27,6 +29,7 @@ interface PartyGroup {
   partyId: string;
   partyName: string;
   partyCompany: string | null;
+  driverNames: string[];
   invoiceCount: number;
   totalAmount: number;
   outstanding: number;
@@ -70,9 +73,16 @@ export default function InvoicesScreen() {
   const groups: PartyGroup[] = useMemo(() => {
     const map = new Map<string, PartyGroup>();
     for (const inv of invoices) {
-      const partyId = viewerIsContractor ? inv.driver_id : inv.contractor_id;
+      // Contractor view: drivers roll up under their trucking company, so one
+      // company running several of your jobs shows a single combined total.
+      // Independent drivers (no parent company) remain their own group.
+      const partyId = viewerIsContractor
+        ? (inv.driver_parent_company_id || inv.driver_id)
+        : inv.contractor_id;
       const partyName = (viewerIsContractor ? inv.driver_name : inv.contractor_name) || 'Unknown';
-      const partyCompany = (viewerIsContractor ? inv.driver_company : inv.contractor_company) || null;
+      const partyCompany = viewerIsContractor
+        ? (inv.driver_parent_company_name || inv.driver_company || null)
+        : (inv.contractor_company || null);
       if (!partyId) continue;
       const amt = Number(inv.total_amount) || 0;
       const isOutstanding = ['open', 'issued', 'payment_sent'].includes(inv.status);
@@ -85,11 +95,13 @@ export default function InvoicesScreen() {
         if (isPaid) existing.paid += amt;
         if (inv.created_at > existing.latestDate) existing.latestDate = inv.created_at;
         if (inv.status === 'open') existing.hasOpen = true;
+        if (partyName !== 'Unknown' && !existing.driverNames.includes(partyName)) existing.driverNames.push(partyName);
       } else {
         map.set(partyId, {
           partyId,
           partyName,
           partyCompany,
+          driverNames: partyName !== 'Unknown' ? [partyName] : [],
           invoiceCount: 1,
           totalAmount: amt,
           outstanding: isOutstanding ? amt : 0,
@@ -180,7 +192,9 @@ export default function InvoicesScreen() {
           <View style={styles.groupInfo}>
             <Text style={styles.groupName} numberOfLines={1}>{item.partyCompany || item.partyName}</Text>
             {item.partyCompany && (
-              <Text style={styles.groupSubName} numberOfLines={1}>{item.partyName}</Text>
+              <Text style={styles.groupSubName} numberOfLines={1}>
+                {item.driverNames.length > 1 ? `${item.driverNames.length} drivers` : item.partyName}
+              </Text>
             )}
             <Text style={styles.groupMeta}>
               {item.invoiceCount} invoice{item.invoiceCount !== 1 ? 's' : ''}

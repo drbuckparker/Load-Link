@@ -217,6 +217,13 @@ export default function JobDetailScreen() {
     enabled: !!id && isMyPostedJob,
   });
 
+  // Owner-only per-truck/company billing breakdown (billed time + amount owed).
+  const { data: billingData } = useQuery<any>({
+    queryKey: [`/api/jobs/${id}/billing`],
+    enabled: !!id && isMyPostedJob,
+  });
+  const billingEntries: any[] = billingData?.entries || [];
+
   const assignments: Assignment[] = (assignmentsData || []).map(mapAssignment);
   const pendingAssignments = assignments.filter(a => a.status === 'pending');
   const approvedAssignments = assignments.filter(a => a.status === 'approved');
@@ -2733,6 +2740,49 @@ export default function JobDetailScreen() {
           </View>
         )}
 
+        {isMyPostedJob && billingEntries.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>BILLING BREAKDOWN</Text>
+            {billingEntries.map((e: any) => {
+              const hours = Math.floor((e.minutes || 0) / 60);
+              const mins = Math.round((e.minutes || 0) % 60);
+              const timeLabel = `${hours}h ${mins}m`;
+              const displayName = e.company_name || e.driver_name || 'Unknown';
+              const subParts: string[] = [];
+              if (e.company_name && e.driver_name && e.company_name !== e.driver_name) subParts.push(e.driver_name);
+              if (Array.isArray(e.trucks) && e.trucks.length > 0) subParts.push(e.trucks.join(', '));
+              return (
+                <Pressable
+                  key={e.driver_id}
+                  style={({ pressed }) => [styles.billingRow, pressed && { backgroundColor: Colors.cardHover }]}
+                  onPress={() => router.push({ pathname: '/invoices-by-party/[partyId]', params: { partyId: e.company_id } })}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.billingName} numberOfLines={1}>{displayName}</Text>
+                    {subParts.length > 0 && (
+                      <Text style={styles.billingSub} numberOfLines={1}>{subParts.join(' · ')}</Text>
+                    )}
+                    <Text style={styles.billingMeta}>
+                      {timeLabel} billed{e.loads > 0 ? ` · ${e.loads} load${e.loads !== 1 ? 's' : ''}` : ''}
+                      {e.has_active_run ? ' · on the clock' : ''}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                    <Text style={styles.billingAmount}>${Number(e.amount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</Text>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                  </View>
+                </Pressable>
+              );
+            })}
+            <View style={styles.billingTotalRow}>
+              <Text style={styles.billingTotalLabel}>TOTAL OWED THIS JOB</Text>
+              <Text style={styles.billingTotalValue}>
+                ${Number(billingData?.total_amount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Job-management actions (complete / edit / archive) are contractor-only.
             Trucking companies (fleet managers) and drivers do the work but never
             manage the job posting — even the poster only sees these in the
@@ -4576,6 +4626,61 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 13,
     color: Colors.textMuted,
+  },
+  billingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 14,
+    marginBottom: 8,
+    minHeight: 44,
+  },
+  billingName: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: Colors.text,
+  },
+  billingSub: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  billingMeta: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 3,
+  },
+  billingAmount: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.text,
+  },
+  billingTotalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: Colors.primaryLight,
+    marginTop: 2,
+  },
+  billingTotalLabel: {
+    fontFamily: 'ChakraPetch_600SemiBold',
+    fontSize: 12,
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
+  billingTotalValue: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 17,
+    color: Colors.primary,
   },
   companyLabel: {
     fontFamily: 'ChakraPetch_700Bold',

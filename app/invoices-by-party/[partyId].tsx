@@ -57,15 +57,47 @@ export default function InvoicesByPartyScreen() {
 
   const invoices = useMemo(() => {
     return allInvoices.filter(inv => {
-      const otherPartyId = viewerIsContractor ? inv.driver_id : inv.contractor_id;
+      // Same roll-up key as the Invoices tab: drivers group under their
+      // trucking company; independent drivers stand alone.
+      const otherPartyId = viewerIsContractor
+        ? (inv.driver_parent_company_id || inv.driver_id)
+        : inv.contractor_id;
       return otherPartyId === partyId;
     });
   }, [allInvoices, partyId, viewerIsContractor]);
+
+  const isCompanyGroup = useMemo(
+    () => viewerIsContractor && invoices.length > 0 && invoices[0].driver_parent_company_id === partyId,
+    [invoices, partyId, viewerIsContractor]
+  );
+
+  const driverNames = useMemo(() => {
+    const names: string[] = [];
+    for (const inv of invoices) {
+      const n = inv.driver_name;
+      if (n && !names.includes(n)) names.push(n);
+    }
+    return names;
+  }, [invoices]);
 
   const partyInfo = useMemo(() => {
     if (invoices.length === 0) return null;
     const sample = invoices[0];
     if (viewerIsContractor) {
+      if (isCompanyGroup) {
+        // Prefer the trucking company's own contact details; fall back to the
+        // driver's if the company hasn't filled theirs in.
+        return {
+          name: sample.driver_parent_company_name || 'Trucking Company',
+          company: null,
+          email: sample.driver_parent_company_email || sample.driver_email,
+          phone: sample.driver_parent_company_phone || sample.driver_phone,
+          address: sample.driver_parent_company_address,
+          city: sample.driver_parent_company_city,
+          state: sample.driver_parent_company_state,
+          zip: sample.driver_parent_company_zip,
+        };
+      }
       return {
         name: sample.driver_name || 'Unknown',
         company: sample.driver_company,
@@ -126,6 +158,11 @@ export default function InvoicesByPartyScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.partyName}>{partyInfo.company || partyInfo.name}</Text>
               {partyInfo.company && <Text style={styles.partySub}>{partyInfo.name}</Text>}
+              {isCompanyGroup && driverNames.length > 0 && (
+                <Text style={styles.partySub} numberOfLines={2}>
+                  {driverNames.length > 1 ? `${driverNames.length} drivers: ${driverNames.join(', ')}` : driverNames[0]}
+                </Text>
+              )}
             </View>
           </View>
 
@@ -242,6 +279,9 @@ export default function InvoicesByPartyScreen() {
             </View>
             <View style={styles.invoiceInfo}>
               <Text style={styles.invoicePeriod}>{monthName} {year}</Text>
+              {isCompanyGroup && driverNames.length > 1 && item.driver_name ? (
+                <Text style={styles.invoiceDate} numberOfLines={1}>{item.driver_name}</Text>
+              ) : null}
               <Text style={styles.invoiceDate}>
                 {item.created_at ? new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
               </Text>

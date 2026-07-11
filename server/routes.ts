@@ -3988,6 +3988,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { earnings, totalMinutes, totalLoads, runs: runsRes.rows };
   }
 
+  // Per-truck / per-company billing breakdown for a single job (job owner only).
+  // Groups the job's runs by driver, resolves each driver's parent trucking
+  // company (users.trucking_company_id, falling back to the driver themselves),
+  // and prices each driver's own time/loads with the same rules as
+  // computeJobEarnings so the numbers always reconcile with invoice math.
+  app.get("/api/jobs/:id/billing", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const jobRes = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
+      const job = jobRes.rows[0];
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (String(job.contractor_id) !== String(auth.userId)) {
+        return res.status(403).json({ message: "Only the job poster can view billing" });
+      }
+
+      const runsRes = await pool.query(
+        `SELECT jr.driver_id, jr.vehicle_id, jr.billed_duration_minutes, jr.actual_duration_minutes,
+                jr.started_at, jr.ended_at, jr.status, jr.loads_hauled,
+                u.full_name AS driver_name,
+                COALESCE(u.trucking_company_id::text, u.id::text) AS company_id,
+                COALESCE(NULLIF(tc.company, ''), NULLIF(tc.full_name, ''), NULLIF(u.company, '')) AS company_name,
+                t.truck_number, t.make, t.model, t.year
+         FROM job_runs jr
+         JOIN users u ON u.id::text = jr.driver_id::text
+         LEFT JOIN users tc ON tc.id::text = u.trucking_company_id::text
+         LEFT JOIN trucks t ON t.id::text = jr.vehicle_id::text
+         WHERE jr.job_id = $1
+         ORDER BY jr.started_at ASC`,
+        [req.params.id]
+      );
+
+      type Entry = {
+        driver_id: string; driver_name: string | null;
+        company_id: string; company_name: string | null;
+        trucks: string[]; minutes: number; loads: number; run_count: number; has_active_run: boolean;
+      };
+      const byDriver = new Map<string, Entry>();
+      for (const r of runsRes.rows) {
+        // Same minutes fallback chain as computeJobEarnings.
+        const billed = r.billed_duration_minutes != null ? Number(r.billed_duration_minutes) : null;
+        const actual = r.actual_duration_minutes != null ? Number(r.actual_duration_minutes) : null;
+        let mins = 0;
+        if (billed != null) mins = billed;
+        else if (actual != null) mins = actual;
+        else if (r.started_at && r.ended_at) {
+          mins = Math.max(0, (new Date(r.ended_at).getTime() - new Date(r.started_at).getTime()) / 60000);
+        } else if (r.started_at && r.status !== 'completed') {
+          mins = Math.max(0, (Date.now() - new Date(r.started_at).getTime()) / 60000);
+        }
+        const truckLabel = r.truck_number
+          ? `#${r.truck_number}`
+          : [r.year, r.make, r.model].filter(Boolean).join(' ') || null;
+        const key = String(r.driver_id);
+        const e: Entry = byDriver.get(key) || {
+          driver_id: key, driver_name: r.driver_name || null,
+          company_id: String(r.company_id), company_name: r.company_name || null,
+          trucks: [], minutes: 0, loads: 0, run_count: 0, has_active_run: false,
+        };
+        e.minutes += mins;
+        e.loads += Number(r.loads_hauled || 0);
+        e.run_count += 1;
+        if (r.status === 'active') e.has_active_run = true;
+        if (truckLabel && !e.trucks.includes(truckLabel)) e.trucks.push(truckLabel);
+        byDriver.set(key, e);
+      }
+
+      const rate = Number(job.rate || 0);
+      const rateType = String(job.rate_type || 'per_hour');
+      const isFlat = rateType === 'flat' || rateType === 'flat_rate' || rateType === 'per_job';
+      const entriesRaw = Array.from(byDriver.values());
+      const entries = entriesRaw.map((e) => {
+        let amount = 0;
+        if (isFlat) amount = entriesRaw.length > 0 ? rate / entriesRaw.length : 0;
+        else if (rateType === 'per_load') amount = e.loads * rate;
+        else amount = (e.minutes / 60) * rate;
+        return {
+          ...e,
+          minutes: Math.round(e.minutes),
+          amount: Number(amount.toFixed(2)),
+        };
+      }).sort((a, b) => b.amount - a.amount);
+
+      const total = entries.reduce((s, e) => s + e.amount, 0);
+      res.json(addDualKeys({
+        job_id: job.id,
+        rate,
+        rate_type: rateType,
+        entries,
+        total_amount: Number(total.toFixed(2)),
+        total_minutes: entries.reduce((s, e) => s + e.minutes, 0),
+        total_loads: entries.reduce((s, e) => s + e.loads, 0),
+      }));
+    } catch (error: any) {
+      console.error("Job billing error:", error.message);
+      res.status(500).json({ message: "Failed to load job billing" });
+    }
+  });
+
   // Find all jobs that should be tallied under a given invoice, then recompute totals.
   // For OPEN invoices: act as a live, rolling tally of all unbilled work between the
   // contractor and driver that has any tracked time/loads. For issued/paid invoices:
@@ -4041,10 +4139,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           d.full_name AS driver_name, d.company AS driver_company,
           d.email AS driver_email, d.phone AS driver_phone,
           d.address AS driver_address, d.city AS driver_city,
-          d.state AS driver_state, d.zip_code AS driver_zip
+          d.state AS driver_state, d.zip_code AS driver_zip,
+          d.trucking_company_id AS driver_parent_company_id,
+          COALESCE(NULLIF(tcp.company, ''), NULLIF(tcp.full_name, '')) AS driver_parent_company_name,
+          tcp.email AS driver_parent_company_email, tcp.phone AS driver_parent_company_phone,
+          tcp.address AS driver_parent_company_address, tcp.city AS driver_parent_company_city,
+          tcp.state AS driver_parent_company_state, tcp.zip_code AS driver_parent_company_zip
         FROM monthly_invoices mi
         LEFT JOIN users c ON c.id = mi.contractor_id
         LEFT JOIN users d ON d.id = mi.driver_id
+        LEFT JOIN users tcp ON tcp.id::text = d.trucking_company_id::text
         WHERE (mi.contractor_id = $1 OR mi.driver_id = $1)`;
       const params: any[] = [auth.userId];
       if (!includeHidden) {
@@ -4091,10 +4195,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           d.full_name AS driver_name, d.company AS driver_company,
           d.email AS driver_email, d.phone AS driver_phone,
           d.address AS driver_address, d.city AS driver_city,
-          d.state AS driver_state, d.zip_code AS driver_zip
+          d.state AS driver_state, d.zip_code AS driver_zip,
+          d.trucking_company_id AS driver_parent_company_id,
+          COALESCE(NULLIF(tcp.company, ''), NULLIF(tcp.full_name, '')) AS driver_parent_company_name,
+          tcp.email AS driver_parent_company_email, tcp.phone AS driver_parent_company_phone,
+          tcp.address AS driver_parent_company_address, tcp.city AS driver_parent_company_city,
+          tcp.state AS driver_parent_company_state, tcp.zip_code AS driver_parent_company_zip
         FROM monthly_invoices mi
         LEFT JOIN users c ON c.id = mi.contractor_id
         LEFT JOIN users d ON d.id = mi.driver_id
+        LEFT JOIN users tcp ON tcp.id::text = d.trucking_company_id::text
         WHERE mi.id = $1 AND (mi.contractor_id = $2 OR mi.driver_id = $2)`,
         [req.params.id, auth.userId]
       );
