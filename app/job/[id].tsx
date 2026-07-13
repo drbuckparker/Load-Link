@@ -26,6 +26,47 @@ function isContractorRole(role: string): boolean {
   return role.includes('contractor') && role !== 'trucking_company';
 }
 
+// "Clocked out X mi from job site" badge, measured in ROAD miles (driving
+// distance) via the server's Directions lookup — a spot 23 air miles away can
+// be 50 road miles, and road miles are what actually matter. Falls back to the
+// straight-line figure only if the road lookup fails.
+function ClockOutDistanceBadge({ jobId, lat, lng, airMiles }: {
+  jobId: string;
+  lat: number;
+  lng: number;
+  airMiles: number | null;
+}) {
+  // Road distance is always >= straight-line, so under ~3 air miles a >15
+  // road-mile result is impossible — skip the lookup entirely.
+  const worthChecking = airMiles != null && airMiles > 3;
+  const { data, isLoading } = useQuery<{ road_miles: number | null; air_miles: number }>({
+    queryKey: ['/api/jobs', jobId, `road-distance?lat=${lat}&lng=${lng}`],
+    enabled: worthChecking,
+    staleTime: Infinity,
+    refetchInterval: false,
+  });
+  if (!worthChecking) return null;
+  const roadMiles = data?.road_miles ?? null;
+  let label: string | null = null;
+  if (roadMiles != null) {
+    if (roadMiles > CLOCKOUT_GEOFENCE_MILES) {
+      label = `Clocked out ${Math.round(roadMiles)} road mi from job site`;
+    }
+  } else if (!isLoading && airMiles! > CLOCKOUT_GEOFENCE_MILES) {
+    // Road lookup unavailable — show the straight-line figure rather than nothing.
+    label = `Clocked out ${Math.round(airMiles!)} mi from job site`;
+  }
+  if (!label) return null;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, backgroundColor: 'rgba(255,153,0,0.12)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, alignSelf: 'flex-start' }}>
+      <Ionicons name="warning-outline" size={12} color={Colors.warning} />
+      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 11, color: Colors.warning, marginLeft: 4 }}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 
 interface VehicleInfo {
   id: string;
@@ -1616,7 +1657,6 @@ export default function JobDetailScreen() {
                       Number(job.destinationLat), Number(job.destinationLng),
                     )
                   : null;
-                const endLocFar = endLocMiles != null && endLocMiles > CLOCKOUT_GEOFENCE_MILES;
                 // Actual moment the GPS was captured (the real clock-in/out action),
                 // independent of any manually-adjusted time. Reveals a rolled-back time.
                 const startLocTimeLabel = (createdAt || startTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -1784,13 +1824,13 @@ export default function JobDetailScreen() {
                               ) : null}
                             </Pressable>
                           ) : null}
-                          {endLocFar ? (
-                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, backgroundColor: 'rgba(255,153,0,0.12)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, alignSelf: 'flex-start' }}>
-                              <Ionicons name="warning-outline" size={12} color={Colors.warning} />
-                              <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 11, color: Colors.warning, marginLeft: 4 }}>
-                                Clocked out {Math.round(endLocMiles!)} mi from job site
-                              </Text>
-                            </View>
+                          {hasEndLoc && job ? (
+                            <ClockOutDistanceBadge
+                              jobId={job.id}
+                              lat={Number(run.end_lat)}
+                              lng={Number(run.end_lng)}
+                              airMiles={endLocMiles}
+                            />
                           ) : null}
                         </View>
                       </View>

@@ -16,6 +16,7 @@
 - [Companion DB topology](companion-db-topology.md) — dev DATABASE_URL IS the live shared Neon prod DB (writes hit production+website); Replit's managed "production" replica is empty/unused — don't verify prod through it.
 - [Contractor app-notifications](contractor-app-notifications.md) — bell badge/inbox read the `notifications` table, not pushes; `notification_type` enum is website-owned (no `job_application` — reuse `new_load`); truck-horn keys off push `data.type`.
 - [Driver/foreman invitations](driver-invitations.md) — companion reads invite list from shared DB but must proxy CREATE to website /api/invitations (it owns the accept-link email); send dual-keyed payloads.
+- [Geofence uses road miles](geofence-road-miles.md) — 15-mi geofence = driving distance via Directions, not straight-line; air miles only as prefilter/outage fallback/background trigger.
 - [Geofence (0,0) coord trap](geofence-zero-coords.md) — a failed GPS read must resolve to null, never {0,0}; the clock-in geofence reads (0,0) as ~6000mi away and falsely blocks (Android-skewed).
 - [Clock-out reminder bg location](clockout-background-location.md) — "forgot to clock out" geofence uses watchPositionAsync + "While Using" (not Always/task-manager); needs isIosBackgroundLocationEnabled; guard staleness before firing.
 - [Clock-out persistence & billing parity](clockout-billing-parity.md) — clock-out must persist req.body (loads/end-loc/billed) via the local DB write; display/persisted/invoice billing must all use one per-run rule or numbers diverge.

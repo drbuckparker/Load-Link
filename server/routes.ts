@@ -346,6 +346,139 @@ function billedMinutesFrom(actualMinutes: number): number {
   return 60 + billedSegments * 15;
 }
 
+// ---------------------------------------------------------------------------
+// Road-mile distance helpers (Google Directions API).
+//
+// The clock-in/clock-out geofence is measured in ROAD miles, not straight-line
+// ("as the crow flies") miles: a driver 12 air miles away across a river or
+// mountain can easily be 40+ road miles from the site, and contractors care
+// about the real driving distance. Straight-line math is kept only as (a) a
+// cheap shortcut when the driver is obviously on-site, and (b) a fallback if
+// the Directions API is unreachable — an API outage must never block clock-in.
+// ---------------------------------------------------------------------------
+
+function haversineMilesFn(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (v: number) => (v * Math.PI) / 180;
+  const R = 3958.7613; // earth radius in miles
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Straight-line distance (miles) from a point to the closest point on the
+// pickup->dropoff segment. Equirectangular projection — fine for short-haul.
+function segmentDistanceMilesFn(
+  pLat: number, pLng: number,
+  aLat: number, aLng: number,
+  bLat: number, bLng: number,
+): number {
+  const meanLatRad = ((aLat + bLat) / 2) * Math.PI / 180;
+  const milesPerDegLat = 69.0;
+  const milesPerDegLng = 69.0 * Math.cos(meanLatRad);
+  const ax = aLng * milesPerDegLng, ay = aLat * milesPerDegLat;
+  const bx = bLng * milesPerDegLng, by = bLat * milesPerDegLat;
+  const px = pLng * milesPerDegLng, py = pLat * milesPerDegLat;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  if (t < 0) t = 0; else if (t > 1) t = 1;
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+}
+
+// Lat/lng of the closest point on the pickup->dropoff segment to the driver —
+// used as an extra Directions target so a driver mid-route isn't measured
+// against the (far) endpoints.
+function closestPointOnSegment(
+  pLat: number, pLng: number,
+  aLat: number, aLng: number,
+  bLat: number, bLng: number,
+): { lat: number; lng: number } {
+  const meanLatRad = ((aLat + bLat) / 2) * Math.PI / 180;
+  const mpdLat = 69.0;
+  const mpdLng = 69.0 * Math.cos(meanLatRad);
+  const ax = aLng * mpdLng, ay = aLat * mpdLat;
+  const bx = bLng * mpdLng, by = bLat * mpdLat;
+  const px = pLng * mpdLng, py = pLat * mpdLat;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return { lat: aLat, lng: aLng };
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  if (t < 0) t = 0; else if (t > 1) t = 1;
+  return { lat: (ay + t * dy) / mpdLat, lng: (ax + t * dx) / mpdLng };
+}
+
+// Cache road distances by rounded endpoints (4 decimals ≈ 11 m). Clock-out
+// locations never move, so entries stay valid; cap size to bound memory.
+const roadMilesCache = new Map<string, number | null>();
+const ROAD_CACHE_MAX = 2000;
+
+async function getRoadMiles(
+  fromLat: number, fromLng: number,
+  toLat: number, toLng: number,
+): Promise<number | null> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return null;
+  const key = `${fromLat.toFixed(4)},${fromLng.toFixed(4)}|${toLat.toFixed(4)},${toLng.toFixed(4)}`;
+  if (roadMilesCache.has(key)) return roadMilesCache.get(key) ?? null;
+  try {
+    const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
+    url.searchParams.set("origin", `${fromLat},${fromLng}`);
+    url.searchParams.set("destination", `${toLat},${toLng}`);
+    url.searchParams.set("key", apiKey);
+    const response = await fetch(url.toString());
+    const data = await response.json() as any;
+    let miles: number | null = null;
+    if (data.routes && data.routes.length > 0 && data.routes[0].legs?.[0]?.distance?.value != null) {
+      miles = data.routes[0].legs[0].distance.value / 1609.34;
+    } else if (data.status === "ZERO_RESULTS") {
+      // No drivable route (e.g. across water with no road) — cache the miss so
+      // we don't re-query; caller falls back to straight-line.
+      miles = null;
+    } else {
+      // Real API failure (quota, denied, network) — do NOT cache.
+      return null;
+    }
+    if (roadMilesCache.size >= ROAD_CACHE_MAX) {
+      const firstKey = roadMilesCache.keys().next().value;
+      if (firstKey !== undefined) roadMilesCache.delete(firstKey);
+    }
+    roadMilesCache.set(key, miles);
+    return miles;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Minimum ROAD miles from the driver to the job area: pickup, dropoff, or the
+// closest point along the route between them. Returns null if no road distance
+// could be computed (caller should fall back to straight-line).
+async function roadMilesToJobArea(
+  pLat: number, pLng: number,
+  oLat: number | null, oLng: number | null,
+  dLat: number | null, dLng: number | null,
+): Promise<number | null> {
+  const targets: Array<{ lat: number; lng: number }> = [];
+  if (oLat != null && oLng != null) targets.push({ lat: oLat, lng: oLng });
+  if (dLat != null && dLng != null) targets.push({ lat: dLat, lng: dLng });
+  if (oLat != null && oLng != null && dLat != null && dLng != null) {
+    const mid = closestPointOnSegment(pLat, pLng, oLat, oLng, dLat, dLng);
+    // Only add the on-route point if it isn't basically one of the endpoints.
+    if (haversineMilesFn(mid.lat, mid.lng, oLat, oLng) > 0.5 &&
+        haversineMilesFn(mid.lat, mid.lng, dLat, dLng) > 0.5) {
+      targets.push(mid);
+    }
+  }
+  if (targets.length === 0) return null;
+  const results = await Promise.all(targets.map(t => getRoadMiles(pLat, pLng, t.lat, t.lng)));
+  const valid = results.filter((m): m is number => m != null);
+  if (valid.length === 0) return null;
+  return Math.min(...valid);
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   function requireAuth(req: Request, res: Response, next: Function) {
     const auth = getWebsiteAuth(req);
@@ -1800,40 +1933,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Rule: must be within 15 miles of pickup, dropoff, or anywhere along the line between them
+      // Rule: must be within 15 ROAD miles (driving distance, not straight-line)
+      // of pickup, dropoff, or anywhere along the route between them.
       const startLat = req.body?.lat ?? req.body?.start_lat ?? null;
       const startLng = req.body?.lng ?? req.body?.start_lng ?? null;
       const GEOFENCE_MILES = 15;
-      const haversineMiles = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-        const toRad = (v: number) => (v * Math.PI) / 180;
-        const R = 3958.7613; // earth radius in miles
-        const dLat = toRad(lat2 - lat1);
-        const dLng = toRad(lng2 - lng1);
-        const a = Math.sin(dLat / 2) ** 2 +
-          Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-        return 2 * R * Math.asin(Math.sqrt(a));
-      };
-      // Distance from a point to the closest point on the line segment A->B.
-      // Equirectangular projection — accurate for distances up to a few hundred miles.
-      const distanceToSegmentMiles = (
-        pLat: number, pLng: number,
-        aLat: number, aLng: number,
-        bLat: number, bLng: number,
-      ): number => {
-        const meanLatRad = ((aLat + bLat) / 2) * Math.PI / 180;
-        const milesPerDegLat = 69.0;
-        const milesPerDegLng = 69.0 * Math.cos(meanLatRad);
-        const ax = aLng * milesPerDegLng, ay = aLat * milesPerDegLat;
-        const bx = bLng * milesPerDegLng, by = bLat * milesPerDegLat;
-        const px = pLng * milesPerDegLng, py = pLat * milesPerDegLat;
-        const dx = bx - ax, dy = by - ay;
-        const lenSq = dx * dx + dy * dy;
-        if (lenSq === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
-        let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-        if (t < 0) t = 0; else if (t > 1) t = 1;
-        const cx = ax + t * dx, cy = ay + t * dy;
-        return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      };
 
       const oLat = job.origin_lat ? Number(job.origin_lat) : null;
       const oLng = job.origin_lng ? Number(job.origin_lng) : null;
@@ -1859,23 +1963,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
             message: "Location is required to clock in. Enable location and try again.",
           });
         }
-        let closest: number;
+        // Straight-line distance first: it's free, and since roads are never
+        // shorter than the crow flies, a driver within ~1 air mile is always
+        // in range — no need to burn a Directions call.
+        let airMiles: number;
         if (oLat != null && oLng != null && dLat != null && dLng != null) {
           // Both endpoints known — accept anywhere along the pickup→dropoff line
-          closest = distanceToSegmentMiles(driverLat, driverLng, oLat, oLng, dLat, dLng);
+          airMiles = segmentDistanceMilesFn(driverLat, driverLng, oLat, oLng, dLat, dLng);
         } else if (oLat != null && oLng != null) {
-          closest = haversineMiles(driverLat, driverLng, oLat, oLng);
+          airMiles = haversineMilesFn(driverLat, driverLng, oLat, oLng);
         } else {
-          closest = haversineMiles(driverLat, driverLng, dLat as number, dLng as number);
+          airMiles = haversineMilesFn(driverLat, driverLng, dLat as number, dLng as number);
         }
-        if (closest > GEOFENCE_MILES) {
+        if (airMiles > 1) {
           const target = (oLat != null && oLng != null && dLat != null && dLng != null) ? "job route" : "job site";
-          return res.status(403).json({
-            code: "OUT_OF_GEOFENCE",
-            message: `You're ${closest.toFixed(1)} miles from the ${target}. Clock-in is allowed within ${GEOFENCE_MILES} miles of pickup, dropoff, or anywhere along the route.`,
-            distanceMiles: Math.round(closest * 10) / 10,
-            geofenceMiles: GEOFENCE_MILES,
-          });
+          const roadMiles = await roadMilesToJobArea(driverLat, driverLng, oLat, oLng, dLat, dLng);
+          if (roadMiles != null) {
+            if (roadMiles > GEOFENCE_MILES) {
+              return res.status(403).json({
+                code: "OUT_OF_GEOFENCE",
+                message: `You're ${roadMiles.toFixed(1)} road miles from the ${target}. Clock-in is allowed within ${GEOFENCE_MILES} road miles of pickup, dropoff, or anywhere along the route.`,
+                distanceMiles: Math.round(roadMiles * 10) / 10,
+                geofenceMiles: GEOFENCE_MILES,
+              });
+            }
+          } else if (airMiles > GEOFENCE_MILES) {
+            // Directions API unavailable — fall back to straight-line so an
+            // outage never blocks a legitimate on-site clock-in.
+            return res.status(403).json({
+              code: "OUT_OF_GEOFENCE",
+              message: `You're ${airMiles.toFixed(1)} miles from the ${target}. Clock-in is allowed within ${GEOFENCE_MILES} road miles of pickup, dropoff, or anywhere along the route.`,
+              distanceMiles: Math.round(airMiles * 10) / 10,
+              geofenceMiles: GEOFENCE_MILES,
+            });
+          }
         }
       }
 
@@ -4829,6 +4950,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ message: "No route found" });
     } catch (err) {
       console.error("Directions error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
+  // Road-mile distance from a point to a job's area (pickup, dropoff, or the
+  // closest point along the route). Used by the app to show how far a driver
+  // really was (driving distance) when they clocked in/out away from the site.
+  app.get("/api/jobs/:id/road-distance", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const lat = Number(req.query.lat);
+      const lng = Number(req.query.lng);
+      if (!isFinite(lat) || !isFinite(lng) || (lat === 0 && lng === 0)) {
+        return res.status(400).json({ message: "lat and lng are required" });
+      }
+      const jobRes = await pool.query(
+        `SELECT origin_lat, origin_lng, destination_lat, destination_lng FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      const job = jobRes.rows[0];
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      const oLat = job.origin_lat ? Number(job.origin_lat) : null;
+      const oLng = job.origin_lng ? Number(job.origin_lng) : null;
+      const dLat = job.destination_lat ? Number(job.destination_lat) : null;
+      const dLng = job.destination_lng ? Number(job.destination_lng) : null;
+      if ((oLat == null || oLng == null) && (dLat == null || dLng == null)) {
+        return res.status(404).json({ message: "Job has no coordinates" });
+      }
+      let airMiles: number;
+      if (oLat != null && oLng != null && dLat != null && dLng != null) {
+        airMiles = segmentDistanceMilesFn(lat, lng, oLat, oLng, dLat, dLng);
+      } else if (oLat != null && oLng != null) {
+        airMiles = haversineMilesFn(lat, lng, oLat, oLng);
+      } else {
+        airMiles = haversineMilesFn(lat, lng, dLat as number, dLng as number);
+      }
+      const roadMiles = await roadMilesToJobArea(lat, lng, oLat, oLng, dLat, dLng);
+      return res.json(addDualKeys({
+        road_miles: roadMiles != null ? Math.round(roadMiles * 10) / 10 : null,
+        air_miles: Math.round(airMiles * 10) / 10,
+      }));
+    } catch (err: any) {
+      console.error("GET /api/jobs/:id/road-distance error:", err.message);
       return res.status(500).json({ message: "Server error" });
     }
   });
