@@ -8,7 +8,7 @@
     "scheme": "loadlink",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
-    "runtimeVersion": "1.0.2",
+    "runtimeVersion": "1.0.4",
     "updates": {
       "enabled": true,
       "checkAutomatically": "ON_LOAD",
