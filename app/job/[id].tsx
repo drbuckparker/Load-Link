@@ -2704,7 +2704,7 @@ export default function JobDetailScreen() {
             const email = (job.contractorEmail || '').trim();
             return (
               <View style={styles.contractorCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                   <View style={styles.contractorAvatar}>
                     <Text style={styles.contractorAvatarText}>{displayName.charAt(0).toUpperCase()}</Text>
                   </View>
@@ -4329,9 +4329,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   contractorCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    flexDirection: 'column',
+    alignItems: 'stretch',
     backgroundColor: Colors.card,
     borderRadius: 10,
     padding: 14,
