@@ -228,6 +228,8 @@ function mapJob(j: any): Job {
     unloadTimeMinutes: j.unload_time_minutes ?? j.unloadTimeMinutes ?? 10,
     haulBothWays: (j.haul_both_ways ?? j.haulBothWays) === true,
     returnMaterial: j.return_material ?? j.returnMaterial ?? '',
+    returnAmount: j.return_amount != null ? Number(j.return_amount) : (j.returnAmount != null ? Number(j.returnAmount) : null),
+    returnAmountUnit: j.return_amount_unit ?? j.returnAmountUnit ?? null,
     returnOriginAddress: j.return_origin_address ?? j.returnOriginAddress ?? '',
     returnOriginLat: j.return_origin_lat != null ? Number(j.return_origin_lat) : (j.returnOriginLat != null ? Number(j.returnOriginLat) : 0),
     returnOriginLng: j.return_origin_lng != null ? Number(j.return_origin_lng) : (j.returnOriginLng != null ? Number(j.returnOriginLng) : 0),
@@ -2038,6 +2040,11 @@ export default function JobDetailScreen() {
               <Ionicons name="swap-horizontal" size={15} color={Colors.primary} />
               <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>RETURN LEG{job.returnMaterial ? ` · ${job.returnMaterial.toUpperCase()}` : ''}</Text>
             </View>
+            {job.returnAmount && job.returnAmount > 0 ? (
+              <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.textSecondary, marginBottom: 8 }}>
+                {job.returnAmount} {job.returnAmountUnit === 'yards' ? 'yards' : 'tons'} hauled back
+              </Text>
+            ) : null}
             <View style={styles.routeCard}>
               <View style={styles.routeRow}>
                 <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />

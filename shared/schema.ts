@@ -228,6 +228,8 @@ export const jobs = pgTable("jobs", {
   // JSON, so these values survive periodic down-syncs.
   haul_both_ways: boolean("haul_both_ways").default(false),
   return_material: text("return_material"),
+  return_amount: numeric("return_amount", { precision: 10, scale: 2 }),
+  return_amount_unit: text("return_amount_unit"),
   return_origin_address: text("return_origin_address"),
   return_origin_lat: numeric("return_origin_lat", { precision: 10, scale: 7 }),
   return_origin_lng: numeric("return_origin_lng", { precision: 10, scale: 7 }),

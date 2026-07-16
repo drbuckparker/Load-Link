@@ -486,6 +486,8 @@ async function roadMilesToJobArea(
 const COMPANION_ONLY_JOB_KEYS = new Set([
   'haulBothWays', 'haul_both_ways',
   'returnMaterial', 'return_material',
+  'returnAmount', 'return_amount',
+  'returnAmountUnit', 'return_amount_unit',
   'returnOriginAddress', 'return_origin_address',
   'returnOriginLat', 'return_origin_lat',
   'returnOriginLng', 'return_origin_lng',
@@ -1154,7 +1156,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         'estimated_cost', 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng', 'job_type',
         'requires_weight_tickets', 'requires_tarp', 'urgent', 'paperwork_description', 'created_at', 'updated_at',
         'capacity_needed', 'total_tons_needed', 'total_amount_unit', 'pickup_time', 'estimated_trips',
-        'haul_both_ways', 'return_material', 'return_origin_address', 'return_origin_lat', 'return_origin_lng',
+        'haul_both_ways', 'return_material', 'return_amount', 'return_amount_unit',
+        'return_origin_address', 'return_origin_lat', 'return_origin_lng',
         'return_destination_address', 'return_destination_lat', 'return_destination_lng'];
 
       const snakeBody: Record<string, any> = {};

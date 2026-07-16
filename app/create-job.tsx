@@ -168,6 +168,9 @@ export default function CreateJobScreen() {
   // haul a different material BACK to the job site.
   const [bothWays, setBothWays] = useState(false);
   const [returnMaterial, setReturnMaterial] = useState('');
+  const [returnAmount, setReturnAmount] = useState('');
+  const [returnAmountUnit, setReturnAmountUnit] = useState<'tons' | 'yards'>('tons');
+  const [showReturnUnitDropdown, setShowReturnUnitDropdown] = useState(false);
   const [showReturnMaterialDropdown, setShowReturnMaterialDropdown] = useState(false);
   const [returnPickupAddress, setReturnPickupAddress] = useState('');
   const [returnPickupLat, setReturnPickupLat] = useState<number | null>(null);
@@ -202,6 +205,7 @@ export default function CreateJobScreen() {
   function clearBothWays() {
     setBothWays(false);
     setReturnMaterial('');
+    setReturnAmount(''); setReturnAmountUnit('tons'); setShowReturnUnitDropdown(false);
     setReturnPickupAddress(''); setReturnPickupLat(null); setReturnPickupLng(null);
     setReturnDropoffAddress(''); setReturnDropoffLat(null); setReturnDropoffLng(null);
     setReturnPickupSuggestions([]); setShowReturnPickupSuggestions(false);
@@ -1133,6 +1137,10 @@ export default function CreateJobScreen() {
       if (bothWays) {
         body.haulBothWays = true;
         body.returnMaterial = returnMaterial.trim();
+        if (parseFloat(returnAmount) > 0) {
+          body.returnAmount = String(parseFloat(returnAmount));
+          body.returnAmountUnit = returnAmountUnit;
+        }
         body.returnOriginAddress = returnPickupAddress.trim();
         if (returnPickupLat != null) body.returnOriginLat = String(returnPickupLat);
         if (returnPickupLng != null) body.returnOriginLng = String(returnPickupLng);
@@ -1355,6 +1363,37 @@ export default function CreateJobScreen() {
             </View>
 
             {bothWays && (
+              <View style={{ marginTop: 14 }}>
+                <Text style={styles.label}>Amount Needed</Text>
+                <View style={styles.capacityRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    placeholder="0"
+                    placeholderTextColor={Colors.textMuted}
+                    value={totalTonsNeeded}
+                    onChangeText={setTotalTonsNeeded}
+                    keyboardType="numeric"
+                    testID="leg1-amount"
+                  />
+                  <Pressable
+                    style={styles.unitDropdownBtn}
+                    onPress={() => { setShowTotalUnitDropdown(true); setShowCapacityUnitDropdown(false); setShowReturnUnitDropdown(false); }}
+                  >
+                    <Text style={styles.unitDropdownBtnText}>
+                      {totalUnit === 'tons' ? 'Tons' : totalUnit === 'yards' ? 'Yards' : 'Hours'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={14} color={Colors.primary} />
+                  </Pressable>
+                </View>
+                {totalUnit === 'yards' && parseFloat(totalTonsNeeded) > 0 && (
+                  <Text style={styles.yardConversionNote}>
+                    ≈ {totalInTons.toFixed(1)} tons ({getMaterialWeightPerYard(material)} t/yd³ for {material || 'default'})
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {bothWays && (
               <View style={{ marginTop: 14, zIndex: 4 }}>
                 <Text style={styles.label}>Return Material (hauled back)</Text>
                 <TextInput
@@ -1381,6 +1420,28 @@ export default function CreateJobScreen() {
                     </ScrollView>
                   </View>
                 )}
+
+                <Text style={[styles.label, { marginTop: 14 }]}>Return Amount Needed</Text>
+                <View style={styles.capacityRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    placeholder="e.g. 2 loads worth — 0 if not sure"
+                    placeholderTextColor={Colors.textMuted}
+                    value={returnAmount}
+                    onChangeText={setReturnAmount}
+                    keyboardType="numeric"
+                    testID="return-amount"
+                  />
+                  <Pressable
+                    style={styles.unitDropdownBtn}
+                    onPress={() => { setShowReturnUnitDropdown(true); setShowTotalUnitDropdown(false); setShowCapacityUnitDropdown(false); }}
+                  >
+                    <Text style={styles.unitDropdownBtnText}>
+                      {returnAmountUnit === 'tons' ? 'Tons' : 'Yards'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={14} color={Colors.primary} />
+                  </Pressable>
+                </View>
               </View>
             )}
 
@@ -1956,30 +2017,34 @@ export default function CreateJobScreen() {
               </Pressable>
             </View>
 
-            <Text style={[styles.label, { marginTop: 14 }]}>Total Material Needed</Text>
-            <View style={styles.capacityRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="0"
-                placeholderTextColor={Colors.textMuted}
-                value={totalTonsNeeded}
-                onChangeText={setTotalTonsNeeded}
-                keyboardType="numeric"
-              />
-              <Pressable
-                style={styles.unitDropdownBtn}
-                onPress={() => { setShowTotalUnitDropdown(true); setShowCapacityUnitDropdown(false); }}
-              >
-                <Text style={styles.unitDropdownBtnText}>
-                  {totalUnit === 'tons' ? 'Tons' : totalUnit === 'yards' ? 'Yards' : 'Hours'}
-                </Text>
-                <Ionicons name="chevron-down" size={14} color={Colors.primary} />
-              </Pressable>
-            </View>
-            {totalUnit === 'yards' && parseFloat(totalTonsNeeded) > 0 && (
-              <Text style={styles.yardConversionNote}>
-                ≈ {totalInTons.toFixed(1)} tons ({getMaterialWeightPerYard(material)} t/yd³ for {material || 'default'})
-              </Text>
+            {!bothWays && (
+              <>
+                <Text style={[styles.label, { marginTop: 14 }]}>Total Material Needed</Text>
+                <View style={styles.capacityRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    placeholder="0"
+                    placeholderTextColor={Colors.textMuted}
+                    value={totalTonsNeeded}
+                    onChangeText={setTotalTonsNeeded}
+                    keyboardType="numeric"
+                  />
+                  <Pressable
+                    style={styles.unitDropdownBtn}
+                    onPress={() => { setShowTotalUnitDropdown(true); setShowCapacityUnitDropdown(false); setShowReturnUnitDropdown(false); }}
+                  >
+                    <Text style={styles.unitDropdownBtnText}>
+                      {totalUnit === 'tons' ? 'Tons' : totalUnit === 'yards' ? 'Yards' : 'Hours'}
+                    </Text>
+                    <Ionicons name="chevron-down" size={14} color={Colors.primary} />
+                  </Pressable>
+                </View>
+                {totalUnit === 'yards' && parseFloat(totalTonsNeeded) > 0 && (
+                  <Text style={styles.yardConversionNote}>
+                    ≈ {totalInTons.toFixed(1)} tons ({getMaterialWeightPerYard(material)} t/yd³ for {material || 'default'})
+                  </Text>
+                )}
+              </>
             )}
 
             {totalUnit !== 'hours' && (
@@ -2375,6 +2440,31 @@ export default function CreateJobScreen() {
                   {u === 'tons' ? 'Tons' : u === 'yards' ? 'Yards' : 'Hours'}
                 </Text>
                 {totalUnit === u && <Ionicons name="checkmark" size={20} color={Colors.primary} />}
+              </Pressable>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showReturnUnitDropdown}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowReturnUnitDropdown(false)}
+      >
+        <Pressable style={styles.dropdownOverlay} onPress={() => setShowReturnUnitDropdown(false)}>
+          <View style={styles.dropdownSheet}>
+            <Text style={styles.dropdownSheetTitle}>RETURN AMOUNT UNIT</Text>
+            {(['tons', 'yards'] as const).map((u) => (
+              <Pressable
+                key={u}
+                style={[styles.dropdownSheetItem, returnAmountUnit === u && styles.dropdownSheetItemActive]}
+                onPress={() => { setReturnAmountUnit(u); setShowReturnUnitDropdown(false); }}
+              >
+                <Text style={[styles.dropdownSheetItemText, returnAmountUnit === u && styles.dropdownSheetItemTextActive]}>
+                  {u === 'tons' ? 'Tons' : 'Yards'}
+                </Text>
+                {returnAmountUnit === u && <Ionicons name="checkmark" size={20} color={Colors.primary} />}
               </Pressable>
             ))}
           </View>

@@ -94,6 +94,8 @@ export default function EditJobScreen() {
   const [routeInfo, setRouteInfo] = useState<any>(null);
   const [isBothWays, setIsBothWays] = useState(false);
   const [returnMaterial, setReturnMaterial] = useState('');
+  const [returnAmount, setReturnAmount] = useState('');
+  const [returnAmountUnit, setReturnAmountUnit] = useState<'tons' | 'yards'>('tons');
   const [returnOriginAddress, setReturnOriginAddress] = useState('');
   const [returnOriginLat, setReturnOriginLat] = useState<number | null>(null);
   const [returnOriginLng, setReturnOriginLng] = useState<number | null>(null);
@@ -171,6 +173,8 @@ export default function EditJobScreen() {
       setCapacityNeeded(jobData.capacity_needed ? String(jobData.capacity_needed) : '');
       setIsBothWays(jobData.haul_both_ways === true);
       setReturnMaterial(jobData.return_material || '');
+      setReturnAmount(jobData.return_amount ? String(Number(jobData.return_amount)) : '');
+      setReturnAmountUnit(jobData.return_amount_unit === 'yards' ? 'yards' : 'tons');
       setReturnOriginAddress(jobData.return_origin_address || '');
       setReturnOriginLat(jobData.return_origin_lat ? Number(jobData.return_origin_lat) : null);
       setReturnOriginLng(jobData.return_origin_lng ? Number(jobData.return_origin_lng) : null);
@@ -524,6 +528,8 @@ export default function EditJobScreen() {
         }
         body.haul_both_ways = true;
         body.return_material = returnMaterial.trim();
+        body.return_amount = parseFloat(returnAmount) > 0 ? String(parseFloat(returnAmount)) : null;
+        body.return_amount_unit = parseFloat(returnAmount) > 0 ? returnAmountUnit : null;
         body.return_origin_address = returnOriginAddress.trim();
         body.return_destination_address = returnDestAddress.trim();
         if (rOLat != null) body.return_origin_lat = String(rOLat);
@@ -533,6 +539,8 @@ export default function EditJobScreen() {
       } else if (jobData?.haul_both_ways === true) {
         body.haul_both_ways = false;
         body.return_material = null;
+        body.return_amount = null;
+        body.return_amount_unit = null;
         body.return_origin_address = null;
         body.return_origin_lat = null;
         body.return_origin_lng = null;
@@ -803,6 +811,7 @@ export default function EditJobScreen() {
                     onPress={() => {
                       setIsBothWays(false);
                       setReturnMaterial('');
+                      setReturnAmount(''); setReturnAmountUnit('tons');
                       setReturnOriginAddress(''); setReturnOriginLat(null); setReturnOriginLng(null);
                       setReturnDestAddress(''); setReturnDestLat(null); setReturnDestLng(null);
                     }}
@@ -819,6 +828,26 @@ export default function EditJobScreen() {
                   value={returnMaterial}
                   onChangeText={setReturnMaterial}
                 />
+                <Text style={[styles.label, { marginTop: 14 }]}>Return Amount Needed</Text>
+                <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                  <TextInput
+                    style={[styles.input, { flex: 1 }]}
+                    placeholder="0"
+                    placeholderTextColor={Colors.textMuted}
+                    value={returnAmount}
+                    onChangeText={setReturnAmount}
+                    keyboardType="numeric"
+                  />
+                  <Pressable
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.surface }}
+                    onPress={() => setReturnAmountUnit(returnAmountUnit === 'tons' ? 'yards' : 'tons')}
+                  >
+                    <Text style={{ color: Colors.primary, fontFamily: 'Inter_600SemiBold', fontSize: 13 }}>
+                      {returnAmountUnit === 'tons' ? 'Tons' : 'Yards'}
+                    </Text>
+                    <Ionicons name="swap-vertical" size={14} color={Colors.primary} />
+                  </Pressable>
+                </View>
                 <Text style={[styles.label, { marginTop: 14 }]}>Return Pickup Location</Text>
                 <TextInput
                   style={styles.input}

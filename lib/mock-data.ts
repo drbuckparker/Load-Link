@@ -39,6 +39,12 @@ export interface Job {
   approvedAssignments?: number;
   haulBothWays?: boolean;
   returnMaterial?: string;
+  returnAmount?: number | null;
+  returnAmountUnit?: string | null;
+  paperworkDescription?: string | null;
+  loadTimeMinutes?: number;
+  unloadTimeMinutes?: number;
+  estimatedDurationMinutes?: number | null;
   returnOriginAddress?: string;
   returnOriginLat?: number;
   returnOriginLng?: number;
