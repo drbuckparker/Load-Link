@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient, getApiUrl, getAuthToken } from '@/lib/query-client';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { fetch } from 'expo/fetch';
 import MapPickerView from '@/components/MapPickerView';
 
@@ -617,10 +618,11 @@ export default function EditJobScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        bottomOffset={80}
         onScrollBeginDrag={() => { setShowMaterialDropdown(false); setShowCalendar(false); setShowOriginSuggestions(false); setShowDestSuggestions(false); }}
       >
         <View style={styles.section}>
@@ -1124,7 +1126,7 @@ export default function EditJobScreen() {
         </Pressable>
 
         <View style={{ height: 40 }} />
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
 
       <Modal
         visible={showTimePicker}

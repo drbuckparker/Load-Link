@@ -6,6 +6,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import Colors from '@/constants/colors';
 import { apiRequest, queryClient } from '@/lib/query-client';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useAuth } from '@/contexts/AuthContext';
 
 type InviteType = 'driver' | 'foreman';
@@ -122,9 +123,10 @@ export default function InviteScreen() {
         <View style={styles.backBtn} />
       </View>
 
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 32 }]}
         keyboardShouldPersistTaps="handled"
+        bottomOffset={80}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />}
       >
         <View style={styles.formContainer}>
@@ -264,7 +266,7 @@ export default function InviteScreen() {
             );
           })
         )}
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
     </View>
   );
 }

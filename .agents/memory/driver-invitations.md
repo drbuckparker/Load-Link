@@ -13,7 +13,7 @@ The shared Neon DB has a `driver_invitations` table (carries both `contractor_id
 
 **Email-delivery caveat (July 2026):** invitations created via the website API return 201 and appear in its list as `pending`, but the accept email may never arrive — that's the website's mail pipeline, unfixable from the companion. The website exposes NO delete/resend/cancel endpoints for invitations, and `PUT /api/invitations/:id` returns 200 but appears to duplicate rather than update — do not call it.
 
-**How to apply:** any new invite-like feature (anything that emails an external party a signup/accept link) should proxy the write to the website and only read state back from the shared DB. Send dual-keyed (camel + snake) payloads to the website since its handler's expected casing can't be probed live (companion JWTs in `.data/sessions.json` are frequently stale).
+**How to apply:** any new invite-like feature (anything that emails an external party a signup/accept link) should proxy BOTH the write and the list read to the website API (dedupe by id — the website list returns duplicate rows). Send dual-keyed (camel + snake) payloads to the website. Do not rely on the shared DB for invitation state; it's never populated.
 
 ## Invite acceptance & account linkage are website-owned
 

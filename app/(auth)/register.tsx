@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useAuth } from '@/contexts/AuthContext';
 
 const ROLES = [
@@ -44,10 +45,11 @@ export default function RegisterScreen() {
   }
 
   return (
-    <ScrollView
+    <KeyboardAwareScrollViewCompat
       style={styles.container}
       contentContainerStyle={[styles.contentContainer, { paddingBottom: insets.bottom + 24 }]}
       keyboardShouldPersistTaps="handled"
+      bottomOffset={40}
     >
       <Text style={styles.heading}>CREATE ACCOUNT</Text>
       <Text style={styles.subtitle}>Join the LoadLink network</Text>
@@ -117,7 +119,7 @@ export default function RegisterScreen() {
           <Text style={styles.registerBtnText}>CREATE ACCOUNT</Text>
         )}
       </Pressable>
-    </ScrollView>
+    </KeyboardAwareScrollViewCompat>
   );
 }
 

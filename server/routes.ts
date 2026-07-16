@@ -3066,7 +3066,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (websiteRes.ok) {
             const data = await websiteRes.json();
             const list = Array.isArray(data) ? data : (data?.invitations || []);
-            return res.json(list.map(addDualKeys));
+            // The website list can contain duplicate rows for the same
+            // invitation id; dedupe so the app doesn't render duplicates.
+            const seen = new Set<string>();
+            const unique = list.filter((inv: any) => {
+              const id = String(inv?.id ?? "");
+              if (!id || seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+            return res.json(unique.map(addDualKeys));
           }
           // Pass 401 through so the app's silent re-login + retry can kick in
           // instead of silently showing an empty list from the local fallback.

@@ -22,6 +22,7 @@ import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import MapPickerView from '@/components/MapPickerView';
 import { apiRequest, queryClient, getApiUrl, getAuthToken } from '@/lib/query-client';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { fetch } from 'expo/fetch';
 
 const DISMISSED_KEY = 'loadlink_dismissed_locations';
@@ -1318,11 +1319,12 @@ export default function CreateJobScreen() {
         )}
       </View>
 
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         ref={scrollRef}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        bottomOffset={80}
         onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowMaterialDropdown(false); setShowCalendar(false); setShowOriginSuggestions(false); setShowDestSuggestions(false); }}
       >
         <View style={styles.section}>
@@ -2210,7 +2212,7 @@ export default function CreateJobScreen() {
         </Pressable>
 
         <View style={{ height: 40 }} />
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
 
       <Modal
         visible={showHaulDirectionModal}
