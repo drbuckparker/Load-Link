@@ -111,7 +111,7 @@ export default function CreateJobScreen() {
   const [destinationAddress, setDestinationAddress] = useState('');
   const [destLat, setDestLat] = useState<number | null>(null);
   const [destLng, setDestLng] = useState<number | null>(null);
-  const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | 'project' | null>(null);
+  const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | 'project' | 'returnPickup' | 'returnDropoff' | null>(null);
   const [projectSiteAddress, setProjectSiteAddress] = useState('');
   const [projectSiteLat, setProjectSiteLat] = useState<number | null>(null);
   const [projectSiteLng, setProjectSiteLng] = useState<number | null>(null);
@@ -163,6 +163,35 @@ export default function CreateJobScreen() {
   const [showHaulDirectionModal, setShowHaulDirectionModal] = useState(false);
   const [pendingProject, setPendingProject] = useState<any>(null);
   const [pinProjectTarget, setPinProjectTarget] = useState<{ projectId: string; projectName: string; target: 'origin' | 'destination' } | null>(null);
+
+  // "Haul Both Ways" — a second (return) leg: haul FROM the job site out, then
+  // haul a different material BACK to the job site.
+  const [bothWays, setBothWays] = useState(false);
+  const [returnMaterial, setReturnMaterial] = useState('');
+  const [showReturnMaterialDropdown, setShowReturnMaterialDropdown] = useState(false);
+  const [returnPickupAddress, setReturnPickupAddress] = useState('');
+  const [returnPickupLat, setReturnPickupLat] = useState<number | null>(null);
+  const [returnPickupLng, setReturnPickupLng] = useState<number | null>(null);
+  const [returnDropoffAddress, setReturnDropoffAddress] = useState('');
+  const [returnDropoffLat, setReturnDropoffLat] = useState<number | null>(null);
+  const [returnDropoffLng, setReturnDropoffLng] = useState<number | null>(null);
+  const [returnPickupSuggestions, setReturnPickupSuggestions] = useState<any[]>([]);
+  const [showReturnPickupSuggestions, setShowReturnPickupSuggestions] = useState(false);
+  const [returnDropoffSuggestions, setReturnDropoffSuggestions] = useState<any[]>([]);
+  const [showReturnDropoffSuggestions, setShowReturnDropoffSuggestions] = useState(false);
+  const [returnRouteInfo, setReturnRouteInfo] = useState<{ truck_duration_text: string; truck_duration_seconds: number; distance_miles: number } | null>(null);
+  const returnPickupDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const returnDropoffDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function clearBothWays() {
+    setBothWays(false);
+    setReturnMaterial('');
+    setReturnPickupAddress(''); setReturnPickupLat(null); setReturnPickupLng(null);
+    setReturnDropoffAddress(''); setReturnDropoffLat(null); setReturnDropoffLng(null);
+    setReturnPickupSuggestions([]); setShowReturnPickupSuggestions(false);
+    setReturnDropoffSuggestions([]); setShowReturnDropoffSuggestions(false);
+    setReturnRouteInfo(null);
+  }
 
   const { data: _projects } = useQuery<any[]>({
     queryKey: ['/api/projects'],
@@ -294,11 +323,32 @@ export default function CreateJobScreen() {
     }
   }
 
-  function applyHaulDirection(direction: 'to' | 'from') {
+  function applyHaulDirection(direction: 'to' | 'from' | 'both') {
     if (!pendingProject) return;
     const addr = pendingProject.site_address || '';
     const lat = pendingProject.site_lat ? Number(pendingProject.site_lat) : null;
     const lng = pendingProject.site_lng ? Number(pendingProject.site_lng) : null;
+
+    if (direction === 'both') {
+      setBothWays(true);
+      if (addr) {
+        // Leg 1 hauls FROM the job site; leg 2 hauls BACK to the job site.
+        setOriginAddress(addr); setOriginLat(lat); setOriginLng(lng);
+        setReturnDropoffAddress(addr); setReturnDropoffLat(lat); setReturnDropoffLng(lng);
+      } else {
+        // No project address yet — dropping the pickup pin will also fill the
+        // return dropoff (both are the job site).
+        setPinProjectTarget({
+          projectId: String(pendingProject.id),
+          projectName: pendingProject.name || 'this project',
+          target: 'origin',
+        });
+      }
+      setShowHaulDirectionModal(false);
+      setPendingProject(null);
+      return;
+    }
+
     const target: 'origin' | 'destination' = direction === 'to' ? 'destination' : 'origin';
     if (addr) {
       if (target === 'destination') {
@@ -343,7 +393,7 @@ export default function CreateJobScreen() {
     }
   }
 
-  async function openMapPicker(target: 'origin' | 'destination') {
+  async function openMapPicker(target: 'origin' | 'destination' | 'project' | 'returnPickup' | 'returnDropoff') {
     if (Platform.OS !== 'web') {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
@@ -356,11 +406,15 @@ export default function CreateJobScreen() {
       initialPin = { latitude: originLat, longitude: originLng };
     } else if (target === 'destination' && destLat && destLng) {
       initialPin = { latitude: destLat, longitude: destLng };
+    } else if (target === 'returnPickup' && returnPickupLat && returnPickupLng) {
+      initialPin = { latitude: returnPickupLat, longitude: returnPickupLng };
+    } else if (target === 'returnDropoff' && returnDropoffLat && returnDropoffLng) {
+      initialPin = { latitude: returnDropoffLat, longitude: returnDropoffLng };
     }
     setMapPin(initialPin);
     setMapPickerTarget(target);
 
-    if (projectId && !pinProjectTarget) {
+    if ((target === 'origin' || target === 'destination') && projectId && !pinProjectTarget) {
       const proj = projects.find((p: any) => String(p.id) === projectId);
       const projHasLoc = !!(proj?.site_address || (proj?.site_lat && proj?.site_lng));
       if (proj && !projHasLoc) {
@@ -401,10 +455,24 @@ export default function CreateJobScreen() {
       setOriginAddress(address);
       setOriginLat(mapPin.latitude);
       setOriginLng(mapPin.longitude);
+      // Both-ways: the pickup IS the job site, which is also the return dropoff.
+      if (bothWays && !returnDropoffAddress.trim()) {
+        setReturnDropoffAddress(address);
+        setReturnDropoffLat(mapPin.latitude);
+        setReturnDropoffLng(mapPin.longitude);
+      }
     } else if (mapPickerTarget === 'destination') {
       setDestinationAddress(address);
       setDestLat(mapPin.latitude);
       setDestLng(mapPin.longitude);
+    } else if (mapPickerTarget === 'returnPickup') {
+      setReturnPickupAddress(address);
+      setReturnPickupLat(mapPin.latitude);
+      setReturnPickupLng(mapPin.longitude);
+    } else if (mapPickerTarget === 'returnDropoff') {
+      setReturnDropoffAddress(address);
+      setReturnDropoffLat(mapPin.latitude);
+      setReturnDropoffLng(mapPin.longitude);
     } else {
       setProjectSiteAddress(address);
       setProjectSiteLat(mapPin.latitude);
@@ -775,8 +843,100 @@ export default function CreateJobScreen() {
     }
   }, [originLat, originLng, destLat, destLng]);
 
+  // ---- Return leg (Haul Both Ways) helpers ----
+
+  const setReturnField = (which: 'returnPickup' | 'returnDropoff') => ({
+    setAddr: which === 'returnPickup' ? setReturnPickupAddress : setReturnDropoffAddress,
+    setLat: which === 'returnPickup' ? setReturnPickupLat : setReturnDropoffLat,
+    setLng: which === 'returnPickup' ? setReturnPickupLng : setReturnDropoffLng,
+    setSugs: which === 'returnPickup' ? setReturnPickupSuggestions : setReturnDropoffSuggestions,
+    setShowSugs: which === 'returnPickup' ? setShowReturnPickupSuggestions : setShowReturnDropoffSuggestions,
+  });
+
+  const fetchReturnSuggestions = useCallback(async (input: string, which: 'returnPickup' | 'returnDropoff') => {
+    const f = setReturnField(which);
+    if (input.trim().length < 2) { f.setSugs([]); f.setShowSugs(false); return; }
+    try {
+      const baseUrl = getApiUrl();
+      const headers: Record<string, string> = {};
+      const token = getAuthToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const url = new URL('/api/places/autocomplete', baseUrl);
+      url.searchParams.set('input', input);
+      // Bias near the leg-1 route ends when known, else the user's GPS.
+      const biasLat = destLat ?? originLat ?? userLat;
+      const biasLng = destLng ?? originLng ?? userLng;
+      if (biasLat != null && biasLng != null) {
+        url.searchParams.set('lat', String(biasLat));
+        url.searchParams.set('lng', String(biasLng));
+      }
+      const res = await fetch(url.toString(), { credentials: 'include', headers });
+      const data = res.ok ? await res.json() : [];
+      f.setSugs(Array.isArray(data) ? data : []);
+      f.setShowSugs(Array.isArray(data) && data.length > 0);
+    } catch {
+      f.setSugs([]); f.setShowSugs(false);
+    }
+  }, [originLat, originLng, destLat, destLng, userLat, userLng]);
+
+  function handleReturnTextChange(text: string, which: 'returnPickup' | 'returnDropoff') {
+    const f = setReturnField(which);
+    f.setAddr(text); f.setLat(null); f.setLng(null);
+    setReturnRouteInfo(null);
+    const ref = which === 'returnPickup' ? returnPickupDebounceRef : returnDropoffDebounceRef;
+    if (ref.current) clearTimeout(ref.current);
+    ref.current = setTimeout(() => fetchReturnSuggestions(text, which), 300);
+  }
+
+  async function selectReturnSuggestion(placeId: string, description: string, which: 'returnPickup' | 'returnDropoff') {
+    const f = setReturnField(which);
+    f.setAddr(description); f.setShowSugs(false); f.setSugs([]);
+    try {
+      const baseUrl = getApiUrl();
+      const headers: Record<string, string> = {};
+      const token = getAuthToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const url = new URL('/api/places/details', baseUrl);
+      url.searchParams.set('place_id', placeId);
+      const res = await fetch(url.toString(), { credentials: 'include', headers });
+      if (res.ok) {
+        const data = await res.json();
+        f.setAddr(data.address || description);
+        f.setLat(data.lat);
+        f.setLng(data.lng);
+      }
+    } catch {}
+  }
+
+  // Fetch return-leg drive time/distance once both return ends are pinned.
+  useEffect(() => {
+    if (!bothWays || !returnPickupLat || !returnPickupLng || !returnDropoffLat || !returnDropoffLng) return;
+    (async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const headers: Record<string, string> = {};
+        const token = getAuthToken();
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const url = new URL('/api/directions', baseUrl);
+        url.searchParams.set('origin_lat', String(returnPickupLat));
+        url.searchParams.set('origin_lng', String(returnPickupLng));
+        url.searchParams.set('dest_lat', String(returnDropoffLat));
+        url.searchParams.set('dest_lng', String(returnDropoffLng));
+        const res = await fetch(url.toString(), { credentials: 'include', headers });
+        if (res.ok) setReturnRouteInfo(await res.json());
+      } catch {}
+    })();
+  }, [bothWays, returnPickupLat, returnPickupLng, returnDropoffLat, returnDropoffLng]);
+
   const oneWayMinutes = routeInfo ? routeInfo.truck_duration_seconds / 60 : 0;
-  const roundTripMinutes = routeInfo ? (oneWayMinutes * 2) + loadTime + unloadTime : 0;
+  const returnLegMinutes = returnRouteInfo ? returnRouteInfo.truck_duration_seconds / 60 : 0;
+  // Both-ways with a known return route: one loop = leg 1 + leg 2 with a
+  // load/unload cycle on each leg. Otherwise: classic out-and-back round trip.
+  const roundTripMinutes = routeInfo
+    ? (bothWays && returnRouteInfo
+        ? oneWayMinutes + returnLegMinutes + (loadTime + unloadTime) * 2
+        : (oneWayMinutes * 2) + loadTime + unloadTime)
+    : 0;
 
   const capacityInTons = (() => {
     const cap = parseFloat(truckCapacity) || 0;
@@ -876,6 +1036,11 @@ export default function CreateJobScreen() {
     if (!destinationAddress.trim()) errors.add('destination');
     if (!rate.trim()) errors.add('rate');
     if (!scheduledDate) errors.add('date');
+    if (bothWays) {
+      if (!returnMaterial.trim()) errors.add('returnMaterial');
+      if (!returnPickupAddress.trim()) errors.add('returnPickup');
+      if (!returnDropoffAddress.trim()) errors.add('returnDropoff');
+    }
 
     if (errors.size > 0) {
       setValidationErrors(errors);
@@ -890,6 +1055,9 @@ export default function CreateJobScreen() {
       const firstError = errors.has('material') ? 'Material' 
         : errors.has('origin') ? 'Origin address'
         : errors.has('destination') ? 'Destination address'
+        : errors.has('returnMaterial') ? 'Return material'
+        : errors.has('returnPickup') ? 'Return pickup address'
+        : errors.has('returnDropoff') ? 'Return dropoff address'
         : errors.has('rate') ? 'Rate'
         : 'Scheduled date';
       Alert.alert('Missing Required Fields', `Please fill in: ${firstError}${errors.size > 1 ? ` and ${errors.size - 1} other field${errors.size > 2 ? 's' : ''}` : ''}.`);
@@ -945,6 +1113,17 @@ export default function CreateJobScreen() {
         urgent,
         ...(urgent && paperworkDescription.trim() ? { paperworkDescription: paperworkDescription.trim() } : {}),
       };
+
+      if (bothWays) {
+        body.haulBothWays = true;
+        body.returnMaterial = returnMaterial.trim();
+        body.returnOriginAddress = returnPickupAddress.trim();
+        if (returnPickupLat != null) body.returnOriginLat = String(returnPickupLat);
+        if (returnPickupLng != null) body.returnOriginLng = String(returnPickupLng);
+        body.returnDestinationAddress = returnDropoffAddress.trim();
+        if (returnDropoffLat != null) body.returnDestinationLat = String(returnDropoffLat);
+        if (returnDropoffLng != null) body.returnDestinationLng = String(returnDropoffLng);
+      }
 
       if (distance) body.distance = String(parseFloat(distance));
       if (scheduledDate) body.scheduledDate = scheduledDate.trim();
@@ -1159,6 +1338,36 @@ export default function CreateJobScreen() {
               )}
             </View>
 
+            {bothWays && (
+              <View style={{ marginTop: 14, zIndex: 4 }}>
+                <Text style={styles.label}>Return Material (hauled back)</Text>
+                <TextInput
+                  style={[styles.input, validationErrors.has('returnMaterial') && styles.inputError]}
+                  placeholder="e.g. Fill dirt hauled back to the job"
+                  placeholderTextColor={validationErrors.has('returnMaterial') ? '#ff6b6b' : Colors.textMuted}
+                  value={returnMaterial}
+                  onChangeText={(t) => { setReturnMaterial(t); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('returnMaterial'); return n; }); if (t.trim() && !showReturnMaterialDropdown) setShowReturnMaterialDropdown(true); }}
+                  onFocus={() => { if (pastMaterials.length > 0) setShowReturnMaterialDropdown(true); }}
+                  onBlur={() => setTimeout(() => setShowReturnMaterialDropdown(false), 200)}
+                />
+                {showReturnMaterialDropdown && pastMaterials.filter((m: string) => m.toLowerCase().includes(returnMaterial.toLowerCase()) && m.toLowerCase() !== returnMaterial.toLowerCase()).length > 0 && (
+                  <View style={styles.materialDropdown}>
+                    <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+                      {pastMaterials.filter((m: string) => m.toLowerCase().includes(returnMaterial.toLowerCase()) && m.toLowerCase() !== returnMaterial.toLowerCase()).map((m: string) => (
+                        <Pressable
+                          key={m}
+                          style={styles.materialDropdownItem}
+                          onPress={() => { setReturnMaterial(m); setShowReturnMaterialDropdown(false); }}
+                        >
+                          <Text style={styles.materialDropdownText}>{m}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            )}
+
             <Text style={[styles.label, { marginTop: 14 }]}>Job Type</Text>
             {renderChips(JOB_TYPES, jobType, setJobType)}
 
@@ -1210,7 +1419,7 @@ export default function CreateJobScreen() {
                         style={{ marginTop: 2 }}
                       />
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.suggestionMain, s.saved && { color: Colors.textPrimary }]} numberOfLines={1}>
+                        <Text style={[styles.suggestionMain, s.saved && { color: Colors.text }]} numberOfLines={1}>
                           {s.structured?.main_text || s.description}
                         </Text>
                         {s.saved && s.structured?.secondary_text ? (
@@ -1280,7 +1489,7 @@ export default function CreateJobScreen() {
                         style={{ marginTop: 2 }}
                       />
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.suggestionMain, s.saved && { color: Colors.textPrimary }]} numberOfLines={1}>
+                        <Text style={[styles.suggestionMain, s.saved && { color: Colors.text }]} numberOfLines={1}>
                           {s.structured?.main_text || s.description}
                         </Text>
                         {s.saved && s.structured?.secondary_text ? (
@@ -1309,6 +1518,132 @@ export default function CreateJobScreen() {
                 </View>
               )}
             </View>
+
+            {bothWays && (
+              <>
+                <View style={styles.returnLegHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                    <Ionicons name="swap-horizontal" size={16} color={Colors.primary} />
+                    <Text style={styles.returnLegTitle}>RETURN LEG</Text>
+                  </View>
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() => {
+                      Alert.alert('Remove return leg?', 'This job will go back to a one-way haul.', [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Remove', style: 'destructive', onPress: clearBothWays },
+                      ]);
+                    }}
+                  >
+                    <Text style={styles.returnLegRemove}>Remove</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.labelRow}>
+                  <Text style={[styles.label, { marginBottom: 0 }]}>Return Pickup</Text>
+                  <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('returnPickup')}>
+                    <Ionicons name="location" size={16} color={returnPickupLat ? Colors.primary : Colors.textSecondary} />
+                    <Text style={[styles.mapPinLinkText, !!returnPickupLat && { color: Colors.primary }]}>
+                      {returnPickupLat ? 'Pin Set' : 'Drop Pin on Map'}
+                    </Text>
+                  </Pressable>
+                </View>
+                <View style={{ zIndex: 8 }}>
+                  <View style={styles.addressRow}>
+                    <TextInput
+                      style={[styles.input, { flex: 1 }, validationErrors.has('returnPickup') && styles.inputError]}
+                      placeholder="Where the return material is picked up"
+                      placeholderTextColor={validationErrors.has('returnPickup') ? '#ff6b6b' : Colors.textMuted}
+                      value={returnPickupAddress}
+                      onChangeText={(t) => { handleReturnTextChange(t, 'returnPickup'); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('returnPickup'); return n; }); }}
+                      onFocus={() => { if (returnPickupSuggestions.length > 0) setShowReturnPickupSuggestions(true); }}
+                    />
+                    {returnPickupAddress.length > 0 && (
+                      <Pressable onPress={() => { setReturnPickupAddress(''); setReturnPickupLat(null); setReturnPickupLng(null); setReturnPickupSuggestions([]); setShowReturnPickupSuggestions(false); setReturnRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>
+                        <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                      </Pressable>
+                    )}
+                  </View>
+                  {showReturnPickupSuggestions && returnPickupSuggestions.length > 0 && (
+                    <ScrollView style={styles.suggestionsDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                      {returnPickupSuggestions.map((s: any, idx: number) => (
+                        <Pressable
+                          key={s.place_id + '_' + idx}
+                          style={styles.suggestionItem}
+                          onPress={() => selectReturnSuggestion(s.place_id, s.description, 'returnPickup')}
+                        >
+                          <Ionicons name="location-outline" size={16} color={Colors.textSecondary} style={{ marginTop: 2 }} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.suggestionMain} numberOfLines={1}>{s.structured?.main_text || s.description}</Text>
+                            {s.structured?.secondary_text ? (
+                              <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                            ) : null}
+                          </View>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  )}
+                  {returnPickupLat && (
+                    <View style={styles.coordBadge}>
+                      <Ionicons name="navigate" size={12} color={Colors.primary} />
+                      <Text style={styles.coordText}>{returnPickupLat.toFixed(4)}, {returnPickupLng?.toFixed(4)}</Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={[styles.labelRow, { marginTop: 14 }]}>
+                  <Text style={[styles.label, { marginBottom: 0 }]}>Return Dropoff</Text>
+                  <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('returnDropoff')}>
+                    <Ionicons name="location" size={16} color={returnDropoffLat ? Colors.primary : Colors.textSecondary} />
+                    <Text style={[styles.mapPinLinkText, !!returnDropoffLat && { color: Colors.primary }]}>
+                      {returnDropoffLat ? 'Pin Set' : 'Drop Pin on Map'}
+                    </Text>
+                  </Pressable>
+                </View>
+                <View style={{ zIndex: 7 }}>
+                  <View style={styles.addressRow}>
+                    <TextInput
+                      style={[styles.input, { flex: 1 }, validationErrors.has('returnDropoff') && styles.inputError]}
+                      placeholder="Usually the job site"
+                      placeholderTextColor={validationErrors.has('returnDropoff') ? '#ff6b6b' : Colors.textMuted}
+                      value={returnDropoffAddress}
+                      onChangeText={(t) => { handleReturnTextChange(t, 'returnDropoff'); if (t.trim()) setValidationErrors(prev => { const n = new Set(prev); n.delete('returnDropoff'); return n; }); }}
+                      onFocus={() => { if (returnDropoffSuggestions.length > 0) setShowReturnDropoffSuggestions(true); }}
+                    />
+                    {returnDropoffAddress.length > 0 && (
+                      <Pressable onPress={() => { setReturnDropoffAddress(''); setReturnDropoffLat(null); setReturnDropoffLng(null); setReturnDropoffSuggestions([]); setShowReturnDropoffSuggestions(false); setReturnRouteInfo(null); }} hitSlop={8} style={{ paddingHorizontal: 6 }}>
+                        <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                      </Pressable>
+                    )}
+                  </View>
+                  {showReturnDropoffSuggestions && returnDropoffSuggestions.length > 0 && (
+                    <ScrollView style={styles.suggestionsDropdown} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                      {returnDropoffSuggestions.map((s: any, idx: number) => (
+                        <Pressable
+                          key={s.place_id + '_' + idx}
+                          style={styles.suggestionItem}
+                          onPress={() => selectReturnSuggestion(s.place_id, s.description, 'returnDropoff')}
+                        >
+                          <Ionicons name="location-outline" size={16} color={Colors.textSecondary} style={{ marginTop: 2 }} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.suggestionMain} numberOfLines={1}>{s.structured?.main_text || s.description}</Text>
+                            {s.structured?.secondary_text ? (
+                              <Text style={styles.suggestionSub} numberOfLines={1}>{s.structured.secondary_text}</Text>
+                            ) : null}
+                          </View>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  )}
+                  {returnDropoffLat && (
+                    <View style={styles.coordBadge}>
+                      <Ionicons name="navigate" size={12} color={Colors.primary} />
+                      <Text style={styles.coordText}>{returnDropoffLat.toFixed(4)}, {returnDropoffLng?.toFixed(4)}</Text>
+                    </View>
+                  )}
+                </View>
+              </>
+            )}
           </View>
 
           {(routeInfo || fetchingRoute) && (
@@ -1324,13 +1659,27 @@ export default function CreateJobScreen() {
                   <View style={styles.routeStatsRow}>
                     <View style={styles.routeStat}>
                       <Text style={styles.routeStatValue}>{routeInfo.truck_duration_text}</Text>
-                      <Text style={styles.routeStatLabel}>One-way</Text>
+                      <Text style={styles.routeStatLabel}>{bothWays && returnRouteInfo ? 'Haul out' : 'One-way'}</Text>
                     </View>
                     <View style={[styles.routeDivider]} />
                     <View style={styles.routeStat}>
                       <Text style={styles.routeStatValue}>{routeInfo.distance_miles} mi</Text>
                       <Text style={styles.routeStatLabel}>Distance</Text>
                     </View>
+                    {bothWays && returnRouteInfo && (
+                      <>
+                        <View style={[styles.routeDivider]} />
+                        <View style={styles.routeStat}>
+                          <Text style={styles.routeStatValue}>{returnRouteInfo.truck_duration_text}</Text>
+                          <Text style={styles.routeStatLabel}>Haul back</Text>
+                        </View>
+                        <View style={[styles.routeDivider]} />
+                        <View style={styles.routeStat}>
+                          <Text style={styles.routeStatValue}>{returnRouteInfo.distance_miles} mi</Text>
+                          <Text style={styles.routeStatLabel}>Distance</Text>
+                        </View>
+                      </>
+                    )}
                   </View>
 
                   <View style={styles.timeAdjustRow}>
@@ -1810,6 +2159,16 @@ export default function CreateJobScreen() {
               </Pressable>
             </View>
             <Pressable
+              style={[styles.haulDirectionBtn, styles.haulBothWaysBtn]}
+              onPress={() => applyHaulDirection('both')}
+            >
+              <Ionicons name="swap-horizontal" size={28} color={Colors.primary} />
+              <Text style={styles.haulDirectionBtnText}>Haul Both Ways</Text>
+              <Text style={styles.haulDirectionBtnHint}>
+                Haul out, then haul a different material back
+              </Text>
+            </Pressable>
+            <Pressable
               style={styles.haulDirectionSkip}
               onPress={() => { setShowHaulDirectionModal(false); setPendingProject(null); }}
             >
@@ -1928,7 +2287,11 @@ export default function CreateJobScreen() {
               <Ionicons name="close" size={24} color={Colors.text} />
             </Pressable>
             <Text style={styles.mapHeaderTitle}>
-              {mapPickerTarget === 'origin' ? 'Set Origin' : 'Set Destination'}
+              {mapPickerTarget === 'origin' ? 'Set Origin'
+                : mapPickerTarget === 'returnPickup' ? 'Set Return Pickup'
+                : mapPickerTarget === 'returnDropoff' ? 'Set Return Dropoff'
+                : mapPickerTarget === 'project' ? 'Set Project Site'
+                : 'Set Destination'}
             </Text>
             <View style={{ width: 40 }} />
           </View>
@@ -2990,6 +3353,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textMuted,
     textAlign: 'center' as const,
+  },
+  haulBothWaysBtn: {
+    flex: undefined,
+    marginTop: 10,
+  },
+  returnLegHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    marginTop: 18,
+    marginBottom: 10,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,153,0,0.2)',
+  },
+  returnLegTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 13,
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
+  returnLegRemove: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    color: Colors.textMuted,
   },
   haulDirectionSkip: {
     marginTop: 16,

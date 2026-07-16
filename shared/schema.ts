@@ -223,6 +223,17 @@ export const jobs = pgTable("jobs", {
   original_rate_type: text("original_rate_type"),
   requires_tarp: boolean("requires_tarp").default(false),
   archived_at: timestamp("archived_at"),
+  // Companion-only "Haul Both Ways" fields (two-leg jobs). The website doesn't
+  // know these columns; sync's upsertRow only writes keys present in website
+  // JSON, so these values survive periodic down-syncs.
+  haul_both_ways: boolean("haul_both_ways").default(false),
+  return_material: text("return_material"),
+  return_origin_address: text("return_origin_address"),
+  return_origin_lat: numeric("return_origin_lat", { precision: 10, scale: 7 }),
+  return_origin_lng: numeric("return_origin_lng", { precision: 10, scale: 7 }),
+  return_destination_address: text("return_destination_address"),
+  return_destination_lat: numeric("return_destination_lat", { precision: 10, scale: 7 }),
+  return_destination_lng: numeric("return_destination_lng", { precision: 10, scale: 7 }),
 });
 
 export const jobRuns = pgTable("job_runs", {

@@ -67,6 +67,8 @@ function mapDbJob(raw: any): Job {
     projectId: raw.project_id || raw.projectId,
     pendingApplications: Number(raw.pending_applications || raw.pendingApplications || 0),
     approvedAssignments: Number(raw.approved_assignments || raw.approvedAssignments || 0),
+    haulBothWays: (raw.haul_both_ways ?? raw.haulBothWays) === true,
+    returnMaterial: raw.return_material || raw.returnMaterial || '',
   };
 }
 
@@ -521,6 +523,12 @@ export default function JobsBrowseScreen() {
             <TruckIcon size={12} />
             <Text style={styles.badgeText}>{formatTruckType(item.truckType)}</Text>
           </View>
+          {item.haulBothWays && (
+            <View style={[styles.badge, { backgroundColor: 'rgba(255,153,0,0.15)' }]}>
+              <Ionicons name="swap-horizontal" size={12} color={Colors.primary} />
+              <Text style={[styles.badgeText, { color: Colors.primary }]}>BOTH WAYS</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.locationRow}>

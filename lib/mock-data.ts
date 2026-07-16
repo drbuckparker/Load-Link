@@ -37,6 +37,14 @@ export interface Job {
   projectId?: string;
   pendingApplications?: number;
   approvedAssignments?: number;
+  haulBothWays?: boolean;
+  returnMaterial?: string;
+  returnOriginAddress?: string;
+  returnOriginLat?: number;
+  returnOriginLng?: number;
+  returnDestinationAddress?: string;
+  returnDestinationLat?: number;
+  returnDestinationLng?: number;
 }
 
 export interface Message {

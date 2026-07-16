@@ -479,6 +479,36 @@ async function roadMilesToJobArea(
   return Math.min(...valid);
 }
 
+// Companion-only "Haul Both Ways" job fields. These columns exist only in the
+// shared DB (added by the companion) — the website's strict PUT/POST validation
+// rejects unknown keys with a 400, so they must be stripped from every
+// pushToWebsite body. Includes both camelCase and snake_case spellings.
+const COMPANION_ONLY_JOB_KEYS = new Set([
+  'haulBothWays', 'haul_both_ways',
+  'returnMaterial', 'return_material',
+  'returnOriginAddress', 'return_origin_address',
+  'returnOriginLat', 'return_origin_lat',
+  'returnOriginLng', 'return_origin_lng',
+  'returnDestinationAddress', 'return_destination_address',
+  'returnDestinationLat', 'return_destination_lat',
+  'returnDestinationLng', 'return_destination_lng',
+]);
+
+// Straight-line miles from a point to a job "leg" (pickup, dropoff, or the
+// segment between them), tolerating a missing endpoint.
+function airMilesToLeg(
+  pLat: number, pLng: number,
+  oLat: number | null, oLng: number | null,
+  dLat: number | null, dLng: number | null,
+): number | null {
+  if (oLat != null && oLng != null && dLat != null && dLng != null) {
+    return segmentDistanceMilesFn(pLat, pLng, oLat, oLng, dLat, dLng);
+  }
+  if (oLat != null && oLng != null) return haversineMilesFn(pLat, pLng, oLat, oLng);
+  if (dLat != null && dLng != null) return haversineMilesFn(pLat, pLng, dLat, dLng);
+  return null;
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   function requireAuth(req: Request, res: Response, next: Function) {
     const auth = getWebsiteAuth(req);
@@ -1123,7 +1153,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         'truck_type', 'status', 'scheduled_date', 'project_id', 'trucks_needed', 'estimated_days', 'includes_weekends', 'includes_saturday', 'includes_sunday',
         'estimated_cost', 'origin_lat', 'origin_lng', 'destination_lat', 'destination_lng', 'job_type',
         'requires_weight_tickets', 'requires_tarp', 'urgent', 'paperwork_description', 'created_at', 'updated_at',
-        'capacity_needed', 'total_tons_needed', 'total_amount_unit', 'pickup_time', 'estimated_trips'];
+        'capacity_needed', 'total_tons_needed', 'total_amount_unit', 'pickup_time', 'estimated_trips',
+        'haul_both_ways', 'return_material', 'return_origin_address', 'return_origin_lat', 'return_origin_lng',
+        'return_destination_address', 'return_destination_lat', 'return_destination_lng'];
 
       const snakeBody: Record<string, any> = {};
       for (const [k, v] of Object.entries(body)) {
@@ -1144,7 +1176,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [id]);
       const job = result.rows[0] || { id, ...snakeBody };
 
-      const pushBody = { ...req.body, id };
+      // Strip companion-only "Haul Both Ways" fields before pushing upstream —
+      // the website's validation rejects unknown keys with a 400, which would
+      // make the whole push fail and leave the job unregistered upstream.
+      const pushBody: Record<string, any> = { ...req.body, id };
+      for (const k of Object.keys(pushBody)) {
+        if (COMPANION_ONLY_JOB_KEYS.has(k)) delete pushBody[k];
+      }
       console.log(`POST /api/jobs pushing to website with projectId=${pushBody.projectId || pushBody.project_id || 'none'}, id=${id}`);
       pushToWebsite("/api/jobs", auth, { method: "POST", body: pushBody }).catch(() => {});
 
@@ -1250,6 +1288,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const pushBody: Record<string, any> = {};
         for (const k of Object.keys(req.body)) {
           if (req.body[k] === undefined) continue;
+          // Companion-only return-leg fields: the website doesn't know them and
+          // its strict validation would 400 the whole push, reverting the edit.
+          if (COMPANION_ONLY_JOB_KEYS.has(k)) continue;
           const col = camelToSnake(k);
           let v = Object.prototype.hasOwnProperty.call(updatedRow, col) ? updatedRow[col] : req.body[k];
           if (v instanceof Date) {
@@ -1889,7 +1930,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Load job for time/geofence rules
       const jobRes = await pool.query(
-        `SELECT id, scheduled_date, pickup_time, origin_lat, origin_lng, destination_lat, destination_lng
+        `SELECT id, scheduled_date, pickup_time, origin_lat, origin_lng, destination_lat, destination_lng,
+                haul_both_ways, return_origin_lat, return_origin_lng, return_destination_lat, return_destination_lng
          FROM jobs WHERE id = $1`,
         [req.params.id]
       );
@@ -1943,7 +1985,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const oLng = job.origin_lng ? Number(job.origin_lng) : null;
       const dLat = job.destination_lat ? Number(job.destination_lat) : null;
       const dLng = job.destination_lng ? Number(job.destination_lng) : null;
-      const hasJobCoords = (oLat != null && oLng != null) || (dLat != null && dLng != null);
+      // "Haul Both Ways" jobs have a second leg — its points count as valid
+      // clock-in locations too.
+      const bothWays = job.haul_both_ways === true;
+      const roLat = bothWays && job.return_origin_lat ? Number(job.return_origin_lat) : null;
+      const roLng = bothWays && job.return_origin_lng ? Number(job.return_origin_lng) : null;
+      const rdLat = bothWays && job.return_destination_lat ? Number(job.return_destination_lat) : null;
+      const rdLng = bothWays && job.return_destination_lng ? Number(job.return_destination_lng) : null;
+      const hasReturnCoords = (roLat != null && roLng != null) || (rdLat != null && rdLng != null);
+      const hasJobCoords = (oLat != null && oLng != null) || (dLat != null && dLng != null) || hasReturnCoords;
 
       if (hasJobCoords) {
         if (startLat == null || startLng == null) {
@@ -1965,19 +2015,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         // Straight-line distance first: it's free, and since roads are never
         // shorter than the crow flies, a driver within ~1 air mile is always
-        // in range — no need to burn a Directions call.
-        let airMiles: number;
-        if (oLat != null && oLng != null && dLat != null && dLng != null) {
-          // Both endpoints known — accept anywhere along the pickup→dropoff line
-          airMiles = segmentDistanceMilesFn(driverLat, driverLng, oLat, oLng, dLat, dLng);
-        } else if (oLat != null && oLng != null) {
-          airMiles = haversineMilesFn(driverLat, driverLng, oLat, oLng);
-        } else {
-          airMiles = haversineMilesFn(driverLat, driverLng, dLat as number, dLng as number);
-        }
+        // in range — no need to burn a Directions call. For "Haul Both Ways"
+        // jobs the return leg counts too — take the minimum across both legs.
+        const legAir = [
+          airMilesToLeg(driverLat, driverLng, oLat, oLng, dLat, dLng),
+          hasReturnCoords ? airMilesToLeg(driverLat, driverLng, roLat, roLng, rdLat, rdLng) : null,
+        ].filter((m): m is number => m != null);
+        const airMiles = Math.min(...legAir);
         if (airMiles > 1) {
           const target = (oLat != null && oLng != null && dLat != null && dLng != null) ? "job route" : "job site";
-          const roadMiles = await roadMilesToJobArea(driverLat, driverLng, oLat, oLng, dLat, dLng);
+          const legRoad = await Promise.all([
+            roadMilesToJobArea(driverLat, driverLng, oLat, oLng, dLat, dLng),
+            hasReturnCoords ? roadMilesToJobArea(driverLat, driverLng, roLat, roLng, rdLat, rdLng) : Promise.resolve(null),
+          ]);
+          const validRoad = legRoad.filter((m): m is number => m != null);
+          const roadMiles = validRoad.length > 0 ? Math.min(...validRoad) : null;
           if (roadMiles != null) {
             if (roadMiles > GEOFENCE_MILES) {
               return res.status(403).json({
@@ -4965,7 +5017,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "lat and lng are required" });
       }
       const jobRes = await pool.query(
-        `SELECT origin_lat, origin_lng, destination_lat, destination_lng FROM jobs WHERE id = $1`,
+        `SELECT origin_lat, origin_lng, destination_lat, destination_lng,
+                haul_both_ways, return_origin_lat, return_origin_lng, return_destination_lat, return_destination_lng
+         FROM jobs WHERE id = $1`,
         [req.params.id]
       );
       const job = jobRes.rows[0];
@@ -4974,18 +5028,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const oLng = job.origin_lng ? Number(job.origin_lng) : null;
       const dLat = job.destination_lat ? Number(job.destination_lat) : null;
       const dLng = job.destination_lng ? Number(job.destination_lng) : null;
-      if ((oLat == null || oLng == null) && (dLat == null || dLng == null)) {
+      const bothWays = job.haul_both_ways === true;
+      const roLat = bothWays && job.return_origin_lat ? Number(job.return_origin_lat) : null;
+      const roLng = bothWays && job.return_origin_lng ? Number(job.return_origin_lng) : null;
+      const rdLat = bothWays && job.return_destination_lat ? Number(job.return_destination_lat) : null;
+      const rdLng = bothWays && job.return_destination_lng ? Number(job.return_destination_lng) : null;
+      const hasReturnCoords = (roLat != null && roLng != null) || (rdLat != null && rdLng != null);
+      const legAir = [
+        airMilesToLeg(lat, lng, oLat, oLng, dLat, dLng),
+        hasReturnCoords ? airMilesToLeg(lat, lng, roLat, roLng, rdLat, rdLng) : null,
+      ].filter((m): m is number => m != null);
+      if (legAir.length === 0) {
         return res.status(404).json({ message: "Job has no coordinates" });
       }
-      let airMiles: number;
-      if (oLat != null && oLng != null && dLat != null && dLng != null) {
-        airMiles = segmentDistanceMilesFn(lat, lng, oLat, oLng, dLat, dLng);
-      } else if (oLat != null && oLng != null) {
-        airMiles = haversineMilesFn(lat, lng, oLat, oLng);
-      } else {
-        airMiles = haversineMilesFn(lat, lng, dLat as number, dLng as number);
-      }
-      const roadMiles = await roadMilesToJobArea(lat, lng, oLat, oLng, dLat, dLng);
+      const airMiles = Math.min(...legAir);
+      const legRoad = await Promise.all([
+        roadMilesToJobArea(lat, lng, oLat, oLng, dLat, dLng),
+        hasReturnCoords ? roadMilesToJobArea(lat, lng, roLat, roLng, rdLat, rdLng) : Promise.resolve(null),
+      ]);
+      const validRoad = legRoad.filter((m): m is number => m != null);
+      const roadMiles = validRoad.length > 0 ? Math.min(...validRoad) : null;
       return res.json(addDualKeys({
         road_miles: roadMiles != null ? Math.round(roadMiles * 10) / 10 : null,
         air_miles: Math.round(airMiles * 10) / 10,

@@ -92,6 +92,14 @@ export default function EditJobScreen() {
   const [urgent, setUrgent] = useState(false);
   const [capacityNeeded, setCapacityNeeded] = useState('');
   const [routeInfo, setRouteInfo] = useState<any>(null);
+  const [isBothWays, setIsBothWays] = useState(false);
+  const [returnMaterial, setReturnMaterial] = useState('');
+  const [returnOriginAddress, setReturnOriginAddress] = useState('');
+  const [returnOriginLat, setReturnOriginLat] = useState<number | null>(null);
+  const [returnOriginLng, setReturnOriginLng] = useState<number | null>(null);
+  const [returnDestAddress, setReturnDestAddress] = useState('');
+  const [returnDestLat, setReturnDestLat] = useState<number | null>(null);
+  const [returnDestLng, setReturnDestLng] = useState<number | null>(null);
 
   const { data: jobData, isLoading } = useQuery<any>({
     queryKey: [`/api/jobs/${id}`],
@@ -161,6 +169,14 @@ export default function EditJobScreen() {
       setRequiresWeightTickets(jobData.requires_weight_tickets || false);
       setUrgent(jobData.urgent || false);
       setCapacityNeeded(jobData.capacity_needed ? String(jobData.capacity_needed) : '');
+      setIsBothWays(jobData.haul_both_ways === true);
+      setReturnMaterial(jobData.return_material || '');
+      setReturnOriginAddress(jobData.return_origin_address || '');
+      setReturnOriginLat(jobData.return_origin_lat ? Number(jobData.return_origin_lat) : null);
+      setReturnOriginLng(jobData.return_origin_lng ? Number(jobData.return_origin_lng) : null);
+      setReturnDestAddress(jobData.return_destination_address || '');
+      setReturnDestLat(jobData.return_destination_lat ? Number(jobData.return_destination_lat) : null);
+      setReturnDestLng(jobData.return_destination_lng ? Number(jobData.return_destination_lng) : null);
       setLoaded(true);
     }
   }, [jobData, loaded]);
@@ -408,6 +424,20 @@ export default function EditJobScreen() {
       Alert.alert('Required', 'Please enter a rate.');
       return;
     }
+    if (isBothWays) {
+      if (!returnMaterial.trim()) {
+        Alert.alert('Required', 'Please enter a return material.');
+        return;
+      }
+      if (!returnOriginAddress.trim()) {
+        Alert.alert('Required', 'Please enter a return pickup location.');
+        return;
+      }
+      if (!returnDestAddress.trim()) {
+        Alert.alert('Required', 'Please enter a return dropoff location.');
+        return;
+      }
+    }
 
     setSubmitting(true);
     try {
@@ -481,6 +511,34 @@ export default function EditJobScreen() {
         body.includes_weekends = includesWeekends;
         body.includes_saturday = includesWeekends ? includesSaturday : false;
         body.includes_sunday = includesWeekends ? includesSunday : false;
+      }
+      if (isBothWays) {
+        let rOLat = returnOriginLat, rOLng = returnOriginLng, rDLat = returnDestLat, rDLng = returnDestLng;
+        if ((!rOLat || !rOLng) && returnOriginAddress.trim()) {
+          const g = await geocode(returnOriginAddress.trim());
+          if (g) { rOLat = g.lat; rOLng = g.lng; setReturnOriginLat(g.lat); setReturnOriginLng(g.lng); }
+        }
+        if ((!rDLat || !rDLng) && returnDestAddress.trim()) {
+          const g = await geocode(returnDestAddress.trim());
+          if (g) { rDLat = g.lat; rDLng = g.lng; setReturnDestLat(g.lat); setReturnDestLng(g.lng); }
+        }
+        body.haul_both_ways = true;
+        body.return_material = returnMaterial.trim();
+        body.return_origin_address = returnOriginAddress.trim();
+        body.return_destination_address = returnDestAddress.trim();
+        if (rOLat != null) body.return_origin_lat = String(rOLat);
+        if (rOLng != null) body.return_origin_lng = String(rOLng);
+        if (rDLat != null) body.return_destination_lat = String(rDLat);
+        if (rDLng != null) body.return_destination_lng = String(rDLng);
+      } else if (jobData?.haul_both_ways === true) {
+        body.haul_both_ways = false;
+        body.return_material = null;
+        body.return_origin_address = null;
+        body.return_origin_lat = null;
+        body.return_origin_lng = null;
+        body.return_destination_address = null;
+        body.return_destination_lat = null;
+        body.return_destination_lng = null;
       }
       if (estimatedTrips) body.estimated_trips = parseInt(estimatedTrips, 10);
       if (totalTonsNeeded) body.total_tons_needed = parseFloat(totalTonsNeeded);
@@ -731,6 +789,52 @@ export default function EditJobScreen() {
                     {trucksNeeded} truck{trucksNeeded > 1 ? 's' : ''} × {tripsPerTruck} trip{tripsPerTruck > 1 ? 's' : ''} × {roundTripLabel} round trip
                   </Text>
                 )}
+              </>
+            )}
+
+            {isBothWays && (
+              <>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="swap-horizontal" size={16} color={Colors.primary} />
+                    <Text style={[styles.label, { marginBottom: 0, color: Colors.primary }]}>RETURN LEG</Text>
+                  </View>
+                  <Pressable
+                    onPress={() => {
+                      setIsBothWays(false);
+                      setReturnMaterial('');
+                      setReturnOriginAddress(''); setReturnOriginLat(null); setReturnOriginLng(null);
+                      setReturnDestAddress(''); setReturnDestLat(null); setReturnDestLng(null);
+                    }}
+                    hitSlop={8}
+                  >
+                    <Text style={{ color: Colors.textMuted, fontSize: 12, fontFamily: 'Inter_600SemiBold' }}>Remove</Text>
+                  </Pressable>
+                </View>
+                <Text style={styles.label}>Return Material</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Gravel"
+                  placeholderTextColor={Colors.textMuted}
+                  value={returnMaterial}
+                  onChangeText={setReturnMaterial}
+                />
+                <Text style={[styles.label, { marginTop: 14 }]}>Return Pickup Location</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Address for return pickup"
+                  placeholderTextColor={Colors.textMuted}
+                  value={returnOriginAddress}
+                  onChangeText={(t) => { setReturnOriginAddress(t); setReturnOriginLat(null); setReturnOriginLng(null); }}
+                />
+                <Text style={[styles.label, { marginTop: 14 }]}>Return Dropoff Location</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Address for return dropoff"
+                  placeholderTextColor={Colors.textMuted}
+                  value={returnDestAddress}
+                  onChangeText={(t) => { setReturnDestAddress(t); setReturnDestLat(null); setReturnDestLng(null); }}
+                />
               </>
             )}
           </View>

@@ -226,6 +226,14 @@ function mapJob(j: any): Job {
     estimatedDurationMinutes: j.estimated_duration_minutes ?? j.estimatedDurationMinutes ?? null,
     loadTimeMinutes: j.load_time_minutes ?? j.loadTimeMinutes ?? 10,
     unloadTimeMinutes: j.unload_time_minutes ?? j.unloadTimeMinutes ?? 10,
+    haulBothWays: (j.haul_both_ways ?? j.haulBothWays) === true,
+    returnMaterial: j.return_material ?? j.returnMaterial ?? '',
+    returnOriginAddress: j.return_origin_address ?? j.returnOriginAddress ?? '',
+    returnOriginLat: j.return_origin_lat != null ? Number(j.return_origin_lat) : (j.returnOriginLat != null ? Number(j.returnOriginLat) : 0),
+    returnOriginLng: j.return_origin_lng != null ? Number(j.return_origin_lng) : (j.returnOriginLng != null ? Number(j.returnOriginLng) : 0),
+    returnDestinationAddress: j.return_destination_address ?? j.returnDestinationAddress ?? '',
+    returnDestinationLat: j.return_destination_lat != null ? Number(j.return_destination_lat) : (j.returnDestinationLat != null ? Number(j.returnDestinationLat) : 0),
+    returnDestinationLng: j.return_destination_lng != null ? Number(j.return_destination_lng) : (j.returnDestinationLng != null ? Number(j.returnDestinationLng) : 0),
   };
 }
 
@@ -1984,6 +1992,12 @@ export default function JobDetailScreen() {
             <TruckIcon size={12} />
             <Text style={styles.badgeText}>{formatTruckType(job.truckType)}</Text>
           </View>
+          {job.haulBothWays && (
+            <View style={[styles.badge, { backgroundColor: 'rgba(255,153,0,0.15)' }]}>
+              <Ionicons name="swap-horizontal" size={12} color={Colors.primary} />
+              <Text style={[styles.badgeText, { color: Colors.primary }]}>BOTH WAYS</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.section}>
@@ -2017,6 +2031,32 @@ export default function JobDetailScreen() {
             </View>
           </Pressable>
         </View>
+
+        {job.haulBothWays && (job.returnOriginAddress || job.returnDestinationAddress) ? (
+          <View style={styles.section}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <Ionicons name="swap-horizontal" size={15} color={Colors.primary} />
+              <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>RETURN LEG{job.returnMaterial ? ` · ${job.returnMaterial.toUpperCase()}` : ''}</Text>
+            </View>
+            <View style={styles.routeCard}>
+              <View style={styles.routeRow}>
+                <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />
+                <View style={styles.routeTextBlock}>
+                  <Text style={styles.routeLabel}>PICKUP</Text>
+                  <Text style={styles.routeAddress}>{job.returnOriginAddress || 'Not specified'}</Text>
+                </View>
+              </View>
+              <View style={styles.routeLine} />
+              <View style={styles.routeRow}>
+                <View style={[styles.routeDot, { backgroundColor: Colors.primary }]} />
+                <View style={styles.routeTextBlock}>
+                  <Text style={styles.routeLabel}>DROPOFF</Text>
+                  <Text style={styles.routeAddress}>{job.returnDestinationAddress || 'Not specified'}</Text>
+                </View>
+              </View>
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>DETAILS</Text>
