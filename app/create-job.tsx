@@ -183,6 +183,22 @@ export default function CreateJobScreen() {
   const returnPickupDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const returnDropoffDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Swap which end of the two-leg job comes first: pickup <-> dropoff on leg 1,
+  // and return pickup <-> return dropoff on the return leg. Lets contractors
+  // start the loop at the pit instead of the job site.
+  function swapLegDirection() {
+    const oAddr = originAddress, oLat = originLat, oLng = originLng;
+    setOriginAddress(destinationAddress); setOriginLat(destLat); setOriginLng(destLng);
+    setDestinationAddress(oAddr); setDestLat(oLat); setDestLng(oLng);
+    const rpAddr = returnPickupAddress, rpLat = returnPickupLat, rpLng = returnPickupLng;
+    setReturnPickupAddress(returnDropoffAddress); setReturnPickupLat(returnDropoffLat); setReturnPickupLng(returnDropoffLng);
+    setReturnDropoffAddress(rpAddr); setReturnDropoffLat(rpLat); setReturnDropoffLng(rpLng);
+    setOriginSuggestions([]); setShowOriginSuggestions(false);
+    setDestSuggestions([]); setShowDestSuggestions(false);
+    setReturnPickupSuggestions([]); setShowReturnPickupSuggestions(false);
+    setReturnDropoffSuggestions([]); setShowReturnDropoffSuggestions(false);
+  }
+
   function clearBothWays() {
     setBothWays(false);
     setReturnMaterial('');
@@ -1526,6 +1542,15 @@ export default function CreateJobScreen() {
                     <Ionicons name="swap-horizontal" size={16} color={Colors.primary} />
                     <Text style={styles.returnLegTitle}>RETURN LEG</Text>
                   </View>
+                  <Pressable
+                    hitSlop={8}
+                    onPress={swapLegDirection}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: 16 }}
+                    testID="swap-leg-direction"
+                  >
+                    <Ionicons name="repeat" size={14} color={Colors.primary} />
+                    <Text style={[styles.returnLegRemove, { color: Colors.primary }]}>Swap</Text>
+                  </Pressable>
                   <Pressable
                     hitSlop={8}
                     onPress={() => {
