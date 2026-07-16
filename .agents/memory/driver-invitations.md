@@ -7,9 +7,11 @@ description: How the companion handles email invitations vs the website's side-e
 
 The shared Neon DB has a `driver_invitations` table (carries both `contractor_id` and `trucking_company_id`, plus an `invitation_type` enum of `driver|foreman`).
 
-**Decision:** the companion **reads** the invitation list directly from the shared DB (local-first read, scoped by `contractor_id = me OR trucking_company_id = me`) but must **proxy creation** to the website's `POST /api/invitations` (forward with the session JWT).
+**Decision:** the companion must **proxy BOTH the list read and creation** to the website's `/api/invitations` (forward with the session JWT). The local shared-DB `driver_invitations` table is NOT written by the website — verified July 2026: the website stores invitations in its own DB, so the shared table is permanently empty and a local-first read always shows "no invitations". Keep the local-table read only as a fallback for dev-local sessions.
 
-**Why:** creating an invite has side-effects the companion cannot replicate — sending the accept-link email and owning the acceptance flow that provisions the new user. A direct DB insert would create a row that never emails anyone.
+**Why:** creating an invite has side-effects the companion cannot replicate — sending the accept-link email and owning the acceptance flow that provisions the new user. A direct DB insert would create a row that never emails anyone. And reading locally shows nothing because the website never syncs invitations down.
+
+**Email-delivery caveat (July 2026):** invitations created via the website API return 201 and appear in its list as `pending`, but the accept email may never arrive — that's the website's mail pipeline, unfixable from the companion. The website exposes NO delete/resend/cancel endpoints for invitations, and `PUT /api/invitations/:id` returns 200 but appears to duplicate rather than update — do not call it.
 
 **How to apply:** any new invite-like feature (anything that emails an external party a signup/accept link) should proxy the write to the website and only read state back from the shared DB. Send dual-keyed (camel + snake) payloads to the website since its handler's expected casing can't be probed live (companion JWTs in `.data/sessions.json` are frequently stale).
 

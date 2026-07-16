@@ -3056,6 +3056,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!(role.includes('contractor') || role.includes('trucking_company'))) {
         return res.json([]);
       }
+      // The website stores invitations in its own database (not the shared
+      // driver_invitations table, which stays empty), so the list must be
+      // proxied from the website API. Fall back to the local table only if
+      // the website is unreachable (e.g. dev-local sessions).
+      if (auth.jwt) {
+        try {
+          const websiteRes = await websiteFetch("/api/invitations", { jwt: auth.jwt });
+          if (websiteRes.ok) {
+            const data = await websiteRes.json();
+            const list = Array.isArray(data) ? data : (data?.invitations || []);
+            return res.json(list.map(addDualKeys));
+          }
+          // Pass 401 through so the app's silent re-login + retry can kick in
+          // instead of silently showing an empty list from the local fallback.
+          if (websiteRes.status === 401) {
+            return res.status(401).json({ message: "Your session expired. Please try again." });
+          }
+        } catch (e: any) {
+          console.error("Website invitation list error:", e.message);
+        }
+      }
       const result = await pool.query(
         `SELECT * FROM driver_invitations
          WHERE contractor_id = $1 OR trucking_company_id = $1
