@@ -4300,6 +4300,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const isOpen = invoice.status === 'open';
     let jobsRes;
     if (isOpen) {
+      // A job bills under the month of its FIRST working day (scheduled_date):
+      // a June 30 -> July job belongs on the June invoice. Without the month
+      // filter, an old open invoice would keep sweeping in every newer
+      // un-invoiced job and its period label would be wrong.
       jobsRes = await pool.query(
         `SELECT DISTINCT j.* FROM jobs j
          LEFT JOIN job_runs jr ON jr.job_id = j.id
@@ -4307,8 +4311,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             OR (j.contractor_id = $2
                 AND (j.driver_id = $3 OR jr.driver_id = $3)
                 AND j.status::text IN ('completed', 'in_progress', 'accepted')
-                AND (j.invoice_id IS NULL OR j.invoice_id = $1))`,
-        [invoice.id, invoice.contractor_id, invoice.driver_id]
+                AND (j.invoice_id IS NULL OR j.invoice_id = $1)
+                AND date_trunc('month', COALESCE(j.scheduled_date, j.created_at)) = date_trunc('month', $4::timestamp))`,
+        [invoice.id, invoice.contractor_id, invoice.driver_id, invoice.period_month]
       );
     } else {
       jobsRes = await pool.query(
@@ -4331,9 +4336,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { jobs: enrichedJobs, total: Number(total.toFixed(2)), jobCount: enrichedJobs.length };
   }
 
+  // Make sure every month that has billable, un-invoiced work for this user
+  // has an open monthly invoice to bill it under. A job belongs to the month
+  // of its first working day (scheduled_date). Writes go to the shared DB the
+  // website reads, so both apps see the same invoice.
+  async function ensureMonthlyInvoices(userId: string): Promise<void> {
+    const candidates = await pool.query(
+      `SELECT DISTINCT j.contractor_id,
+              COALESCE(jr.driver_id, j.driver_id) AS billing_driver_id,
+              date_trunc('month', COALESCE(j.scheduled_date, j.created_at)) AS bill_month
+       FROM jobs j
+       LEFT JOIN job_runs jr ON jr.job_id = j.id
+       WHERE j.invoice_id IS NULL
+         AND j.status::text IN ('completed', 'in_progress', 'accepted')
+         AND COALESCE(jr.driver_id, j.driver_id) IS NOT NULL
+         AND (j.contractor_id = $1 OR jr.driver_id = $1 OR j.driver_id = $1)`,
+      [userId]
+    );
+    for (const row of candidates.rows) {
+      if (!row.contractor_id || !row.billing_driver_id || !row.bill_month) continue;
+      // No unique constraint exists on (contractor, driver, month) in the
+      // shared table, so serialize check+insert per pair/month with an
+      // advisory lock to prevent duplicate invoices under concurrent requests.
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const monthKey = new Date(row.bill_month).toISOString().slice(0, 7);
+        await client.query(
+          `SELECT pg_advisory_xact_lock(hashtext($1))`,
+          [`inv:${row.contractor_id}:${row.billing_driver_id}:${monthKey}`]
+        );
+        const existing = await client.query(
+          `SELECT id FROM monthly_invoices
+           WHERE contractor_id = $1 AND driver_id = $2
+             AND date_trunc('month', period_month) = date_trunc('month', $3::timestamp)
+           LIMIT 1`,
+          [row.contractor_id, row.billing_driver_id, row.bill_month]
+        );
+        if (existing.rows.length === 0) {
+          const d = new Date(row.bill_month);
+          const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+          const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+          await client.query(
+            `INSERT INTO monthly_invoices (invoice_number, contractor_id, driver_id, period_month, period_label, status)
+             VALUES ($1, $2, $3, $4, $5, 'open')`,
+            [invoiceNumber, row.contractor_id, row.billing_driver_id, row.bill_month, label]
+          );
+        }
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+  }
+
   app.get("/api/invoices", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      await ensureMonthlyInvoices(auth.userId).catch((e) =>
+        console.error("ensureMonthlyInvoices error:", e.message)
+      );
       const status = req.query.status as string | undefined;
       const includeHidden = req.query.include_hidden === '1' || req.query.include_hidden === 'true';
       let query = `
