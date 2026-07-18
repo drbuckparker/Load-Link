@@ -54,7 +54,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
               tertiary_location_lat, tertiary_location_lng,
               last_known_lat, last_known_lng
        FROM users
-       WHERE role ILIKE '%driver%'
+       WHERE (role ILIKE '%driver%' OR also_driver = true)
          AND expo_push_token IS NOT NULL
          AND id::text <> $1`,
       [String(job.contractor_id)]
@@ -150,6 +150,89 @@ function loadJsonMap<T>(filename: string): Map<string, T> {
     return new Map(entries);
   } catch { return new Map(); }
 }
+
+// ---- New-job watcher -------------------------------------------------------
+// Jobs posted on the WEBSITE are written straight into the shared DB and never
+// pass through this server's POST /api/jobs, so drivers got no push for them.
+// Poll for newly created open jobs and alert nearby drivers, deduping across
+// restarts via .data/notified_jobs.json. POST /api/jobs also records its job id
+// here so companion-posted jobs aren't double-notified by the watcher.
+const NOTIFIED_JOBS_FILE = "notified_jobs.json";
+const _jobWatcherState: { watermark: string | null; ids: string[] } = (() => {
+  try {
+    const parsed = JSON.parse(readFileSync(join(DATA_DIR, NOTIFIED_JOBS_FILE), "utf-8"));
+    // Back-compat: older format was a bare array of ids.
+    if (Array.isArray(parsed)) return { watermark: null, ids: parsed };
+    return { watermark: parsed.watermark ?? null, ids: parsed.ids ?? [] };
+  } catch { return { watermark: null, ids: [] }; }
+})();
+const notifiedJobIds = new Set<string>(_jobWatcherState.ids);
+let jobWatcherWatermark: string | null = _jobWatcherState.watermark;
+function saveJobWatcherState() {
+  // Bound the dedupe set in memory and on disk — only recent ids matter.
+  if (notifiedJobIds.size > 500) {
+    const ids = [...notifiedJobIds];
+    notifiedJobIds.clear();
+    for (const id of ids.slice(ids.length - 500)) notifiedJobIds.add(id);
+  }
+  try {
+    writeFileSync(
+      join(DATA_DIR, NOTIFIED_JOBS_FILE),
+      JSON.stringify({ watermark: jobWatcherWatermark, ids: [...notifiedJobIds] }),
+      "utf-8"
+    );
+  } catch {}
+}
+function markJobNotified(id: string) {
+  notifiedJobIds.add(id);
+  saveJobWatcherState();
+}
+// How far back to look for missed jobs after downtime; older jobs are stale
+// enough that a late push would be noise rather than help.
+const JOB_WATCHER_MAX_CATCHUP_HOURS = 12;
+async function pollForNewWebsiteJobs(seedOnly = false) {
+  try {
+    const since = jobWatcherWatermark
+      ? `GREATEST($1::timestamptz, NOW() - INTERVAL '${JOB_WATCHER_MAX_CATCHUP_HOURS} hours')`
+      : `NOW() - INTERVAL '15 minutes'`;
+    const params = jobWatcherWatermark ? [jobWatcherWatermark] : [];
+    const recent = await pool.query(
+      `SELECT id, contractor_id, material, origin_lat, origin_lng, origin_address, created_at
+       FROM jobs
+       WHERE created_at > ${since}
+         AND status = 'open'
+         AND archived_at IS NULL
+         AND id NOT LIKE 'demo-%'
+       ORDER BY created_at ASC`,
+      params
+    );
+    for (const job of recent.rows) {
+      const id = String(job.id);
+      const created = new Date(job.created_at).toISOString();
+      if (!jobWatcherWatermark || created > jobWatcherWatermark) jobWatcherWatermark = created;
+      if (notifiedJobIds.has(id) || hiddenJobIds.has(id)) continue;
+      notifiedJobIds.add(id);
+      if (!seedOnly) {
+        console.log(`[JobWatcher] New job ${id} detected — notifying nearby drivers`);
+        notifyNearbyDriversOfNewJob(job).catch(() => {});
+      }
+    }
+    saveJobWatcherState();
+  } catch (e: any) {
+    console.error("[JobWatcher] poll error:", e.message);
+  }
+}
+function startNewJobWatcher() {
+  // First-ever run (no watermark on disk): seed silently so a fresh deploy
+  // doesn't blast alerts for jobs that predate it. With a persisted watermark,
+  // the first pass alerts normally, so jobs posted during a restart or short
+  // downtime are caught up instead of dropped.
+  const firstEverRun = jobWatcherWatermark === null;
+  pollForNewWebsiteJobs(firstEverRun).finally(() => {
+    setInterval(() => pollForNewWebsiteJobs(false), 60000);
+  });
+}
+// ----------------------------------------------------------------------------
 
 function saveJsonMap<T>(filename: string, map: Map<string, T>) {
   try {
@@ -1190,6 +1273,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       pushToWebsite("/api/jobs", auth, { method: "POST", body: pushBody }).catch(() => {});
 
       // Truck-horn alert to drivers whose area covers this job's pickup location.
+      // Record the id so the new-job watcher doesn't send a duplicate alert.
+      markJobNotified(String(job.id || id));
       notifyNearbyDriversOfNewJob(job).catch(() => {});
 
       return res.status(201).json(addDualKeys(job));
@@ -5264,6 +5349,8 @@ function initMap(){
       return res.status(500).json({ message: "Server error" });
     }
   });
+
+  startNewJobWatcher();
 
   startPeriodicSync(() => {
     const latestPerUser = new Map<string, { jwt: string; userId: string; user: any }>();
