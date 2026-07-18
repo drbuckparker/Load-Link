@@ -224,7 +224,7 @@ export default function InvoiceDetailScreen() {
                     }}
                   >
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={styles.jobMaterial} numberOfLines={1}>{job.material}</Text>
+                      <Text style={styles.jobMaterial} numberOfLines={1}>{job.project_name || job.projectName || job.material}</Text>
                       <View style={[styles.jobStatusBadge, { backgroundColor: jobStatus.bg }]}>
                         <Text style={[styles.jobStatusText, { color: jobStatus.color }]}>{jobStatus.label}</Text>
                       </View>

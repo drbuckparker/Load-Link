@@ -4390,7 +4390,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // filter, an old open invoice would keep sweeping in every newer
       // un-invoiced job and its period label would be wrong.
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.* FROM jobs j
+        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+         LEFT JOIN contractor_projects cp ON cp.id = j.project_id
          LEFT JOIN job_runs jr ON jr.job_id = j.id
          WHERE j.invoice_id = $1
             OR (j.contractor_id = $2
@@ -4402,7 +4403,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
     } else {
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.* FROM jobs j WHERE j.invoice_id = $1`,
+        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+         LEFT JOIN contractor_projects cp ON cp.id = j.project_id
+         WHERE j.invoice_id = $1`,
         [invoice.id]
       );
     }
