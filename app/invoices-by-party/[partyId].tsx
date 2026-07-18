@@ -52,8 +52,16 @@ export default function InvoicesByPartyScreen() {
   const allInvoices: any[] = useMemo(() => {
     if (!invoicesData) return [];
     const items = invoicesData.invoices || invoicesData;
-    return Array.isArray(items) ? items : [];
-  }, [invoicesData]);
+    if (!Array.isArray(items)) return [];
+    // Compound accounts receive invoices for both sides from the server;
+    // each view only shows its own side (contractor view = billed TO me,
+    // driver view = invoices I'm billing out).
+    const myId = String(user?.id ?? '');
+    if (!myId) return items;
+    return items.filter((inv: any) =>
+      viewerIsContractor ? String(inv.contractor_id) === myId : String(inv.driver_id) === myId
+    );
+  }, [invoicesData, user?.id, viewerIsContractor]);
 
   const invoices = useMemo(() => {
     return allInvoices.filter(inv => {

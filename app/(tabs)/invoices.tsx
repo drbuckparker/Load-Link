@@ -67,8 +67,17 @@ export default function InvoicesScreen() {
     if (!invoicesData) return [];
     const items = invoicesData.invoices || invoicesData;
     if (!Array.isArray(items)) return [];
-    return items as RawInvoice[];
-  }, [invoicesData]);
+    // A compound account (e.g. driver + trucking company + contractor) gets
+    // invoices for BOTH sides from the server. Each view only shows its own
+    // side: contractor view = invoices billed TO me; driver view = invoices
+    // I'm billing out. Otherwise contractor mode would expose everything the
+    // trucking-company side is invoicing to other contractors.
+    const myId = String(user?.id ?? '');
+    if (!myId) return items as RawInvoice[];
+    return (items as RawInvoice[]).filter(inv =>
+      viewerIsContractor ? String(inv.contractor_id) === myId : String(inv.driver_id) === myId
+    );
+  }, [invoicesData, user?.id, viewerIsContractor]);
 
   const groups: PartyGroup[] = useMemo(() => {
     const map = new Map<string, PartyGroup>();
