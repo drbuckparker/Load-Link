@@ -3063,6 +3063,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // --- Driver / foreman invitations ---
+  // The website has no delete endpoint for invitations and they live only in
+  // the website's own DB, so "removing" one is a per-user hide list persisted
+  // to .data/hidden_invitations.json. The invite email/link stays valid.
+  const HIDDEN_INVITES_FILE = "hidden_invitations.json";
+  const hiddenInvitesByUser: Record<string, string[]> = (() => {
+    try {
+      const parsed = JSON.parse(readFileSync(join(DATA_DIR, HIDDEN_INVITES_FILE), "utf-8"));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch { return {}; }
+  })();
+  function hideInvitationForUser(userId: string, inviteId: string) {
+    const list = hiddenInvitesByUser[userId] || (hiddenInvitesByUser[userId] = []);
+    if (!list.includes(inviteId)) list.push(inviteId);
+    // Keep the per-user list bounded; only recent hides matter.
+    if (list.length > 500) hiddenInvitesByUser[userId] = list.slice(list.length - 500);
+    try {
+      writeFileSync(join(DATA_DIR, HIDDEN_INVITES_FILE), JSON.stringify(hiddenInvitesByUser), "utf-8");
+    } catch {}
+  }
+
   // Invite a driver or foreman by email to create a LoadLink profile.
   // CREATE forwards to the website's /api/invitations so it can send the
   // accept-link email (an email side-effect the companion cannot replicate)
@@ -3154,9 +3174,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // The website list can contain duplicate rows for the same
             // invitation id; dedupe so the app doesn't render duplicates.
             const seen = new Set<string>();
+            const hidden = new Set(hiddenInvitesByUser[String(auth.userId)] || []);
             const unique = list.filter((inv: any) => {
               const id = String(inv?.id ?? "");
-              if (!id || seen.has(id)) return false;
+              if (!id || seen.has(id) || hidden.has(id)) return false;
               seen.add(id);
               return true;
             });
@@ -3177,10 +3198,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
          ORDER BY created_at DESC LIMIT 100`,
         [auth.userId]
       );
-      return res.json(result.rows.map(addDualKeys));
+      const hiddenLocal = new Set(hiddenInvitesByUser[String(auth.userId)] || []);
+      return res.json(result.rows.filter((r: any) => !hiddenLocal.has(String(r.id))).map(addDualKeys));
     } catch (e: any) {
       console.error("Invitation list error:", e.message);
       return res.json([]);
+    }
+  });
+
+  // Remove an invitation from the sender's list. The website has no delete
+  // endpoint, so this only hides it for the requesting user (per-user hide
+  // list) — the emailed invite link itself remains valid.
+  app.delete("/api/driver-invitations/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const inviteId = String(req.params.id || "").trim();
+      if (!inviteId) return res.status(400).json({ message: "Missing invitation id." });
+      hideInvitationForUser(String(auth.userId), inviteId);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Invitation remove error:", e.message);
+      return res.status(500).json({ message: "Could not remove the invitation. Please try again." });
     }
   });
 

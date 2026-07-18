@@ -97,6 +97,33 @@ export default function InviteScreen() {
     },
   });
 
+  const removeMutation = useMutation({
+    mutationFn: async (inviteId: string) => {
+      return apiRequest('DELETE', `/api/driver-invitations/${inviteId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/driver-invitations'] });
+    },
+    onError: (e: any) => {
+      const msg = e?.message || 'Could not remove the invitation. Please try again.';
+      if (Platform.OS === 'web') window.alert(msg);
+      else Alert.alert('Remove Failed', msg);
+    },
+  });
+
+  function confirmRemove(inv: Invitation) {
+    const who = inv.driver_name || [inv.driver_first_name, inv.driver_last_name].filter(Boolean).join(' ').trim() || inv.driver_email || 'this invitation';
+    const body = `Remove the invitation to ${who} from your list? If they already got the email, their invite link will still work.`;
+    if (Platform.OS === 'web') {
+      if (window.confirm(body)) removeMutation.mutate(String(inv.id));
+    } else {
+      Alert.alert('Remove Invitation', body, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => removeMutation.mutate(String(inv.id)) },
+      ]);
+    }
+  }
+
   function handleSend() {
     setError('');
     const email = form.email.trim();
@@ -262,6 +289,15 @@ export default function InviteScreen() {
                     {(inv.status || 'pending').toUpperCase()}
                   </Text>
                 </View>
+                <Pressable
+                  onPress={() => confirmRemove(inv)}
+                  hitSlop={8}
+                  style={styles.removeBtn}
+                  disabled={removeMutation.isPending}
+                  testID={`remove-invite-${inv.id}`}
+                >
+                  <Ionicons name="trash-outline" size={16} color={Colors.textMuted} />
+                </Pressable>
               </View>
             );
           })
@@ -419,6 +455,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textMuted,
     marginTop: 2,
+  },
+  removeBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: 'rgba(107,112,128,0.12)',
   },
   statusBadge: {
     paddingHorizontal: 10,
