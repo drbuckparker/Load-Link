@@ -30,3 +30,11 @@ measured against primary/secondary/tertiary saved locations + last_known.
 **How to test delivery:** send directly to `users.expo_push_token` via
 `https://exp.host/--/api/v2/push/send` and read the per-message receipt
 status — "ok" vs "error" tells you if credentials/token are valid.
+
+## iOS "push arrives but is silent" rule (July 2026)
+
+**Rule:** every Expo push message must carry an explicit iOS `sound` — an omitted/empty sound field makes APNs deliver quietly (Notification Center only, no chime/banner sound). Server-side payloads are centralized in a builder that falls back to `'default'` and always sets an `interruptionLevel` (`timeSensitive` for new-job horn, `active` otherwise; APNs downgrades timeSensitive when the entitlement is absent, so it's always safe). Validation: `npx tsx scripts/test-push-payload.ts`.
+
+**Also:** iOS PROVISIONAL (quiet) authorization produces the exact same symptom — the client permission request must pass explicit `ios: { allowAlert, allowSound, allowBadge }` and re-request when the existing iOS status is provisional.
+
+**Custom-sound caveat:** `truckhorn.wav` only plays on iOS binaries built AFTER the expo-notifications plugin `sounds` entry existed; on older installed builds an unknown sound name = silent. End-to-end horn verification requires a fresh native build (Expo Launch).

@@ -1227,7 +1227,11 @@ export default function JobDetailScreen() {
       if (!N) return;
       const { status } = await N.getPermissionsAsync();
       if (status !== 'granted') {
-        const { status: newStatus } = await N.requestPermissionsAsync();
+        // Explicit iOS options so the permission includes sound + alert (not
+        // provisional/quiet delivery, which would make notifications silent).
+        const { status: newStatus } = await N.requestPermissionsAsync({
+          ios: { allowAlert: true, allowSound: true, allowBadge: true },
+        });
         if (newStatus !== 'granted') return;
       }
       await N.cancelScheduledNotificationAsync(CLOCK_OUT_REMINDER_ID).catch(() => {});

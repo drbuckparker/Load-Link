@@ -61,11 +61,20 @@ export async function registerForPushNotifications(): Promise<string | null> {
     const N = await getNotifications();
     if (!N) return null;
 
-    const { status: existingStatus } = await N.getPermissionsAsync();
-    let finalStatus = existingStatus;
+    const existing = await N.getPermissionsAsync();
+    let finalStatus = existing.status;
 
-    if (existingStatus !== 'granted') {
-      const { status } = await N.requestPermissionsAsync();
+    // Re-request when not granted OR when iOS granted only "provisional"
+    // (quiet) delivery — provisional notifications go straight to Notification
+    // Center with NO sound or banner, which looks like "push arrives silently".
+    // Passing explicit iOS options guarantees we ask for alert + sound + badge.
+    const iosProvisional =
+      Platform.OS === 'ios' &&
+      existing.ios?.status === N.IosAuthorizationStatus.PROVISIONAL;
+    if (existing.status !== 'granted' || iosProvisional) {
+      const { status } = await N.requestPermissionsAsync({
+        ios: { allowAlert: true, allowSound: true, allowBadge: true },
+      });
       finalStatus = status;
     }
 

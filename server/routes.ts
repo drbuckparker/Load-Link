@@ -7,6 +7,7 @@ import bcrypt from "bcrypt";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
+import { buildExpoPushMessage } from "./push-payload";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -19,9 +20,10 @@ async function sendPushNotification(userId: string, title: string, body: string,
     const result = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
     const token = result.rows[0]?.expo_push_token;
     if (!token) return;
-    // channelId/priority are Android-only (ignored by iOS): 'default' channel
-    // shows a heads-up banner + vibration with the standard sound.
-    const message = { to: token, sound, title, body, data: data || {}, channelId: 'default', priority: 'high' };
+    // buildExpoPushMessage guarantees an explicit iOS sound (omitting it makes
+    // APNs deliver silently) and an interruptionLevel; channelId/priority
+    // cover Android via the client-created 'default' channel.
+    const message = buildExpoPushMessage({ to: token, title, body, data, sound });
     const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -94,17 +96,21 @@ async function notifyNearbyDriversOfNewJob(job: any) {
       }
       const radius = Number(d.radius) || 50;
       if (nearest <= radius) {
-        messages.push({
+        // iOS plays the bundled truckhorn.wav (shipped via the expo-notifications
+        // plugin's "sounds" list — builds made before that plugin was added fall
+        // back to SILENT for unknown sound names, so a new native build is
+        // required for the horn). Android uses the MAX-importance 'job-alerts'
+        // channel (heads-up + vibrate + horn). timeSensitive so job alerts can
+        // break through Focus when entitled; downgraded to 'active' otherwise.
+        messages.push(buildExpoPushMessage({
           to: d.expo_push_token,
-          sound: 'truckhorn.wav',
           title,
           body,
           data: { type: 'new_job', jobId: String(job.id) },
-          // Android: MAX-importance channel (heads-up banner + vibrate on silent
-          // + truck horn). Ignored by iOS. priority 'high' for immediate delivery.
+          sound: 'truckhorn.wav',
           channelId: 'job-alerts',
-          priority: 'high',
-        });
+          interruptionLevel: 'timeSensitive',
+        }));
         rowValues.push(d.id);
       }
     }
