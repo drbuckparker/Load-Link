@@ -6,3 +6,9 @@ id = "mOB2q710rXl1PvErGjEfn"
 uri = "file://assets/sounds/truckhorn.mp3"
 type = "audio"
 title = "truck_horn"
+
+[[outputs]]
+id = "0FRYrROOmy-vPkkC81kgR"
+uri = "file://attached_assets/generated_audio/sound_effect_cash_register_cha_ching.mp3"
+type = "audio"
+title = "cash register cha-ching"

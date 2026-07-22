@@ -7,7 +7,7 @@ import bcrypt from "bcrypt";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
-import { buildExpoPushMessage } from "./push-payload";
+import { buildExpoPushMessage, buildNewJobNearbyPush, buildJobAwardedPush } from "./push-payload";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -32,6 +32,38 @@ async function sendPushNotification(userId: string, title: string, body: string,
     if (!pushRes.ok) console.error('Push notification failed:', pushRes.status);
   } catch (e: any) {
     console.error('Push notification error:', e.message);
+  }
+}
+
+// Tell a driver they got the job (assignment approved / auto-approved): push
+// with the cash-register sound (dedicated 'job-awarded' Android channel —
+// channel sounds are immutable, so the horn channel can't be reused) PLUS an
+// in-app notification row for the bell/inbox. Fire-and-forget.
+async function notifyDriverJobAwarded(driverId: string, jobId: string, jobMaterial?: string | null) {
+  try {
+    const title = 'You Got the Job!';
+    const body = `Your application${jobMaterial ? ` for the ${jobMaterial} job` : ''} was approved. Check the schedule for details.`;
+    try {
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+         VALUES ($1, $2, 'new_load', $3, $4, $5, false, NOW())`,
+        [crypto.randomUUID(), driverId, title, body, jobId]
+      );
+    } catch (e: any) {
+      console.error('Job-awarded notification insert error:', e.message);
+    }
+    const tokenRow = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [driverId]);
+    const token = tokenRow.rows[0]?.expo_push_token;
+    if (!token) return;
+    const message = buildJobAwardedPush({ to: token, title, body, jobId });
+    const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    });
+    if (!pushRes.ok) console.error('Job-awarded push failed:', pushRes.status);
+  } catch (e: any) {
+    console.error('Job-awarded push error:', e.message);
   }
 }
 
@@ -102,14 +134,11 @@ async function notifyNearbyDriversOfNewJob(job: any) {
         // required for the horn). Android uses the MAX-importance 'job-alerts'
         // channel (heads-up + vibrate + horn). timeSensitive so job alerts can
         // break through Focus when entitled; downgraded to 'active' otherwise.
-        messages.push(buildExpoPushMessage({
+        messages.push(buildNewJobNearbyPush({
           to: d.expo_push_token,
           title,
           body,
-          data: { type: 'new_job', jobId: String(job.id) },
-          sound: 'truckhorn.wav',
-          channelId: 'job-alerts',
-          interruptionLevel: 'timeSensitive',
+          jobId: String(job.id),
         }));
         rowValues.push(d.id);
       }
@@ -1533,7 +1562,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let autoApproved = false;
       if (isAutoApprove) {
-        await pool.query(
+        const autoApproveUpdate = await pool.query(
           `UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE job_id = $1 AND driver_id = $2 AND status::text = 'pending'`,
           [req.params.id, auth.userId]
         );
@@ -1543,6 +1572,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // company can keep DIFFERENT trucks pending on overlapping jobs.
         await withdrawConflictingPendingApplications(String(req.params.id), Array.isArray(vehicleIds) ? vehicleIds : [], callerIsFleet ? [] : [auth.userId], auth);
         autoApproved = true;
+        // Auto-approval also means the driver got the job — same cash-register
+        // alert + in-app row as a contractor approval. Only when the UPDATE
+        // actually flipped pending → approved (idempotent on retries).
+        if ((autoApproveUpdate.rowCount || 0) > 0) {
+          const jobRowForAward = await pool.query(`SELECT material FROM jobs WHERE id = $1`, [req.params.id]);
+          notifyDriverJobAwarded(String(auth.userId), String(req.params.id), jobRowForAward.rows[0]?.material).catch(() => {});
+        }
       }
 
       pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {});
@@ -1860,12 +1896,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(409).json({ message: driverConflictMessage(driverConflicts, false), conflicts: driverConflicts });
         }
       }
-      await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
+      // Only rows actually transitioning to 'approved' count — a repeated
+      // approve call (retry/double-tap) matches 0 rows, so the awarded
+      // notification below can't be duplicated.
+      const approveUpdate = await pool.query(
+        `UPDATE job_assignments SET status = 'approved', approved_at = NOW()
+         WHERE id = $1 AND job_id = $2 AND status::text <> 'approved'`,
+        [req.params.assignmentId, req.params.id]
+      );
       await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       // Pull this truck/driver's other overlapping PENDING applications so a second
       // contractor never opens an application that can only 409 ("already booked").
       await withdrawConflictingPendingApplications(String(req.params.id), [approveVid], approvedIsFleet ? [] : [approveDid], auth);
       pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {});
+      // Cash-register alert: the driver was awarded the job. Only fires when
+      // the UPDATE above actually transitioned the row (idempotent on retries).
+      if (approveDid && (approveUpdate.rowCount || 0) > 0) {
+        const jobRow = await pool.query(`SELECT material FROM jobs WHERE id = $1`, [req.params.id]);
+        notifyDriverJobAwarded(String(approveDid), String(req.params.id), jobRow.rows[0]?.material).catch(() => {});
+      }
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Approve assignment error:", e.message);

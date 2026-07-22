@@ -12,7 +12,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { StatusBar } from "expo-status-bar";
 import { useFonts, ChakraPetch_600SemiBold, ChakraPetch_700Bold } from "@expo-google-fonts/chakra-petch";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
-import { playNotificationSound, playTruckHornSound } from "@/lib/sounds";
+import { playNotificationSound, playTruckHornSound, playCashRegisterSound } from "@/lib/sounds";
 import { resumeClockOutMonitor } from "@/lib/clockout-monitor";
 
 if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -124,6 +124,9 @@ export default function RootLayout() {
           if (data?.type === 'new_job') {
             // Truck horn alerts drivers to a new job in their area.
             playTruckHornSound();
+          } else if (data?.type === 'job_awarded') {
+            // Cash register: the driver was awarded/approved for a job.
+            playCashRegisterSound();
           } else {
             playNotificationSound();
           }

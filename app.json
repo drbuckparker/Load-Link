@@ -62,7 +62,10 @@
       [
         "expo-notifications",
         {
-          "sounds": ["./assets/sounds/truckhorn.wav"]
+          "sounds": [
+            "./assets/sounds/truckhorn.wav",
+            "./assets/sounds/cashregister.wav"
+          ]
         }
       ]
     ],

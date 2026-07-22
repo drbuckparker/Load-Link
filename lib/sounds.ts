@@ -63,6 +63,36 @@ export async function playTruckHornSound() {
   }
 }
 
+export async function playCashRegisterSound() {
+  try {
+    if (Platform.OS === 'web') return;
+
+    await Audio.setAudioModeAsync({
+      playsInSilentModeIOS: false,
+      shouldDuckAndroid: true,
+    });
+
+    if (soundObject) {
+      await soundObject.unloadAsync();
+      soundObject = null;
+    }
+
+    const { sound } = await Audio.Sound.createAsync(
+      require('@/assets/sounds/cashregister.wav'),
+      { shouldPlay: true, volume: 1.0 }
+    );
+    soundObject = sound;
+
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.isLoaded && status.didJustFinish) {
+        sound.unloadAsync();
+        soundObject = null;
+      }
+    });
+  } catch (e) {
+  }
+}
+
 export async function playMessageSound() {
   try {
     if (Platform.OS === 'web') return;

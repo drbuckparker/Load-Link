@@ -1,7 +1,14 @@
 // Focused validation for push payloads: every Expo push message must carry an
 // explicit iOS sound (omitting it = silent delivery) plus an interruption
 // level, channelId, and high priority. Run with: npx tsx scripts/test-push-payload.ts
-import { buildExpoPushMessage } from "../server/push-payload";
+import {
+  buildExpoPushMessage,
+  buildNewJobNearbyPush,
+  buildJobAwardedPush,
+  PUSH_SOUNDS,
+  PUSH_CHANNELS,
+} from "../server/push-payload";
+import { readFileSync, existsSync } from "fs";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -31,6 +38,30 @@ check("timeSensitive preserved", m2.interruptionLevel === "timeSensitive");
 check("empty sound falls back to 'default'", buildExpoPushMessage({ to: "t", title: "T", body: "B", sound: "" }).sound === "default");
 check("whitespace sound falls back to 'default'", buildExpoPushMessage({ to: "t", title: "T", body: "B", sound: "  " }).sound === "default");
 check("undefined sound falls back to 'default'", buildExpoPushMessage({ to: "t", title: "T", body: "B", sound: undefined }).sound === "default");
+
+// 4. Business event: new job within a driver's radius → truck horn.
+const nj = buildNewJobNearbyPush({ to: "t", title: "New Job", body: "B", jobId: "j1" });
+check("new-job event plays truckhorn.wav", nj.sound === "truckhorn.wav" && nj.sound === PUSH_SOUNDS.NEW_JOB);
+check("new-job event uses 'job-alerts' Android channel", nj.channelId === "job-alerts" && nj.channelId === PUSH_CHANNELS.NEW_JOB);
+check("new-job event is timeSensitive", nj.interruptionLevel === "timeSensitive");
+check("new-job event data.type is 'new_job' (foreground horn trigger)", nj.data.type === "new_job" && nj.data.jobId === "j1");
+
+// 5. Business event: driver awarded/approved a job → cash register.
+const aw = buildJobAwardedPush({ to: "t", title: "You Got the Job!", body: "B", jobId: "j2" });
+check("awarded event plays cashregister.wav", aw.sound === "cashregister.wav" && aw.sound === PUSH_SOUNDS.JOB_AWARDED);
+check("awarded event uses dedicated 'job-awarded' Android channel (channel sounds are immutable)", aw.channelId === "job-awarded" && aw.channelId === PUSH_CHANNELS.JOB_AWARDED);
+check("awarded event is timeSensitive", aw.interruptionLevel === "timeSensitive");
+check("awarded event data.type is 'job_awarded' (foreground cash-register trigger)", aw.data.type === "job_awarded" && aw.data.jobId === "j2");
+check("awarded and new-job sounds/channels are distinct", aw.sound !== nj.sound && aw.channelId !== nj.channelId);
+
+// 6. Bundled asset + app.json plugin config must include both custom sounds
+//    (an unknown sound name = silent on iOS).
+const appJson = JSON.parse(readFileSync("app.json", "utf8"));
+const pluginSounds: string[] = (appJson.expo.plugins.find((p: any) => Array.isArray(p) && p[0] === "expo-notifications")?.[1]?.sounds) || [];
+for (const s of [PUSH_SOUNDS.NEW_JOB, PUSH_SOUNDS.JOB_AWARDED]) {
+  check(`${s} exists in assets/sounds/`, existsSync(`assets/sounds/${s}`));
+  check(`${s} listed in app.json expo-notifications sounds`, pluginSounds.some((p) => p.endsWith(`/${s}`)));
+}
 
 if (failures) { console.error(`\n${failures} check(s) failed`); process.exit(1); }
 console.log("\nAll push payload checks passed");

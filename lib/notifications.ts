@@ -35,6 +35,17 @@ async function getNotifications() {
         sound: 'truckhorn.wav',
         lightColor: '#FF9900',
       });
+      // 'job-awarded': the driver won/was approved for a job — plays the cash
+      // register. Dedicated channel because Android channel sounds are
+      // immutable after creation; reusing 'job-alerts' would force the horn.
+      await Notifications.setNotificationChannelAsync('job-awarded', {
+        name: 'Job Awarded',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 400, 200, 400],
+        enableVibrate: true,
+        sound: 'cashregister.wav',
+        lightColor: '#FF9900',
+      });
       // 'default': everything else — still shows a banner and vibrates, but with
       // the standard notification sound.
       await Notifications.setNotificationChannelAsync('default', {
