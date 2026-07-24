@@ -67,6 +67,18 @@ if (Platform.OS !== 'web') {
   getNotifications();
 }
 
+// Keep the red app-icon badge in sync with the user's unread notification
+// count. Pushes set it via their `badge` field while the app is closed; the
+// app calls this whenever it knows the current unread count (list loaded,
+// mark-all-read) so the icon never shows a stale number. No-op on web.
+export async function setAppBadgeCount(count: number): Promise<void> {
+  try {
+    const N = await getNotifications();
+    if (!N) return;
+    await N.setBadgeCountAsync(Math.max(0, Math.floor(count)));
+  } catch {}
+}
+
 export async function registerForPushNotifications(): Promise<string | null> {
   try {
     const N = await getNotifications();

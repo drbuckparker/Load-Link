@@ -14,6 +14,8 @@ export type ExpoPushMessage = {
   channelId: string;
   priority: 'default' | 'normal' | 'high';
   interruptionLevel: 'passive' | 'active' | 'timeSensitive' | 'critical';
+  /** iOS app-icon badge number (red count on the icon). Omitted = leave as-is. */
+  badge?: number;
 };
 
 export function buildExpoPushMessage(opts: {
@@ -28,9 +30,11 @@ export function buildExpoPushMessage(opts: {
    *  sound/vibration/importance. */
   channelId?: string;
   interruptionLevel?: ExpoPushMessage['interruptionLevel'];
+  /** iOS app-icon badge count. Pass the recipient's total unread count. */
+  badge?: number;
 }): ExpoPushMessage {
   const sound = (opts.sound || '').trim() || 'default';
-  return {
+  const msg: ExpoPushMessage = {
     to: opts.to,
     sound,
     title: opts.title,
@@ -44,6 +48,10 @@ export function buildExpoPushMessage(opts: {
     // the entitlement is absent, so it is always safe to request.
     interruptionLevel: opts.interruptionLevel || 'active',
   };
+  if (typeof opts.badge === 'number' && Number.isFinite(opts.badge) && opts.badge >= 0) {
+    msg.badge = Math.floor(opts.badge);
+  }
+  return msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +78,7 @@ export const PUSH_CHANNELS = {
 
 /** Push for a new job posted within a driver's configured location/radius. */
 export function buildNewJobNearbyPush(opts: {
-  to: string; title: string; body: string; jobId: string;
+  to: string; title: string; body: string; jobId: string; badge?: number;
 }): ExpoPushMessage {
   return buildExpoPushMessage({
     to: opts.to,
@@ -80,12 +88,13 @@ export function buildNewJobNearbyPush(opts: {
     sound: PUSH_SOUNDS.NEW_JOB,
     channelId: PUSH_CHANNELS.NEW_JOB,
     interruptionLevel: 'timeSensitive',
+    badge: opts.badge,
   });
 }
 
 /** Push for a driver being awarded a job (assignment approved / auto-approved). */
 export function buildJobAwardedPush(opts: {
-  to: string; title: string; body: string; jobId: string;
+  to: string; title: string; body: string; jobId: string; badge?: number;
 }): ExpoPushMessage {
   return buildExpoPushMessage({
     to: opts.to,
@@ -95,5 +104,6 @@ export function buildJobAwardedPush(opts: {
     sound: PUSH_SOUNDS.JOB_AWARDED,
     channelId: PUSH_CHANNELS.JOB_AWARDED,
     interruptionLevel: 'timeSensitive',
+    badge: opts.badge,
   });
 }

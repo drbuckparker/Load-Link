@@ -55,13 +55,28 @@ async function notifyDriverJobAwarded(driverId: string, jobId: string, jobMateri
     const tokenRow = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [driverId]);
     const token = tokenRow.rows[0]?.expo_push_token;
     if (!token) return;
-    const message = buildJobAwardedPush({ to: token, title, body, jobId });
+    // iOS app-icon badge = the driver's unread count (including this alert).
+    let badge: number | undefined;
+    try {
+      const c = await pool.query(
+        `SELECT COUNT(*)::int AS unread FROM notifications WHERE user_id::text = $1 AND is_read = false`,
+        [driverId]
+      );
+      badge = Number(c.rows[0]?.unread) || undefined;
+    } catch {}
+    const message = buildJobAwardedPush({ to: token, title, body, jobId, badge });
     const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(message),
     });
-    if (!pushRes.ok) console.error('Job-awarded push failed:', pushRes.status);
+    if (!pushRes.ok) {
+      console.error('Job-awarded push failed:', pushRes.status);
+    } else {
+      const tickets = await pushRes.json().catch(() => null);
+      const t = Array.isArray(tickets?.data) ? tickets.data[0] : tickets?.data;
+      if (t?.status === 'error') console.error('Job-awarded push ticket error:', JSON.stringify(t));
+    }
   } catch (e: any) {
     console.error('Job-awarded push error:', e.message);
   }
@@ -108,7 +123,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
     const title = 'New Job Alert';
     const body = `A ${material} haul was posted near ${origin}. Tap to apply.`;
 
-    const messages: any[] = [];
+    const recipients: { id: string; token: string | null }[] = [];
     const rowValues: any[] = [];
     for (const d of drivers.rows) {
       const pairs: [any, any][] = [
@@ -135,14 +150,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
         // break through Focus when entitled; downgraded to 'active' otherwise.
         // Bell/inbox row for EVERY nearby user; push only for those who have
         // a registered push token (no token must not block the bell badge).
-        if (d.expo_push_token) {
-          messages.push(buildNewJobNearbyPush({
-            to: d.expo_push_token,
-            title,
-            body,
-            jobId: String(job.id),
-          }));
-        }
+        recipients.push({ id: String(d.id), token: d.expo_push_token || null });
         rowValues.push(d.id);
       }
     }
@@ -167,14 +175,53 @@ async function notifyNearbyDriversOfNewJob(job: any) {
       console.error('New-job driver notification insert error:', e.message);
     }
 
-    // Expo accepts up to 100 messages per request.
+    // Build pushes AFTER the rows are inserted so each recipient's iOS app-icon
+    // badge reflects their true unread count (including this alert).
+    const pushRecipients = recipients.filter((r) => r.token);
+    if (pushRecipients.length === 0) return;
+    const unreadByUser = new Map<string, number>();
+    try {
+      const counts = await pool.query(
+        `SELECT user_id::text AS user_id, COUNT(*)::int AS unread
+         FROM notifications
+         WHERE is_read = false AND user_id::text = ANY($1)
+         GROUP BY user_id`,
+        [pushRecipients.map((r) => r.id)]
+      );
+      for (const row of counts.rows) unreadByUser.set(row.user_id, Number(row.unread));
+    } catch (e: any) {
+      console.error('New-job unread count error:', e.message);
+    }
+
+    const messages = pushRecipients.map((r) =>
+      buildNewJobNearbyPush({
+        to: r.token as string,
+        title,
+        body,
+        jobId: String(job.id),
+        badge: unreadByUser.get(r.id),
+      })
+    );
+
+    // Expo accepts up to 100 messages per request. Log ticket errors — a
+    // swallowed InvalidCredentials/DeviceNotRegistered here means pushes
+    // silently never arrive.
     for (let i = 0; i < messages.length; i += 100) {
       const chunk = messages.slice(i, i + 100);
-      await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(chunk),
-      }).catch(() => {});
+      try {
+        const res = await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(chunk),
+        });
+        const tickets = await res.json().catch(() => null);
+        const errs = (tickets?.data || []).filter((t: any) => t?.status === 'error');
+        if (errs.length > 0) {
+          console.error('New-job push ticket errors:', JSON.stringify(errs.slice(0, 3)));
+        }
+      } catch (e: any) {
+        console.error('New-job push send error:', e.message);
+      }
     }
   } catch (e: any) {
     console.error('notifyNearbyDriversOfNewJob error:', e.message);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { Notification, timeAgo } from '@/lib/mock-data';
 import { apiRequest, queryClient } from '@/lib/query-client';
+import { setAppBadgeCount } from '@/lib/notifications';
 
 function mapNotification(n: any): Notification {
   return {
@@ -56,6 +57,11 @@ export default function NotificationsScreen() {
 
   const notifications = (notifsData || []).map(mapNotification);
   const unreadCount = notifications.filter(n => !n.isRead).length;
+
+  // Keep the red app-icon badge in sync with the real unread count.
+  useEffect(() => {
+    if (notifsData) setAppBadgeCount(unreadCount);
+  }, [notifsData, unreadCount]);
 
   async function markAllRead() {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

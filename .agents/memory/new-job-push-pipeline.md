@@ -46,3 +46,11 @@ Two driver business events map to fixed sound/channel pairs, centralized in the 
 ## Radius-alert audience & bell rows (July 2026)
 
 Nearby new-job alerts go to drivers AND trucking companies (`role ILIKE '%driver%' OR role ILIKE '%trucking_company%' OR also_driver`). The bell/inbox notification row is inserted for EVERY nearby match; the push is sent only to those with a registered expo_push_token — a missing token must never suppress the bell row (that was a silent gap: no-token users got no alert at all).
+
+## iOS delivery blocker: missing APNs credentials (root cause of "no banner")
+
+Expo push tickets returned `InvalidCredentials: Could not find APNs credentials for app.replit.loadlink` — the Expo Launch-managed Expo project has no Apple push key, so EVERY iOS push is dropped before reaching the phone (no banner, no sound, regardless of app build). Not fixable in code; needs push credentials provisioned on the Expo Launch/Replit side. Debug rule: when "push never arrives", send one push directly to the token via exp.host and read the ticket — the send paths now log ticket errors too.
+
+## App-icon badge
+
+Pushes carry `badge` = recipient's unread notifications count (computed AFTER inserting the in-app row); the app re-syncs the icon badge via setBadgeCountAsync whenever it loads the notifications list. Badge is iOS-only via push; requires allowBadge permission (already requested).

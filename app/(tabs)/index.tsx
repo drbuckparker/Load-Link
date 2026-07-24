@@ -12,6 +12,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest, queryClient } from '@/lib/query-client';
 import { timeAgo } from '@/lib/mock-data';
 import { isOpenTabJob } from '@/lib/job-filters';
+import { setAppBadgeCount } from '@/lib/notifications';
 import MapSection from '@/components/MapSection';
 
 function isContractorRole(role: string): boolean {
@@ -91,6 +92,11 @@ export default function DashboardScreen() {
   });
 
   const unreadCount = (notifsData || []).filter((n: any) => !(n.is_read ?? n.isRead)).length;
+
+  // Keep the red app-icon badge in sync with the real unread count.
+  useEffect(() => {
+    if (notifsData) setAppBadgeCount(unreadCount);
+  }, [notifsData, unreadCount]);
 
   const [switchingRole, setSwitchingRole] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
