@@ -88,8 +88,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
               tertiary_location_lat, tertiary_location_lng,
               last_known_lat, last_known_lng
        FROM users
-       WHERE (role ILIKE '%driver%' OR also_driver = true)
-         AND expo_push_token IS NOT NULL
+       WHERE (role ILIKE '%driver%' OR role ILIKE '%trucking_company%' OR also_driver = true)
          AND id::text <> $1`,
       [String(job.contractor_id)]
     );
@@ -134,17 +133,21 @@ async function notifyNearbyDriversOfNewJob(job: any) {
         // required for the horn). Android uses the MAX-importance 'job-alerts'
         // channel (heads-up + vibrate + horn). timeSensitive so job alerts can
         // break through Focus when entitled; downgraded to 'active' otherwise.
-        messages.push(buildNewJobNearbyPush({
-          to: d.expo_push_token,
-          title,
-          body,
-          jobId: String(job.id),
-        }));
+        // Bell/inbox row for EVERY nearby user; push only for those who have
+        // a registered push token (no token must not block the bell badge).
+        if (d.expo_push_token) {
+          messages.push(buildNewJobNearbyPush({
+            to: d.expo_push_token,
+            title,
+            body,
+            jobId: String(job.id),
+          }));
+        }
         rowValues.push(d.id);
       }
     }
 
-    if (messages.length === 0) return;
+    if (rowValues.length === 0) return;
 
     // In-app notification rows for the bell/inbox (reuses 'new_load' — the shared
     // notification_type enum's value for a new job posting).

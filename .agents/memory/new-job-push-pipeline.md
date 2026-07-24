@@ -42,3 +42,7 @@ status — "ok" vs "error" tells you if credentials/token are valid.
 ## Job-awarded cash-register alert (July 2026)
 
 Two driver business events map to fixed sound/channel pairs, centralized in the server push-payload builders (senders must use `buildNewJobNearbyPush` / `buildJobAwardedPush`, never hand-rolled payloads): new-job-nearby → `truckhorn.wav` / Android channel `job-alerts`; job awarded (contractor approve route AND auto-approve on accept) → `cashregister.wav` / dedicated channel `job-awarded`. **Why dedicated channel:** Android channel sounds are immutable after creation. Awarded notifications only fire when the assignment UPDATE actually transitions the row (rowCount guard) so retries can't duplicate them. `cashregister.wav` was AI-generated (no pre-existing asset); like the horn, it's bundled via app.json's expo-notifications `sounds` list and only audible on native builds made after bundling. Foreground playback keys off push `data.type` (`new_job` / `job_awarded`) in the root layout. Validation: `npx tsx scripts/test-push-payload.ts`.
+
+## Radius-alert audience & bell rows (July 2026)
+
+Nearby new-job alerts go to drivers AND trucking companies (`role ILIKE '%driver%' OR role ILIKE '%trucking_company%' OR also_driver`). The bell/inbox notification row is inserted for EVERY nearby match; the push is sent only to those with a registered expo_push_token — a missing token must never suppress the bell row (that was a silent gap: no-token users got no alert at all).
