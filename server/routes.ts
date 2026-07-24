@@ -276,6 +276,25 @@ function markJobNotified(id: string) {
   notifiedJobIds.add(id);
   saveJobWatcherState();
 }
+// Cross-instance dedupe: the watcher runs in EVERY server instance (dev
+// workspace, each deployed instance) against the same shared DB, and the local
+// .data file is per-instance — so file-only dedupe caused N duplicate alerts
+// per job. A DB insert with ON CONFLICT DO NOTHING lets exactly one instance
+// win the claim; everyone else skips.
+async function claimJobNotification(id: string): Promise<boolean> {
+  try {
+    const r = await pool.query(
+      `INSERT INTO companion_notified_jobs (job_id) VALUES ($1) ON CONFLICT (job_id) DO NOTHING RETURNING job_id`,
+      [id]
+    );
+    return r.rowCount === 1;
+  } catch (e: any) {
+    console.error('[JobWatcher] claim error:', e.message);
+    // On DB error, fall back to local dedupe only (better one duplicate than
+    // silently never alerting).
+    return !notifiedJobIds.has(id);
+  }
+}
 // How far back to look for missed jobs after downtime; older jobs are stale
 // enough that a late push would be noise rather than help.
 const JOB_WATCHER_MAX_CATCHUP_HOURS = 12;
@@ -302,6 +321,8 @@ async function pollForNewWebsiteJobs(seedOnly = false) {
       if (notifiedJobIds.has(id) || hiddenJobIds.has(id)) continue;
       notifiedJobIds.add(id);
       if (!seedOnly) {
+        // DB-level claim so only ONE server instance alerts for this job.
+        if (!(await claimJobNotification(id))) continue;
         console.log(`[JobWatcher] New job ${id} detected — notifying nearby drivers`);
         notifyNearbyDriversOfNewJob(job).catch(() => {});
       }
@@ -317,6 +338,9 @@ function startNewJobWatcher() {
   // the first pass alerts normally, so jobs posted during a restart or short
   // downtime are caught up instead of dropped.
   const firstEverRun = jobWatcherWatermark === null;
+  // Keep the shared dedupe table small — claims older than the catch-up
+  // window can never be re-alerted anyway.
+  pool.query(`DELETE FROM companion_notified_jobs WHERE notified_at < NOW() - INTERVAL '7 days'`).catch(() => {});
   pollForNewWebsiteJobs(firstEverRun).finally(() => {
     setInterval(() => pollForNewWebsiteJobs(false), 60000);
   });
@@ -1369,9 +1393,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       pushToWebsite("/api/jobs", auth, { method: "POST", body: pushBody }).catch(() => {});
 
       // Truck-horn alert to drivers whose area covers this job's pickup location.
-      // Record the id so the new-job watcher doesn't send a duplicate alert.
-      markJobNotified(String(job.id || id));
-      notifyNearbyDriversOfNewJob(job).catch(() => {});
+      // Record the id locally AND claim it in the shared DB so no other server
+      // instance's watcher sends a duplicate alert.
+      const notifyId = String(job.id || id);
+      markJobNotified(notifyId);
+      claimJobNotification(notifyId)
+        .then((claimed) => { if (claimed) return notifyNearbyDriversOfNewJob(job); })
+        .catch(() => {});
 
       return res.status(201).json(addDualKeys(job));
     } catch (e: any) {
