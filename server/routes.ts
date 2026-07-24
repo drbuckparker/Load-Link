@@ -7,7 +7,8 @@ import bcrypt from "bcrypt";
 import { pool } from "./db";
 import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJobAssignments, drainSyncQueue, getSyncQueueStatus, backfillUserEntities } from "./sync";
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
-import { buildExpoPushMessage, buildNewJobNearbyPush, buildJobAwardedPush } from "./push-payload";
+import { buildExpoPushMessage, buildNewJobNearbyPush, buildJobAwardedPush, type ExpoPushMessage } from "./push-payload";
+import { apnsConfigured, sendApnsPush } from "./apns";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -15,21 +16,46 @@ const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API
 const DATA_DIR = join(process.cwd(), ".data");
 try { mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 
+// Deliver ONE push. iOS devices that registered a raw APNs device token get
+// the push sent DIRECTLY to Apple (the Expo Launch project has no APNs
+// credentials uploaded, so Expo's push service drops every iOS push with
+// InvalidCredentials). Everyone else (Android, older app builds that only
+// registered an Expo token) goes through Expo as before.
+async function deliverPush(
+  tokens: { expoToken?: string | null; apnsToken?: string | null },
+  msg: ExpoPushMessage,
+  label: string
+): Promise<void> {
+  if (tokens.apnsToken && apnsConfigured()) {
+    const r = await sendApnsPush(tokens.apnsToken, msg);
+    if (r.ok) return;
+    console.error(`${label} APNs send failed (${r.status || ''} ${r.reason || ''}) — falling back to Expo`);
+  }
+  if (!tokens.expoToken) return;
+  try {
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...msg, to: tokens.expoToken }),
+    });
+    const tickets = await res.json().catch(() => null);
+    const t = Array.isArray(tickets?.data) ? tickets.data[0] : tickets?.data;
+    if (t?.status === 'error') console.error(`${label} Expo push ticket error:`, JSON.stringify(t));
+  } catch (e: any) {
+    console.error(`${label} Expo push send error:`, e.message);
+  }
+}
+
 async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>, sound: string = 'default') {
   try {
-    const result = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
-    const token = result.rows[0]?.expo_push_token;
-    if (!token) return;
+    const result = await pool.query(`SELECT expo_push_token, apns_device_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
+    const row = result.rows[0];
+    if (!row || (!row.expo_push_token && !row.apns_device_token)) return;
     // buildExpoPushMessage guarantees an explicit iOS sound (omitting it makes
     // APNs deliver silently) and an interruptionLevel; channelId/priority
     // cover Android via the client-created 'default' channel.
-    const message = buildExpoPushMessage({ to: token, title, body, data, sound });
-    const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message),
-    });
-    if (!pushRes.ok) console.error('Push notification failed:', pushRes.status);
+    const message = buildExpoPushMessage({ to: row.expo_push_token || '', title, body, data, sound });
+    await deliverPush({ expoToken: row.expo_push_token, apnsToken: row.apns_device_token }, message, 'Push');
   } catch (e: any) {
     console.error('Push notification error:', e.message);
   }
@@ -52,9 +78,9 @@ async function notifyDriverJobAwarded(driverId: string, jobId: string, jobMateri
     } catch (e: any) {
       console.error('Job-awarded notification insert error:', e.message);
     }
-    const tokenRow = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [driverId]);
-    const token = tokenRow.rows[0]?.expo_push_token;
-    if (!token) return;
+    const tokenRow = await pool.query(`SELECT expo_push_token, apns_device_token FROM users WHERE id::text = $1 LIMIT 1`, [driverId]);
+    const tokRow = tokenRow.rows[0];
+    if (!tokRow || (!tokRow.expo_push_token && !tokRow.apns_device_token)) return;
     // iOS app-icon badge = the driver's unread count (including this alert).
     let badge: number | undefined;
     try {
@@ -64,19 +90,8 @@ async function notifyDriverJobAwarded(driverId: string, jobId: string, jobMateri
       );
       badge = Number(c.rows[0]?.unread) || undefined;
     } catch {}
-    const message = buildJobAwardedPush({ to: token, title, body, jobId, badge });
-    const pushRes = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message),
-    });
-    if (!pushRes.ok) {
-      console.error('Job-awarded push failed:', pushRes.status);
-    } else {
-      const tickets = await pushRes.json().catch(() => null);
-      const t = Array.isArray(tickets?.data) ? tickets.data[0] : tickets?.data;
-      if (t?.status === 'error') console.error('Job-awarded push ticket error:', JSON.stringify(t));
-    }
+    const message = buildJobAwardedPush({ to: tokRow.expo_push_token || '', title, body, jobId, badge });
+    await deliverPush({ expoToken: tokRow.expo_push_token, apnsToken: tokRow.apns_device_token }, message, 'Job-awarded');
   } catch (e: any) {
     console.error('Job-awarded push error:', e.message);
   }
@@ -96,7 +111,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
     if (!Number.isFinite(jobLat) || !Number.isFinite(jobLng)) return;
 
     const drivers = await pool.query(
-      `SELECT id::text AS id, expo_push_token,
+      `SELECT id::text AS id, expo_push_token, apns_device_token,
               COALESCE(search_radius_miles, 50) AS radius,
               primary_location_lat, primary_location_lng,
               secondary_location_lat, secondary_location_lng,
@@ -123,7 +138,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
     const title = 'New Job Alert';
     const body = `A ${material} haul was posted near ${origin}. Tap to apply.`;
 
-    const recipients: { id: string; token: string | null }[] = [];
+    const recipients: { id: string; token: string | null; apnsToken: string | null }[] = [];
     const rowValues: any[] = [];
     for (const d of drivers.rows) {
       const pairs: [any, any][] = [
@@ -150,7 +165,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
         // break through Focus when entitled; downgraded to 'active' otherwise.
         // Bell/inbox row for EVERY nearby user; push only for those who have
         // a registered push token (no token must not block the bell badge).
-        recipients.push({ id: String(d.id), token: d.expo_push_token || null });
+        recipients.push({ id: String(d.id), token: d.expo_push_token || null, apnsToken: d.apns_device_token || null });
         rowValues.push(d.id);
       }
     }
@@ -177,7 +192,7 @@ async function notifyNearbyDriversOfNewJob(job: any) {
 
     // Build pushes AFTER the rows are inserted so each recipient's iOS app-icon
     // badge reflects their true unread count (including this alert).
-    const pushRecipients = recipients.filter((r) => r.token);
+    const pushRecipients = recipients.filter((r) => r.token || r.apnsToken);
     if (pushRecipients.length === 0) return;
     const unreadByUser = new Map<string, number>();
     try {
@@ -193,35 +208,24 @@ async function notifyNearbyDriversOfNewJob(job: any) {
       console.error('New-job unread count error:', e.message);
     }
 
-    const messages = pushRecipients.map((r) =>
-      buildNewJobNearbyPush({
-        to: r.token as string,
-        title,
-        body,
-        jobId: String(job.id),
-        badge: unreadByUser.get(r.id),
-      })
-    );
-
-    // Expo accepts up to 100 messages per request. Log ticket errors — a
-    // swallowed InvalidCredentials/DeviceNotRegistered here means pushes
-    // silently never arrive.
-    for (let i = 0; i < messages.length; i += 100) {
-      const chunk = messages.slice(i, i + 100);
-      try {
-        const res = await fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(chunk),
-        });
-        const tickets = await res.json().catch(() => null);
-        const errs = (tickets?.data || []).filter((t: any) => t?.status === 'error');
-        if (errs.length > 0) {
-          console.error('New-job push ticket errors:', JSON.stringify(errs.slice(0, 3)));
-        }
-      } catch (e: any) {
-        console.error('New-job push send error:', e.message);
-      }
+    // Send per-recipient via deliverPush: devices with a raw APNs token go
+    // straight to Apple (Expo Launch project lacks APNs credentials on Expo's
+    // side), the rest go through Expo. Small parallel batches keep this fast
+    // without hammering either service.
+    const BATCH = 20;
+    for (let i = 0; i < pushRecipients.length; i += BATCH) {
+      await Promise.all(
+        pushRecipients.slice(i, i + BATCH).map((r) => {
+          const msg = buildNewJobNearbyPush({
+            to: r.token || '',
+            title,
+            body,
+            jobId: String(job.id),
+            badge: unreadByUser.get(r.id),
+          });
+          return deliverPush({ expoToken: r.token, apnsToken: r.apnsToken }, msg, 'New-job');
+        })
+      );
     }
   } catch (e: any) {
     console.error('notifyNearbyDriversOfNewJob error:', e.message);
@@ -1001,10 +1005,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/push/register", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
-      const { token, expoPushToken, expo_push_token } = req.body;
+      const { token, expoPushToken, expo_push_token, deviceToken, device_token } = req.body;
       const pushToken = token || expoPushToken || expo_push_token;
       if (pushToken) {
         await pool.query(`UPDATE users SET expo_push_token = $1 WHERE id = $2`, [pushToken, auth.userId]);
+      }
+      // Raw APNs device token (iOS only) — lets the server push directly to
+      // Apple, bypassing Expo's push service (which lacks APNs credentials
+      // for the Expo Launch project).
+      const apnsToken = deviceToken || device_token;
+      if (apnsToken && typeof apnsToken === 'string' && /^[0-9a-fA-F]{32,200}$/.test(apnsToken)) {
+        await pool.query(`UPDATE users SET apns_device_token = $1 WHERE id = $2`, [apnsToken, auth.userId]);
       }
     } catch {}
     return res.json({ ok: true });

@@ -47,9 +47,15 @@ Two driver business events map to fixed sound/channel pairs, centralized in the 
 
 Nearby new-job alerts go to drivers AND trucking companies (`role ILIKE '%driver%' OR role ILIKE '%trucking_company%' OR also_driver`). The bell/inbox notification row is inserted for EVERY nearby match; the push is sent only to those with a registered expo_push_token — a missing token must never suppress the bell row (that was a silent gap: no-token users got no alert at all).
 
-## iOS delivery blocker: missing APNs credentials (root cause of "no banner")
+## iOS delivery blocker: missing APNs credentials → direct-APNs bypass (July 2026)
 
-Expo push tickets returned `InvalidCredentials: Could not find APNs credentials for app.replit.loadlink` — the Expo Launch-managed Expo project has no Apple push key, so EVERY iOS push is dropped before reaching the phone (no banner, no sound, regardless of app build). Not fixable in code; needs push credentials provisioned on the Expo Launch/Replit side. Debug rule: when "push never arrives", send one push directly to the token via exp.host and read the ticket — the send paths now log ticket errors too.
+Expo push tickets returned `InvalidCredentials: Could not find APNs credentials for app.replit.loadlink` — the Expo Launch-managed Expo project has no Apple push key, so EVERY Expo-routed iOS push is dropped. Bypass shipped: server sends straight to Apple (`server/apns.ts`) using the user's own APNs key; all send paths go through a deliverPush helper (APNs-first if the user has a raw `apns_device_token`, Expo fallback). Client registers the raw iOS device token via `getDevicePushTokenAsync` alongside the Expo token — but only reaches devices after an app update ships that code.
+
+**Durable gotchas from the bypass:**
+- APNs is HTTP/2-only; Node `fetch` fails with a bare "fetch failed" — must use `node:http2`.
+- Secrets pasted into Replit arrive mangled: the .p8 came as base64 body only (no PEM armor, no newlines) and the Key ID had lowercase letters (Apple IDs are uppercase; lowercase kid → 403 `InvalidProviderToken`). Server normalizes both.
+- Credential smoke test: send to a dummy 64-hex token — 400 `BadDeviceToken` means auth is GOOD; 403 `InvalidProviderToken` means key/kid/team wrong.
+- Bundle-id ambiguity (`app.replit.loadlink` vs `com.loadlink.app`): topic candidates tried in order with last-good first but never exclusive (installs may split across bundle ids).
 
 ## App-icon badge
 

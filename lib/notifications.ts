@@ -111,8 +111,19 @@ export async function registerForPushNotifications(): Promise<string | null> {
     const tokenData = await N.getExpoPushTokenAsync({ projectId });
     const token = tokenData.data;
 
+    // Also grab the RAW APNs device token on iOS so the server can push
+    // directly to Apple (the Expo Launch-managed Expo project has no APNs
+    // credentials, so Expo-routed iOS pushes are dropped).
+    let deviceToken: string | null = null;
+    if (Platform.OS === 'ios') {
+      try {
+        const devData = await N.getDevicePushTokenAsync();
+        if (typeof devData?.data === 'string') deviceToken = devData.data;
+      } catch {}
+    }
+
     try {
-      await apiRequest('POST', '/api/push/register', { token });
+      await apiRequest('POST', '/api/push/register', deviceToken ? { token, deviceToken } : { token });
     } catch (e) {
     }
 
