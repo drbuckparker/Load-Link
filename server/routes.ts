@@ -1395,11 +1395,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Truck-horn alert to drivers whose area covers this job's pickup location.
       // Record the id locally AND claim it in the shared DB so no other server
       // instance's watcher sends a duplicate alert.
+      // MUST be awaited before responding: on autoscale deployments the
+      // instance is frozen the moment the response is sent, so fire-and-forget
+      // work after res.json() silently never runs (no rows, no pushes).
       const notifyId = String(job.id || id);
       markJobNotified(notifyId);
-      claimJobNotification(notifyId)
-        .then((claimed) => { if (claimed) return notifyNearbyDriversOfNewJob(job); })
-        .catch(() => {});
+      try {
+        if (await claimJobNotification(notifyId)) {
+          await notifyNearbyDriversOfNewJob(job);
+        }
+      } catch (e: any) {
+        console.error('POST /api/jobs notify error:', e.message);
+      }
 
       return res.status(201).json(addDualKeys(job));
     } catch (e: any) {
@@ -1470,9 +1477,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })();
           const notifTitle = 'Job Date Changed - Confirm Availability';
           const notifBody = `${contractorName} moved the ${jobMaterial || 'job'} to ${formatted}. Re-confirm to keep your assignment.`;
+          // Awaited: fire-and-forget after the response never runs on autoscale.
           for (const a of approvedAssignments.rows) {
             if (a.driver_id) {
-              sendPushNotification(String(a.driver_id), notifTitle, notifBody, { jobId: req.params.id, type: 'job_date_changed' });
+              await sendPushNotification(String(a.driver_id), notifTitle, notifBody, { jobId: req.params.id, type: 'job_date_changed' }).catch(() => {});
             }
           }
         }
@@ -1666,7 +1674,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // actually flipped pending → approved (idempotent on retries).
         if ((autoApproveUpdate.rowCount || 0) > 0) {
           const jobRowForAward = await pool.query(`SELECT material FROM jobs WHERE id = $1`, [req.params.id]);
-          notifyDriverJobAwarded(String(auth.userId), String(req.params.id), jobRowForAward.rows[0]?.material).catch(() => {});
+          // Awaited: fire-and-forget after the response never runs on autoscale.
+          await notifyDriverJobAwarded(String(auth.userId), String(req.params.id), jobRowForAward.rows[0]?.material).catch(() => {});
         }
       }
 
@@ -1693,7 +1702,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Standard notification sound on the contractor's device for new
         // applications (the truck horn is reserved for alerting drivers to new
         // jobs in their area, not for application receipts).
-        sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: 'job_application' });
+        // Awaited: fire-and-forget after the response never runs on autoscale.
+        await sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: 'job_application' }).catch(() => {});
       }
       return res.json({ ...addDualKeys(jobForNotif || { id: req.params.id, status: 'pending' }), autoApproved });
     } catch (e: any) {
@@ -2002,7 +2012,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // the UPDATE above actually transitioned the row (idempotent on retries).
       if (approveDid && (approveUpdate.rowCount || 0) > 0) {
         const jobRow = await pool.query(`SELECT material FROM jobs WHERE id = $1`, [req.params.id]);
-        notifyDriverJobAwarded(String(approveDid), String(req.params.id), jobRow.rows[0]?.material).catch(() => {});
+        // Awaited: fire-and-forget after the response never runs on autoscale.
+        await notifyDriverJobAwarded(String(approveDid), String(req.params.id), jobRow.rows[0]?.material).catch(() => {});
       }
       return res.json({ ok: true });
     } catch (e: any) {
@@ -4165,7 +4176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch (e: any) {
           console.error("Auto-withdraw notification insert error:", e.message);
         }
-        sendPushNotification(w.driverId, title, body, { jobId: w.jobId, type: 'application_withdrawn' });
+        await sendPushNotification(w.driverId, title, body, { jobId: w.jobId, type: 'application_withdrawn' }).catch(() => {});
       }
     } catch (e: any) {
       console.error("withdrawConflictingPendingApplications error:", e.message);
