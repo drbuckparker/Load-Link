@@ -1038,10 +1038,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Apple, bypassing Expo's push service (which lacks APNs credentials
       // for the Expo Launch project).
       const apnsToken = deviceToken || device_token;
+      const updateId = req.body.updateId || req.body.update_id || null;
       if (apnsToken && typeof apnsToken === 'string' && /^[0-9a-fA-F]{32,200}$/.test(apnsToken)) {
         await pool.query(`UPDATE users SET apns_device_token = $1 WHERE id = $2`, [apnsToken, auth.userId]);
+        console.log(`[PushRegister] user=${auth.userId} apnsToken=SAVED len=${apnsToken.length} update=${updateId}`);
+      } else {
+        console.log(`[PushRegister] user=${auth.userId} apnsToken=${apnsToken ? `REJECTED(len=${String(apnsToken).length})` : 'MISSING'} update=${updateId} tokenError=${req.body.deviceTokenError || 'none'}`);
       }
-    } catch {}
+    } catch (e) {
+      console.log(`[PushRegister] error: ${e}`);
+    }
     return res.json({ ok: true });
   });
 

@@ -115,15 +115,28 @@ export async function registerForPushNotifications(): Promise<string | null> {
     // directly to Apple (the Expo Launch-managed Expo project has no APNs
     // credentials, so Expo-routed iOS pushes are dropped).
     let deviceToken: string | null = null;
+    let deviceTokenError: string | null = null;
     if (Platform.OS === 'ios') {
       try {
         const devData = await N.getDevicePushTokenAsync();
         if (typeof devData?.data === 'string') deviceToken = devData.data;
-      } catch {}
+        else deviceTokenError = `unexpected shape: ${typeof devData?.data}`;
+      } catch (e: any) {
+        deviceTokenError = String(e?.message || e);
+      }
     }
 
+    let updateId: string | null = null;
     try {
-      await apiRequest('POST', '/api/push/register', deviceToken ? { token, deviceToken } : { token });
+      const Updates = await import('expo-updates');
+      updateId = Updates.updateId ?? null;
+    } catch {}
+
+    try {
+      const payload: Record<string, unknown> = { token, updateId };
+      if (deviceToken) payload.deviceToken = deviceToken;
+      if (deviceTokenError) payload.deviceTokenError = deviceTokenError;
+      await apiRequest('POST', '/api/push/register', payload);
     } catch (e) {
     }
 
