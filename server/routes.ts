@@ -3251,7 +3251,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // table directly (local-first read pattern, no JWT dependency).
   app.post("/api/driver-invitations", requireAuth, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req)!;
-    const role = (auth.user?.role || '').toLowerCase();
+    // The role cached in the login session can lag behind the shared DB (the
+    // website has returned e.g. 'contractor' for a trucking_company account),
+    // so read the authoritative role from the DB and fall back to the session.
+    let role = (auth.user?.role || '').toLowerCase();
+    try {
+      const dbRole = await pool.query(`SELECT role FROM users WHERE id = $1`, [auth.userId]);
+      const r = (dbRole.rows[0]?.role || '').toLowerCase();
+      if (r) role = r.includes(role) || !role ? r : `${r}_${role}`;
+    } catch {}
     const canInvite = role.includes('contractor') || role.includes('trucking_company');
     if (!canInvite) {
       return res.status(403).json({ message: "Only contractors and trucking companies can send invitations." });
