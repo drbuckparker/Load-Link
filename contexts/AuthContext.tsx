@@ -132,6 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const mapped = mapDbUser(data.user);
           await safeStore(mapped);
           setUser(mapped);
+          registerForPushNotifications().catch(() => {});
           return true;
         }
       }
@@ -170,6 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const mapped = mapDbUser(data.user);
             await safeStore(mapped);
             setUser(mapped);
+            registerForPushNotifications().catch(() => {});
           } else {
             const reloginOk = await silentRelogin();
             if (!reloginOk) {
