@@ -68,6 +68,10 @@ function mapDbJob(raw: any): Job {
     pendingApplications: Number(raw.pending_applications || raw.pendingApplications || 0),
     approvedAssignments: Number(raw.approved_assignments || raw.approvedAssignments || 0),
     haulBothWays: (raw.haul_both_ways ?? raw.haulBothWays) === true,
+    visibility: raw.visibility || undefined,
+    publicPositionsRemaining: raw.public_positions_remaining != null
+      ? Number(raw.public_positions_remaining)
+      : (raw.publicPositionsRemaining != null ? Number(raw.publicPositionsRemaining) : null),
     returnMaterial: raw.return_material || raw.returnMaterial || '',
   };
 }

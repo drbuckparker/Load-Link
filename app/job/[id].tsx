@@ -223,6 +223,10 @@ function mapJob(j: any): Job {
     totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
     createdAt: j.created_at ?? j.createdAt ?? '',
     projectName: j.project_name ?? j.projectName,
+    visibility: j.visibility ?? undefined,
+    publicPositionsRemaining: j.public_positions_remaining != null
+      ? Number(j.public_positions_remaining)
+      : (j.publicPositionsRemaining != null ? Number(j.publicPositionsRemaining) : null),
     estimatedDurationMinutes: j.estimated_duration_minutes ?? j.estimatedDurationMinutes ?? null,
     loadTimeMinutes: j.load_time_minutes ?? j.loadTimeMinutes ?? 10,
     unloadTimeMinutes: j.unload_time_minutes ?? j.unloadTimeMinutes ?? 10,
@@ -1939,6 +1943,22 @@ export default function JobDetailScreen() {
           ) : null}
           {job.projectName && (
             <Text style={styles.projectName}>{job.projectName}</Text>
+          )}
+          {job.visibility === 'private' && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(160, 100, 255, 0.15)', borderWidth: 1, borderColor: 'rgba(160, 100, 255, 0.4)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 }} testID="private-badge-detail">
+                <Ionicons name="lock-closed" size={11} color="#c9a4ff" />
+                <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 10, color: '#c9a4ff', letterSpacing: 0.5 }}>PRIVATE PROJECT</Text>
+              </View>
+              {Number(job.publicPositionsRemaining) > 0 && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: Colors.muted, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 }} testID="public-openings-detail">
+                  <Ionicons name="earth" size={11} color={Colors.textSecondary} />
+                  <Text style={{ fontFamily: 'Inter_500Medium', fontSize: 10, color: Colors.textSecondary }}>
+                    {Number(job.publicPositionsRemaining)} PUBLIC OPENING{Number(job.publicPositionsRemaining) === 1 ? '' : 'S'}
+                  </Text>
+                </View>
+              )}
+            </View>
           )}
           <View style={styles.titleRow}>
             <Text style={styles.material}>{job.material}</Text>

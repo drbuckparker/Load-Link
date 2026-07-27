@@ -120,6 +120,20 @@ export default function JobCard({ job, onPress, showStatus = false, isOwnPosting
       )}
 
       <View style={styles.badgeRow}>
+        {job.visibility === 'private' && (
+          <View style={styles.privateBadge} testID="private-badge">
+            <Ionicons name="lock-closed" size={10} color="#c9a4ff" />
+            <Text style={styles.privateBadgeText}>PRIVATE</Text>
+          </View>
+        )}
+        {job.visibility === 'private' && Number(job.publicPositionsRemaining) > 0 && (
+          <View style={styles.badge} testID="public-openings-badge">
+            <Ionicons name="earth" size={10} color={Colors.textSecondary} />
+            <Text style={styles.badgeText}>
+              {Number(job.publicPositionsRemaining)} public opening{Number(job.publicPositionsRemaining) === 1 ? '' : 's'}
+            </Text>
+          </View>
+        )}
         {isOwnPosting && (
           <View style={styles.ownBadge} testID="your-posting-badge">
             <Ionicons name="megaphone" size={10} color={Colors.primary} />
@@ -322,6 +336,23 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
     color: Colors.textSecondary,
+  },
+  privateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(160, 100, 255, 0.15)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(160, 100, 255, 0.4)',
+  },
+  privateBadgeText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+    color: '#c9a4ff',
+    letterSpacing: 0.5,
   },
   ownBadge: {
     flexDirection: 'row',

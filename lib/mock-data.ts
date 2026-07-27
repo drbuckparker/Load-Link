@@ -38,6 +38,8 @@ export interface Job {
   pendingApplications?: number;
   approvedAssignments?: number;
   haulBothWays?: boolean;
+  visibility?: string;
+  publicPositionsRemaining?: number | null;
   returnMaterial?: string;
   returnAmount?: number | null;
   returnAmountUnit?: string | null;

@@ -9,6 +9,7 @@ import { fullSync, pushToWebsite, startPeriodicSync, recordUserActivity, syncJob
 import { deletedVehicleIds, pauseJobSync, resumeJobSync } from "./deleted-vehicles";
 import { buildExpoPushMessage, buildNewJobNearbyPush, buildJobAwardedPush, type ExpoPushMessage } from "./push-payload";
 import { apnsConfigured, sendApnsPush } from "./apns";
+import { getVisibilityFeatures, jobVisibilityPredicate, canViewPrivateJob } from "./visibility";
 
 const WEBSITE_API_URL = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 const WEBSITE_API_KEY = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -109,6 +110,22 @@ async function notifyNearbyDriversOfNewJob(job: any) {
     const jobLat = job?.origin_lat != null ? Number(job.origin_lat) : NaN;
     const jobLng = job?.origin_lng != null ? Number(job.origin_lng) : NaN;
     if (!Number.isFinite(jobLat) || !Number.isFinite(jobLng)) return;
+
+    // Private jobs (website "Private Projects" feature) must not broadcast
+    // "new job nearby" alerts. Re-check from the DB since callers pass rows
+    // with varying column sets. Public-overflow openings DO broadcast.
+    const visFeats = await getVisibilityFeatures(pool);
+    if (visFeats.jobsVisibility && job?.id) {
+      const cols = visFeats.publicPositionsRemaining
+        ? `visibility::text AS vis, COALESCE(public_positions_remaining, 0)::int AS ppr`
+        : `visibility::text AS vis, 0 AS ppr`;
+      const vr = await pool.query(`SELECT ${cols} FROM jobs WHERE id = $1`, [String(job.id)]);
+      const row = vr.rows[0];
+      if (row && row.vis === 'private' && Number(row.ppr) <= 0) {
+        console.log(`[JobWatcher] Job ${job.id} is private — skipping nearby-driver broadcast`);
+        return;
+      }
+    }
 
     const drivers = await pool.query(
       `SELECT id::text AS id, expo_push_token, apns_device_token,
@@ -1064,6 +1081,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const params: any[] = [];
       let paramIdx = 1;
 
+      // Private jobs (website "Private Projects" feature): only owner,
+      // assigned/applied drivers, invitees, or jobs with public overflow
+      // openings are listable. No-op until the visibility column exists.
+      const visFeats = await getVisibilityFeatures(pool);
+      if (visFeats.jobsVisibility) {
+        query += jobVisibilityPredicate(visFeats, paramIdx);
+        params.push(auth.userId);
+        paramIdx++;
+      }
+
       if (hiddenJobIds.size > 0) {
         query += ` AND j.id NOT IN (${[...hiddenJobIds].map((_, i) => `$${paramIdx + i}`).join(',')})`;
         params.push(...hiddenJobIds);
@@ -1277,6 +1304,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           hasAssignment = aCheck.rows.length > 0;
         }
         const canSeeDetails = isParticipant || hasAssignment;
+
+        // Private-job gate (website "Private Projects" feature). No-op until
+        // the visibility column exists in the shared schema.
+        const visFeats = await getVisibilityFeatures(pool);
+        const allowedPrivate = await canViewPrivateJob(
+          pool, visFeats, job, auth.userId, canSeeDetails
+        );
+        if (!allowedPrivate) {
+          return res.status(403).json({ message: "This project is private." });
+        }
+
         if (canSeeDetails) {
           const assignResult = await pool.query(
             `SELECT ja.*, t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
