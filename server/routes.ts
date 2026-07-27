@@ -794,7 +794,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // check — and only then mint a session via the email-only companion
         // login (API-key trust). Wrong passwords still fail here.
         let recovered = false;
-        try {
+        // Narrow trigger: ONLY the website's specific "Sign in with Replit"
+        // 401 qualifies. Other denials (wrong password, lockouts, rate
+        // limits, 403/429/5xx) must pass through untouched so the companion
+        // never converts an upstream denial into a successful login.
+        const upstreamMsg = String(data?.message || data?.error || "");
+        const isReplitAuthRefusal =
+          websiteRes.status === 401 && /sign in with replit/i.test(upstreamMsg);
+        if (isReplitAuthRefusal) try {
           const localRes = await pool.query(
             `SELECT password FROM users WHERE lower(email) = lower($1) LIMIT 1`,
             [email],
@@ -829,6 +836,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await hydrateUserFromDb(user);
+
+      // The website's login response can misreport the role (e.g. it returns
+      // 'trucking_company' for the compound demo account, and 'contractor'
+      // for some trucking_company users). users.role in the shared DB is the
+      // authoritative entitlement — role switches are session-only and never
+      // persisted — so prefer it when present.
+      try {
+        const roleRes = await pool.query(`SELECT role FROM users WHERE id = $1`, [user.id]);
+        const dbRole = roleRes.rows[0]?.role;
+        if (dbRole && dbRole !== user.role) {
+          console.log(`[Login] Using DB role '${dbRole}' over website-reported '${user.role}' for ${email}`);
+          user.role = dbRole;
+        }
+      } catch {}
 
       const localToken = crypto.randomBytes(32).toString("hex");
       const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
