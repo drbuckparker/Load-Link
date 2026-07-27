@@ -1,0 +1,230 @@
+This is how I would describe it for Replit. It explains both the user experience and the business logic so the AI has enough context to build it correctly.
+
+---
+
+## Feature: Private Projects & Jobs with Public Overflow
+
+### Overview
+
+Add the ability for contractors and trucking companies to create **Private Projects** and **Private Jobs** that are only visible to people they specifically invite. If they are unable to fill all required positions internally, they can publish only the remaining openings to the public marketplace.
+
+This allows companies to prioritize their preferred drivers and subcontractors while still leveraging the Load Link marketplace when needed.
+
+---
+
+## User Experience
+
+### Project Visibility
+
+When creating a project, add a new setting:
+
+**Project Visibility**
+
+* 🌎 Public
+* 🔒 Private
+
+Default should remain **Public**.
+
+If **Private** is selected:
+
+* The project is only visible to invited users.
+* Jobs created within the project are private by default.
+* The project does not appear in public search results.
+* Only invited users can view project details or apply.
+
+---
+
+### Job Visibility
+
+Each individual job should also have a visibility setting:
+
+* Public
+* Private (inherits from project by default)
+
+This gives flexibility if a company wants some jobs public while others remain private.
+
+---
+
+## Inviting Users
+
+For private projects/jobs, allow companies to invite users by:
+
+* Existing Load Link connections
+* Company employees
+* Favorite drivers
+* Favorite owner-operators
+* Favorite trucking companies
+* Email invitation (optional future enhancement)
+
+Invited users receive:
+
+* In-app notification
+* Push notification
+* Email (optional)
+
+---
+
+## Remaining Openings
+
+For jobs requiring multiple trucks or drivers, show:
+
+**Positions Needed:** 10
+
+**Accepted:** 7
+
+**Remaining:** 3
+
+If openings remain, display a prominent action:
+
+> **Post Remaining Openings Publicly**
+
+Selecting this will:
+
+* Keep the existing accepted workers assigned.
+* Publish only the remaining openings.
+* Make those openings searchable in the public marketplace.
+* Allow anyone who meets the job requirements to apply.
+
+Example:
+
+Original job:
+
+* Need 10 trucks
+
+Private invitations fill:
+
+* 7 trucks
+
+Company clicks:
+
+> Post Remaining 3 Openings Publicly
+
+The public marketplace now shows:
+
+Need: 3 Trucks
+
+instead of the original 10.
+
+---
+
+## Returning to Private
+
+Allow companies to:
+
+* Remove the public listing once all positions are filled.
+* Return the job to Private status if desired.
+
+---
+
+## UI Indicators
+
+Private jobs display:
+
+🔒 Private
+
+Public jobs display:
+
+🌎 Public
+
+Jobs that are partially public display:
+
+🔒 Private Project
+🌎 3 Public Openings
+
+---
+
+## Permissions
+
+Private projects can only be viewed by:
+
+* Project owner
+* Company admins
+* Invited users
+* Assigned drivers
+* Assigned trucking companies
+
+Everyone else should receive:
+
+> "This project is private."
+
+---
+
+## Database Changes
+
+### Projects
+
+```
+visibility:
+- public
+- private
+```
+
+### Jobs
+
+```
+visibility:
+- public
+- private
+
+positionsRequired
+positionsFilled
+publicPositionsRemaining
+```
+
+### Invitations
+
+Create a new table:
+
+```
+ProjectInvitations
+- id
+- projectId
+- userId
+- invitedBy
+- status
+    pending
+    accepted
+    declined
+- invitedAt
+```
+
+---
+
+## Public Overflow Logic
+
+```
+If Job.Visibility == Private
+
+AND
+
+User selects
+"Post Remaining Openings Publicly"
+
+Then
+
+publicPositionsRemaining =
+positionsRequired - positionsFilled
+
+Marketplace listing only displays
+publicPositionsRemaining
+
+Accepted private workers remain assigned.
+
+New public applicants can only fill the remaining openings.
+
+When positionsFilled == positionsRequired
+
+Automatically remove the public listing.
+```
+
+---
+
+## Benefits
+
+* Companies can prioritize trusted drivers and subcontractors.
+* Existing business relationships are preserved.
+* Public marketplace is only used when additional capacity is needed.
+* Contractors maintain control over who sees sensitive project information.
+* More realistic workflow for excavation contractors and trucking companies, where preferred partners are contacted first before opening work to the broader market.
+
+This feature closely mirrors how the construction and short-haul trucking industry operates today, while making the transition from private staffing to public recruiting seamless within Load Link.
