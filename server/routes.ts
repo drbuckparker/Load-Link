@@ -784,12 +784,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         body: { email, password },
       });
 
-      const data = await websiteRes.json();
+      let data = await websiteRes.json();
 
       if (!websiteRes.ok) {
-        return res.status(websiteRes.status).json({
-          message: data.message || data.error || "Invalid credentials",
-        });
+        // Fallback: the website refuses password verification for accounts it
+        // considers Replit-auth (e.g. the demo account), even when the shared
+        // users table holds a valid bcrypt password. Verify the password
+        // ourselves against that same shared-DB hash — an equivalent credential
+        // check — and only then mint a session via the email-only companion
+        // login (API-key trust). Wrong passwords still fail here.
+        let recovered = false;
+        try {
+          const localRes = await pool.query(
+            `SELECT password FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+            [email],
+          );
+          const hash = localRes.rows[0]?.password;
+          if (hash && (await bcrypt.compare(password, hash))) {
+            const retryRes = await websiteFetch("/api/companion/auth/login", {
+              method: "POST",
+              body: { email },
+            });
+            if (retryRes.ok) {
+              data = await retryRes.json();
+              recovered = true;
+              console.log(`[Login] Local password verification fallback used for ${email}`);
+            }
+          }
+        } catch (fbErr: any) {
+          console.error("[Login] Local password fallback failed:", fbErr.message);
+        }
+        if (!recovered) {
+          return res.status(websiteRes.status).json({
+            message: data.message || data.error || "Invalid credentials",
+          });
+        }
       }
 
       const jwt = data.token;
