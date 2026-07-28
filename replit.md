@@ -1,7 +1,7 @@
 # LoadLink Mobile Companion App
 
 ## Overview
-The LoadLink Mobile App is the **companion** to the main LoadLink website (`loadlink.replit.app` / `loadlinklive.com`). It extends the website's functionality to iOS/Android for all user roles in the short-haul trucking and construction industries: truck drivers, contractors, trucking companies, and foremen. The companion shares the website's Neon PostgreSQL database directly; an Express backend reads/writes that DB and proxies authentication to the website API.
+The LoadLink Mobile App is the **companion** to the main LoadLink website (`loadlink.replit.app` / `loadlinklive.com`). It extends the website's functionality to iOS/Android for all user roles in the short-haul trucking and construction industries: truck drivers, contractors, trucking companies, and foremen. The companion shares the website's PostgreSQL database directly (since July 2026: the website project's Replit-managed database, set via `NEON_DATABASE_URL` — the runtime-managed `DATABASE_URL` points at the legacy, retired Neon DB); an Express backend reads/writes that DB and proxies authentication to the website API.
 
 ## Demo Account
 A self-contained demo login for showing the app to prospects: **demo@loadlink.com / demo1234**. The account carries the compound role `driver_trucking_company_contractor`, so the same login can switch between driver / contractor / trucking_company views (via the profile role switcher) and see fully-populated data in each (jobs, schedules, invoices/earnings, fleet, projects, messages, reviews, notifications).

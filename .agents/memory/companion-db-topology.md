@@ -1,17 +1,17 @@
 ---
-name: companion DB topology (dev URL == live shared prod DB)
-description: The companion's dev DATABASE_URL points at the real shared Neon prod DB; Replit's managed "production" replica is empty/unused. Affects how to safely make prod data changes.
+name: companion DB topology (repointed to website's Replit-managed DB, July 2026)
+description: The companion now uses the website project's Replit-managed Neon DB via NEON_DATABASE_URL; the old Neon DB is legacy. How env precedence and schema ownership work after the consolidation.
 ---
 
-# Companion DB topology
+# Companion DB topology (post-consolidation, July 28 2026)
 
-The companion's `DATABASE_URL` (in dev) points at the **website's live shared Neon database** — the same DB the deployed companion app AND the live website both read/write. So `executeSql({ environment: "development" })` (and the Express `pool`) operate on REAL production data.
+The DB split was resolved by consolidating everything into the **website project's Replit-managed production database** (ep-jolly-tree-ahrdbwmh, us-east-1). The companion now points there.
 
-Replit's managed **"production" replica is NOT the app's data**: `executeSql({ environment: "production" })` returns an empty/unused managed Postgres (a real website user found in dev returned zero rows in the prod replica). Don't reason about prod data through that replica — it's a red herring here.
+**How the repoint works:** `DATABASE_URL` here is runtime-managed by Replit and CANNOT be changed via setEnvVars. The repoint was done via **`NEON_DATABASE_URL`** (shared env var), which `server/db.ts` and `drizzle.config.ts` prefer over `DATABASE_URL`. The old value of `DATABASE_URL` (ep-quiet-moon, us-east-2) is the **legacy** Neon DB — do not write to it.
+
+**Schema ownership:** the new DB's schema is owned/migrated by the WEBSITE project's publish flow. Companion-only columns (`jobs.haul_both_ways` + `return_*`, `job_assignments.truck_down_*`, `users.apns_device_token`) and the `companion_notified_jobs` table were added by hand on 2026-07-28; any new companion-only schema must be coordinated with the website agent or it may not exist in the new DB.
 
 **Implications:**
-- A write via the development target / Express pool IS a live production data change affecting the website too. Treat it with production caution (confirm scope, prefer least privilege, it's reversible but visible to the live site).
-- You CANNOT use `environment: "production"` to verify or back up the real data — query the development target (the shared Neon DB) instead.
-- A server CODE change still requires a republish/deploy to take effect in the deployed companion; only DATA changes (shared DB) are instant in production.
-
-**Why:** the companion is a thin client over the website's Neon DB (see the May 2026 pushToWebsite audit in replit.md), and the in-code comment in `/api/auth/login` claiming "dev uses its own database separate from the website's" is stale/inaccurate.
+- Dev + deployed companion + live website all share this one DB; writes via the Express pool are live production changes.
+- If a companion route 500s with "column does not exist" after a website release, suspect schema drift between this app's SQL and the website-managed schema.
+- The migration overwrote user rows: any password hash or role set only companion-side before consolidation was clobbered (had to re-set Calvin's temp password and demo's compound role post-migration).
