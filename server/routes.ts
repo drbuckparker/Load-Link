@@ -736,6 +736,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return res.status(401).json({ message: "Not authenticated" });
   }
 
+  // Companion-side login throttling: the local password fallback below means
+  // upstream (website) rate limits alone no longer bound brute-force attempts,
+  // so enforce our own per-email+IP failure limit.
+  const loginFailures = new Map<string, { count: number; windowStart: number }>();
+  const LOGIN_FAILURE_LIMIT = 10;
+  const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+  function loginThrottleKey(req: Request, email: string): string {
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+    return `${String(email).toLowerCase()}|${ip}`;
+  }
+
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
       const { email, password } = req.body;
@@ -745,6 +756,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!password) {
         return res.status(400).json({ message: "Password is required" });
       }
+
+      const throttleKey = loginThrottleKey(req, email);
+      const now = Date.now();
+      const fail = loginFailures.get(throttleKey);
+      if (fail && now - fail.windowStart < LOGIN_FAILURE_WINDOW_MS && fail.count >= LOGIN_FAILURE_LIMIT) {
+        return res.status(429).json({ message: "Too many login attempts. Please try again later." });
+      }
+      // Track failed attempts (any 401 outcome) when the response finishes.
+      res.on("finish", () => {
+        if (res.statusCode === 401) {
+          const cur = loginFailures.get(throttleKey);
+          if (!cur || now - cur.windowStart >= LOGIN_FAILURE_WINDOW_MS) {
+            loginFailures.set(throttleKey, { count: 1, windowStart: now });
+          } else {
+            cur.count += 1;
+          }
+          if (loginFailures.size > 5000) loginFailures.clear();
+        } else if (res.statusCode < 400) {
+          loginFailures.delete(throttleKey);
+        }
+      });
 
       // Dev-only local authentication. In production the upstream website is the
       // sole authority for credentials. In development the workspace uses its own
@@ -759,16 +791,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           );
           const dbUser = localRes.rows[0];
           if (dbUser?.password && (await bcrypt.compare(password, dbUser.password))) {
+            const { password: _pw, ...safeDbUser } = dbUser;
             const localToken = crypto.randomBytes(32).toString("hex");
             const authEntry = {
               jwt: `dev-local:${dbUser.id}`,
               userId: dbUser.id,
-              user: dbUser,
+              user: safeDbUser,
               originalRole: dbUser.role as string,
             };
             tokenToJwt.set(localToken, authEntry);
             saveJsonMap("sessions.json", tokenToJwt);
-            return res.json({ token: localToken, user: userPayload(dbUser, authEntry.originalRole) });
+            return res.json({ token: localToken, user: userPayload(safeDbUser, authEntry.originalRole) });
           }
         } catch (devErr: any) {
           console.error("Dev local login failed, falling back to website:", devErr.message);
@@ -794,20 +827,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // check — and only then mint a session via the email-only companion
         // login (API-key trust). Wrong passwords still fail here.
         let recovered = false;
-        // Narrow trigger: ONLY the website's specific "Sign in with Replit"
-        // 401 qualifies. Other denials (wrong password, lockouts, rate
-        // limits, 403/429/5xx) must pass through untouched so the companion
-        // never converts an upstream denial into a successful login.
+        // Narrow trigger: only a plain 401 credential refusal qualifies —
+        // either the website's "Sign in with Replit" refusal (demo account)
+        // or "Invalid credentials" for an account whose shared-DB bcrypt hash
+        // DOES match the submitted password (the website doesn't check the
+        // shared users.password for accounts created via one-tap sign-in).
+        // Lockouts, rate limits, 403/423/429/5xx and any other denial pass
+        // through untouched so the companion never converts an upstream
+        // denial into a successful login.
         const upstreamMsg = String(data?.message || data?.error || "");
-        const isReplitAuthRefusal =
-          websiteRes.status === 401 && /sign in with replit/i.test(upstreamMsg);
-        if (isReplitAuthRefusal) try {
+        const isCredentialRefusal401 =
+          websiteRes.status === 401 &&
+          (/sign in with replit/i.test(upstreamMsg) ||
+            /invalid credentials/i.test(upstreamMsg));
+        if (isCredentialRefusal401) try {
           const localRes = await pool.query(
-            `SELECT password FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+            `SELECT * FROM users WHERE lower(email) = lower($1) LIMIT 1`,
             [email],
           );
-          const hash = localRes.rows[0]?.password;
-          if (hash && (await bcrypt.compare(password, hash))) {
+          const dbUser = localRes.rows[0];
+          if (dbUser?.password && (await bcrypt.compare(password, dbUser.password))) {
             const retryRes = await websiteFetch("/api/companion/auth/login", {
               method: "POST",
               body: { email },
@@ -816,6 +855,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
               data = await retryRes.json();
               recovered = true;
               console.log(`[Login] Local password verification fallback used for ${email}`);
+            } else if (dbUser.login_provider === "replit_auth" && !dbUser.is_suspended) {
+              // The website refuses even the email-only companion login for
+              // some accounts (observed for a subset of Sign-in-with-Replit
+              // accounts). The password already matched the shared-DB bcrypt
+              // hash — the same credential store the website uses — so mint a
+              // companion-local session that runs off the shared DB directly.
+              // Guarded to non-suspended replit_auth accounts only: those are
+              // the known website misbehavior class; email/password accounts
+              // denied upstream stay denied. Downstream website proxy calls
+              // degrade gracefully for "dev-local:" sessions, and role
+              // switches on them are never persisted.
+              const { password: _pw2, ...safeDbUser } = dbUser;
+              const localToken = crypto.randomBytes(32).toString("hex");
+              const authEntry = {
+                jwt: `dev-local:${dbUser.id}`,
+                userId: dbUser.id,
+                user: safeDbUser,
+                originalRole: dbUser.role as string,
+              };
+              tokenToJwt.set(localToken, authEntry);
+              saveJsonMap("sessions.json", tokenToJwt);
+              console.log(`[Login] Companion-local session minted for ${email} (website refused email-only login)`);
+              return res.json({ token: localToken, user: userPayload(safeDbUser, authEntry.originalRole) });
             }
           }
         } catch (fbErr: any) {

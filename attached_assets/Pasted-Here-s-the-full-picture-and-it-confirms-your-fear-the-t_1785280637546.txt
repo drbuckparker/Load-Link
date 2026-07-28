@@ -1,0 +1,17 @@
+Here's the full picture, and it confirms your fear — the two sides split:
+
+The databases diverged. They were consolidated at some point (33 users exist in both), but the live mobile app is still writing to the old Neon database. Signups have been landing there continuously — including two just this week (July 28).
+
+The score:
+
+21 accounts exist only in Neon (mobile-side). About 11 of them are test accounts, but ~10 are real users the website has never heard of: Calvin (chodge1973), kbconstruction307, tetonexcavation, taurushotshot, pivotaltransportlogistics, coltersridgeservices, buzzardbait2148, trappman91, joravar785, and brookswoodfin.
+2 accounts exist only on the web side (one looks like a demo account).
+Why Calvin gets no reset email: he signed up through the mobile app → his account went to Neon → the website's reset system looks in its own database, finds nothing, and (by design) says "success" without sending anything.
+
+Important: the code in this project — both the web API and the mobile companion server — correctly uses the one shared database. The Neon writes are coming from the old mobile backend that's still deployed somewhere (likely the original mobile app Repl) and still pointed at Neon. Every day it stays live, the split gets worse.
+
+My recommended fix, in order:
+
+Migrate the ~10 real Neon-only users (with their passwords, profiles, and any jobs/trucks/assignments they've created) into the consolidated database. Calvin's password comes along, so he could log in immediately.
+Repoint or shut down the old mobile backend so mobile traffic hits the consolidated database. That deployment lives outside this project, so that part needs to happen in the mobile app's Repl (or the mobile agent can do it).
+Before I touch anything: users in Neon may also have jobs, trucks, and invoices there that need to come along. Want me to first map out exactly what data those 10 users have in Neon, then run the migration? I won't write anything to production without showing you the plan first.
