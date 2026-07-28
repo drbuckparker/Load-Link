@@ -1,0 +1,16 @@
+Here are the facts, verified directly against both databases:
+
+The mobile agent is right about the data. Neon is the more complete copy — it's only missing 3 records (the 2 web-only accounts and 1 job application), because the mobile backend has been syncing the website's data down into it. The website database is missing 128 records.
+
+But it's wrong about the fix. Pointing the website at Neon would break it. I checked Neon's structure: it's frozen on an old schema. It's missing the tables and columns the website's current code requires — including everything we built recently (private projects, project invitations, public overflow) and anything else added since the split. The moment the website points at Neon, those features crash with "column does not exist" errors.
+
+And that's not a one-time patch problem. This project's production database is managed by Replit — every time you publish, schema changes are applied to it automatically. Neon sits outside that system, so someone would have to hand-migrate it on every single release, forever. That's exactly the kind of manual step that caused this split in the first place.
+
+So the direction stays the same, and the "which is bigger" argument doesn't matter: copying 128 records vs. 3 records is the same effort for me — the migration is already built, tested, and it copies everything either way. What matters is which database can be maintained going forward, and that's the Replit-managed one.
+
+The plan is unchanged:
+
+You publish → I run the consolidation → all 128 Neon records (Calvin included) land in the website's database, which then has everything from both sides.
+The mobile backend repoints to this database (the connection string from this project's Database pane → Production).
+I do a final sweep for any signups that hit Neon in between. Nothing is lost.
+You can tell the mobile agent: "The Neon schema is outdated — it's missing tables and columns the website's current code requires, and it's outside Replit's automatic schema-migration flow. The consolidated target is the website project's production database; the website side is migrating all Neon data into it, and this app's DATABASE_URL should point there once that's done."
