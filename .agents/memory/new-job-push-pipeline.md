@@ -37,6 +37,8 @@ status — "ok" vs "error" tells you if credentials/token are valid.
 
 **Also:** iOS PROVISIONAL (quiet) authorization produces the exact same symptom — the client permission request must pass explicit `ios: { allowAlert, allowSound, allowBadge }` and re-request when the existing iOS status is provisional.
 
+**During-a-phone-call caveat (July 2026):** iOS suppresses app notification sounds while the user is on an active phone call — banner shows, no sound, even with all settings correct (texts may still chime, which is misleading). When live-debugging "silent pushes" with the user coordinating BY PHONE with the test device's owner, every test is contaminated: have them hang up before concluding anything. This exact loop burned a full session (settings, Scheduled Summary, attention-aware, stale-token theories) when the horn worked fine off-call.
+
 **Custom-sound caveat:** `truckhorn.wav` only plays on iOS binaries built AFTER the expo-notifications plugin `sounds` entry existed; on older installed builds an unknown sound name = silent. End-to-end horn verification requires a fresh native build (Expo Launch).
 
 ## Job-awarded cash-register alert (July 2026)
