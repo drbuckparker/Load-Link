@@ -802,6 +802,17 @@ export default function EditJobScreen() {
               </>
             )}
 
+            {!isBothWays && (
+              <Pressable
+                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 18, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderStyle: 'dashed', borderColor: Colors.primary, backgroundColor: Colors.surface }}
+                onPress={() => setIsBothWays(true)}
+                testID="add-return-haul-button"
+              >
+                <Ionicons name="swap-horizontal" size={16} color={Colors.primary} />
+                <Text style={{ color: Colors.primary, fontFamily: 'Inter_600SemiBold', fontSize: 13 }}>ADD RETURN HAUL (BOTH WAYS)</Text>
+              </Pressable>
+            )}
+
             {isBothWays && (
               <>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 8 }}>
