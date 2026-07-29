@@ -285,6 +285,7 @@ export default function JobDetailScreen() {
   const activeApplicationCount = pendingAssignments.length + approvedAssignments.length;
 
   const [jobStatus, setJobStatus] = useState<string>('');
+  const [confirmingBroker, setConfirmingBroker] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [truckDownPickerVisible, setTruckDownPickerVisible] = useState(false);
   const [truckDownSubmitting, setTruckDownSubmitting] = useState(false);
@@ -756,6 +757,29 @@ export default function JobDetailScreen() {
       { text: 'Keep Job', style: 'cancel' },
       { text: 'Archive', style: 'destructive', onPress: doCancel },
     ]);
+  }
+
+  const needsConfirmation = !!(jobData?.needsConfirmation ?? jobData?.needs_confirmation);
+  const brokerAssignmentId = jobData?.assignmentId ?? jobData?.assignment_id ?? null;
+
+  async function respondToBrokerAssignment(action: 'confirm' | 'decline') {
+    if (!brokerAssignmentId || confirmingBroker) return;
+    setConfirmingBroker(true);
+    try {
+      await apiRequest('POST', `/api/assignments/${brokerAssignmentId}/${action}`, {});
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      if (action === 'decline') {
+        if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any);
+      }
+    } catch (e: any) {
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Error', e.message || `Failed to ${action} assignment`);
+    }
+    setConfirmingBroker(false);
   }
 
   function handleAccept() {
@@ -3010,6 +3034,61 @@ export default function JobDetailScreen() {
                 </Text>
               </Pressable>
             )}
+          </View>
+        )}
+
+        {needsConfirmation && brokerAssignmentId && (
+          <View style={{
+            backgroundColor: 'rgba(255,153,0,0.08)', borderWidth: 1, borderColor: Colors.primary,
+            borderRadius: 12, padding: 16, gap: 12, marginBottom: 4,
+          }} testID="broker-confirm-block">
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="megaphone" size={18} color={Colors.primary} />
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.primary, letterSpacing: 0.5, flex: 1 }}>
+                BROKER ASSIGNMENT — CONFIRM?
+              </Text>
+            </View>
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textSecondary }}>
+              A broker assigned this job to you. Give it a thumbs up to confirm you'll run it, or thumbs down to decline.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Pressable
+                testID="broker-decline-btn"
+                disabled={confirmingBroker}
+                style={({ pressed }) => ({
+                  flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  backgroundColor: 'rgba(239,68,68,0.12)', borderWidth: 1, borderColor: Colors.destructive,
+                  borderRadius: 10, paddingVertical: 14, opacity: pressed || confirmingBroker ? 0.7 : 1,
+                })}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  respondToBrokerAssignment('decline');
+                }}
+              >
+                <Ionicons name="thumbs-down" size={20} color={Colors.destructive} />
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.destructive, letterSpacing: 0.5 }}>DECLINE</Text>
+              </Pressable>
+              <Pressable
+                testID="broker-confirm-btn"
+                disabled={confirmingBroker}
+                style={({ pressed }) => ({
+                  flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 14,
+                  opacity: pressed || confirmingBroker ? 0.7 : 1,
+                })}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  respondToBrokerAssignment('confirm');
+                }}
+              >
+                {confirmingBroker ? (
+                  <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                ) : (
+                  <Ionicons name="thumbs-up" size={20} color={Colors.primaryForeground} />
+                )}
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.primaryForeground, letterSpacing: 0.5 }}>CONFIRM</Text>
+              </Pressable>
+            </View>
           </View>
         )}
 

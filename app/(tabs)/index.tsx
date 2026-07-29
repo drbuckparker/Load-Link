@@ -16,7 +16,7 @@ import { setAppBadgeCount } from '@/lib/notifications';
 import MapSection from '@/components/MapSection';
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor');
+  return role.includes('contractor') || role === 'broker';
 }
 
 function FleetRunTimer({ clockInTime }: { clockInTime: string }) {
@@ -330,7 +330,28 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      <View style={styles.roleToggleContainer}>
+      {role === 'broker' && (
+        <Pressable
+          testID="broker-dashboard-btn"
+          style={({ pressed }) => ({
+            flexDirection: 'row', alignItems: 'center', gap: 10,
+            marginHorizontal: 16, marginBottom: 12,
+            backgroundColor: 'rgba(255,153,0,0.1)',
+            borderWidth: 1, borderColor: Colors.primary, borderRadius: 12,
+            paddingVertical: 14, paddingHorizontal: 16,
+            opacity: pressed ? 0.8 : 1,
+          })}
+          onPress={() => router.push('/broker' as any)}
+        >
+          <Ionicons name="briefcase" size={20} color={Colors.primary} />
+          <Text style={{ flex: 1, fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.primary, letterSpacing: 0.5 }}>
+            BROKER DASHBOARD
+          </Text>
+          <Ionicons name="chevron-forward" size={18} color={Colors.primary} />
+        </Pressable>
+      )}
+
+      {role !== 'broker' && <View style={styles.roleToggleContainer}>
         <Pressable
           style={[styles.roleToggleBtn, role === 'trucking_company' && styles.roleToggleBtnActive]}
           onPress={() => handleRoleToggle('trucking_company')}
@@ -348,7 +369,7 @@ export default function DashboardScreen() {
           <Text style={[styles.roleToggleText, role !== 'trucking_company' && isContractorRole(role) && styles.roleToggleTextActive]}>Construction Co</Text>
         </Pressable>
         {switchingRole && <ActivityIndicator size="small" color={Colors.primary} style={styles.roleSpinner} />}
-      </View>
+      </View>}
 
       <ScrollView
         contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 34 + 100 : 100 }]}

@@ -146,6 +146,11 @@ export default function CreateJobScreen() {
   const [includesSunday, setIncludesSunday] = useState(true);
   const [rate, setRate] = useState('');
   const [rateType, setRateType] = useState('per_hour');
+  const isBroker = user?.role === 'broker';
+  const [billRate, setBillRate] = useState('');
+  const [billRateType, setBillRateType] = useState('per_hour');
+  const [clientName, setClientName] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
   const [trucksNeeded, setTrucksNeeded] = useState(1);
   const [estimatedTrips, setEstimatedTrips] = useState('');
   const [totalTonsNeeded, setTotalTonsNeeded] = useState('');
@@ -1051,7 +1056,7 @@ export default function CreateJobScreen() {
     }
 
     const errors = new Set<string>();
-    if (!projectId && !projectName.trim()) errors.add('project');
+    if (!isBroker && !projectId && !projectName.trim()) errors.add('project');
     if (!material.trim()) errors.add('material');
     if (!originAddress.trim()) errors.add('origin');
     if (!destinationAddress.trim()) errors.add('destination');
@@ -1089,9 +1094,9 @@ export default function CreateJobScreen() {
 
     setSubmitting(true);
     try {
-      let resolvedProjectId: string | undefined = projectId || undefined;
+      let resolvedProjectId: string | undefined = isBroker ? undefined : (projectId || undefined);
 
-      if (!resolvedProjectId && projectName.trim()) {
+      if (!isBroker && !resolvedProjectId && projectName.trim()) {
         let inferredAddr = projectSiteAddress.trim();
         let inferredLat: number | null = projectSiteLat;
         let inferredLng: number | null = projectSiteLng;
@@ -1134,6 +1139,15 @@ export default function CreateJobScreen() {
         urgent,
         ...(urgent && paperworkDescription.trim() ? { paperworkDescription: paperworkDescription.trim() } : {}),
       };
+
+      if (isBroker) {
+        if (parseFloat(billRate) > 0) {
+          body.billRate = String(parseFloat(billRate));
+          body.billRateType = billRateType;
+        }
+        if (clientName.trim()) body.clientName = clientName.trim();
+        if (clientEmail.trim()) body.clientEmail = clientEmail.trim();
+      }
 
       if (bothWays) {
         body.haulBothWays = true;
@@ -2001,6 +2015,44 @@ export default function CreateJobScreen() {
 
             <Text style={[styles.label, { marginTop: 14 }]}>Rate Type</Text>
             {renderChips(RATE_TYPES, rateType, setRateType)}
+
+            {isBroker && (
+              <>
+                <View style={{ height: 1, backgroundColor: Colors.border, marginTop: 16, marginBottom: 2 }} />
+                <Text style={[styles.label, { marginTop: 12, color: Colors.primary }]}>Bill Rate (charged to client — never shown to drivers)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="0.00"
+                  placeholderTextColor={Colors.textMuted}
+                  value={billRate}
+                  onChangeText={setBillRate}
+                  keyboardType="numeric"
+                  testID="bill-rate-input"
+                />
+                <Text style={[styles.label, { marginTop: 14 }]}>Bill Rate Type</Text>
+                {renderChips(RATE_TYPES, billRateType, setBillRateType)}
+                <Text style={[styles.label, { marginTop: 14 }]}>Client Company Name</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Client company"
+                  placeholderTextColor={Colors.textMuted}
+                  value={clientName}
+                  onChangeText={setClientName}
+                  testID="client-name-input"
+                />
+                <Text style={[styles.label, { marginTop: 14 }]}>Client Email (optional)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="client@example.com"
+                  placeholderTextColor={Colors.textMuted}
+                  value={clientEmail}
+                  onChangeText={setClientEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  testID="client-email-input"
+                />
+              </>
+            )}
 
             <Text style={[styles.label, { marginTop: 14 }]}>Trucks Needed</Text>
             <View style={styles.stepperRow}>

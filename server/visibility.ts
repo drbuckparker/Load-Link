@@ -120,9 +120,16 @@ export function jobVisibilityPredicate(
     `${a}.visibility::text <> 'private'`,
     `${a}.contractor_id::text = $${userParamIdx}::text`,
     `${a}.driver_id::text = $${userParamIdx}::text`,
+    // Broker "send-later" rule: on a job posted by a broker, a HELD assignment
+    // (sent_at IS NULL) must be completely invisible to the truck — it only
+    // grants visibility once the broker sends it. Non-broker jobs are
+    // unaffected (driver-created applications also have sent_at NULL).
     `EXISTS (SELECT 1 FROM job_assignments _ja WHERE _ja.job_id = ${a}.id
              AND _ja.driver_id::text = $${userParamIdx}::text
-             AND _ja.status::text NOT IN ('rejected','withdrawn','cancelled','expired'))`,
+             AND _ja.status::text NOT IN ('rejected','withdrawn','cancelled','expired')
+             AND (_ja.sent_at IS NOT NULL OR NOT EXISTS (
+               SELECT 1 FROM users _bu
+               WHERE _bu.id::text = ${a}.contractor_id::text AND _bu.role::text = 'broker')))`,
   ];
   if (feats.publicPositionsRemaining) {
     parts.push(`COALESCE(${a}.public_positions_remaining, 0) > 0`);

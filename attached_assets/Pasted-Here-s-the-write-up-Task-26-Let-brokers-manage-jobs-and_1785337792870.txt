@@ -1,0 +1,38 @@
+Here's the write-up. Task #26 ("Let brokers manage jobs and rosters from the mobile app") is already queued for the mobile agent — the instructions below are what it needs to build the mobile side so both apps connect through the same backend.
+
+Feature description: Truck Broker role (now live on web)
+
+What it is: A new account role, Broker, for people who win hauling work from client companies and farm it out to a roster of trucks — plus a companion Client Company role for the customers being billed.
+
+How it works:
+
+Roster — Brokers invite trucks by email. An accepted invite puts the truck on the broker's roster, but roster trucks stay free to take public marketplace jobs.
+Two rates per job — Every broker job has a pay rate (what the trucks earn — visible to them) and a bill rate (what the client company is charged). The bill rate is stored in a separate table (broker_job_billing) and is server-enforced to never appear in any driver- or fleet-facing API response. Broker jobs are always private.
+Assign with send-now / send-later — The broker assigns roster trucks to a job and chooses to send each assignment immediately or hold it. Held assignments are completely invisible to the truck (and their trucking company) until sent; a "Send All" button releases everything at once.
+Confirm / decline — When a truck receives an assignment, they respond with a thumbs up or down. The broker's dashboard shows live confirmed counts, with an optional chime when a confirmation lands.
+Split invoicing on completion — When a job completes, the client company is invoiced at the bill rate (monthly invoice, payer = client, payee = broker), and trucks are paid at the pay rate through the normal flow. Client companies log in and see their invoices at a dedicated page.
+Instructions for the mobile agent (Task #26)
+
+Golden rules
+
+Do not touch the database schema. The web/API side owns it; everything you need already exists.
+The bill rate must never appear in any driver-facing mobile screen or API call. Only use the endpoints below — never query broker_job_billing from driver context.
+All broker data flows through the existing web API server (same one the web app uses). The companion API shares the same database.
+Priority 1 — Driver side (confirm/decline broker assignments):
+
+GET /api/jobs?driverId=... (via getJobsForDriver) already returns broker jobs with needsConfirmation: true, assignmentId, and assignmentSentAt when a sent broker assignment is pending. Held assignments never appear — don't work around that.
+Show a "Broker assignment — confirm?" block with thumbs up/down on those job cards.
+POST /api/assignments/:id/confirm and POST /api/assignments/:id/decline (driver-only; requires session + CSRF token from GET /api/csrf-token, header X-CSRF-Token).
+Roster invitations: drivers see them at GET /api/invitations/pending?type=broker_roster and accept with POST /api/invitations/:id/accept (send a JSON body, even {}).
+Priority 2 — Broker side (dashboard on mobile):
+
+Role selection: POST /api/auth/set-role with {"role":"broker"} (also accepts client_company).
+GET /api/broker/jobs — jobs with billing (billRate, billRateType, clientName, marginPerTruck) and assignmentStats (assigned/sent/held/confirmed/declined counts, trucksNeeded). Safe to show here — this is broker-only.
+GET /api/broker/roster and POST /api/broker/roster/invite {email, name}; clients: GET /api/broker/clients, POST /api/broker/clients/invite.
+Assigning: POST /api/broker/jobs/:jobId/assign {driverId, sendNow: boolean}, POST /api/broker/jobs/:jobId/send (per assignment: {assignmentId}), POST /api/broker/jobs/:jobId/send-all, and a withdraw endpoint for held assignments.
+Posting jobs: POST /api/jobs — for brokers include billRate, billRateType (flat_rate | per_hour | per_ton), and clientUserId or clientName/clientEmail; omit projectId. The server strips billing fields off the job row and forces private visibility.
+Confirmation chime preference persists via PUT /api/profile {confirmationSoundEnabled} — mirror the web toggle if you add live counts.
+Mirror the web app's visual language (see artifacts/loadlink/src/pages/BrokerDashboard.tsx for reference UX: tabs for Jobs/Roster/Clients, stats row, assign dialog with Send Now/Later).
+Auth notes: session cookie is secure: true; all mutating routes require the CSRF token; new accounts must accept the privacy policy (POST /api/auth/accept-privacy-policy {version:"1.0.0"}) before invitations work.
+
+One note on publishing: when you publish, the production database is migrated automatically (the new broker tables/columns get applied), so the web feature will work in production right away.

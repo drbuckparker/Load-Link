@@ -80,6 +80,7 @@ function RootLayoutNav() {
       <Stack.Screen name="review" options={{ headerShown: false, presentation: 'modal' }} />
       <Stack.Screen name="vehicle-jobs/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="invite" options={{ headerShown: false }} />
+      <Stack.Screen name="broker" options={{ headerShown: false }} />
     </Stack>
   );
 

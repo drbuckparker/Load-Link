@@ -53,6 +53,9 @@ export interface Job {
   returnDestinationAddress?: string;
   returnDestinationLat?: number;
   returnDestinationLng?: number;
+  needsConfirmation?: boolean;
+  assignmentId?: string;
+  assignmentSentAt?: string | null;
 }
 
 export interface Message {
@@ -170,4 +173,8 @@ export function timeAgo(dateString: string): string {
 
 export function isContractorRole(role: string): boolean {
   return (role?.includes('contractor') || role === 'trucking_company') ?? false;
+}
+
+export function isBrokerRole(role: string): boolean {
+  return role === 'broker';
 }

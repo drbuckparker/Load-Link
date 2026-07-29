@@ -38,6 +38,17 @@ interface DriverJob {
     licensePlate: string;
     truckType: string;
   } | null;
+  needsConfirmation?: boolean;
+}
+
+interface RosterInvitation {
+  id: string;
+  type?: string;
+  inviterName?: string;
+  inviter_name?: string;
+  brokerName?: string;
+  broker_name?: string;
+  email?: string;
 }
 
 interface Vehicle {
@@ -66,6 +77,38 @@ export default function MyJobsScreen() {
   const vehiclesQuery = useQuery<Vehicle[]>({
     queryKey: ['/api/vehicles'],
     enabled: !!user,
+  });
+
+  // Broker roster invitations pending for this driver. Dev-local demo
+  // sessions get a 400 from this proxy route, so swallow errors quietly.
+  const invitationsQuery = useQuery<RosterInvitation[]>({
+    queryKey: ['/api/invitations/pending', '?type=broker_roster'],
+    enabled: !!user,
+    retry: false,
+  });
+  const pendingInvites = Array.isArray(invitationsQuery.data) ? invitationsQuery.data : [];
+
+  const acceptInviteMutation = useMutation({
+    mutationFn: async (inviteId: string) => {
+      return apiRequest('POST', `/api/invitations/${inviteId}/accept`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/invitations/pending'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+  });
+
+  const brokerRespondMutation = useMutation({
+    mutationFn: async ({ assignmentId, action }: { assignmentId: string; action: 'confirm' | 'decline' }) => {
+      return apiRequest('POST', `/api/assignments/${assignmentId}/${action}`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
   });
 
   const assignVehicleMutation = useMutation({
@@ -193,6 +236,36 @@ export default function MyJobsScreen() {
           </View>
         ) : null}
 
+        {item.needsConfirmation && item.assignmentId ? (
+          <View style={styles.confirmBar} testID={`confirm-bar-${item.id}`}>
+            <Text style={styles.confirmBarText}>Broker assigned you — confirm?</Text>
+            <Pressable
+              testID={`decline-btn-${item.id}`}
+              disabled={brokerRespondMutation.isPending}
+              style={({ pressed }) => [styles.thumbBtn, styles.thumbBtnDecline, (pressed || brokerRespondMutation.isPending) && { opacity: 0.6 }]}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                brokerRespondMutation.mutate({ assignmentId: item.assignmentId, action: 'decline' });
+              }}
+            >
+              <Ionicons name="thumbs-down" size={18} color={Colors.destructive} />
+            </Pressable>
+            <Pressable
+              testID={`confirm-btn-${item.id}`}
+              disabled={brokerRespondMutation.isPending}
+              style={({ pressed }) => [styles.thumbBtn, styles.thumbBtnConfirm, (pressed || brokerRespondMutation.isPending) && { opacity: 0.6 }]}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                brokerRespondMutation.mutate({ assignmentId: item.assignmentId, action: 'confirm' });
+              }}
+            >
+              <Ionicons name="thumbs-up" size={18} color={Colors.primaryForeground} />
+            </Pressable>
+          </View>
+        ) : null}
+
         <View style={styles.truckSection}>
           {item.vehicle ? (
             <Pressable
@@ -240,6 +313,33 @@ export default function MyJobsScreen() {
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <Text style={styles.headerTitle}>MY JOBS</Text>
       </View>
+
+      {pendingInvites.length > 0 && (
+        <View style={styles.inviteBanner} testID="roster-invite-banner">
+          <Ionicons name="people" size={20} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.inviteBannerTitle}>ROSTER INVITE</Text>
+            <Text style={styles.inviteBannerText} numberOfLines={2}>
+              {(pendingInvites[0].inviterName || pendingInvites[0].inviter_name || pendingInvites[0].brokerName || pendingInvites[0].broker_name || 'A broker')} wants to add you to their driver roster.
+            </Text>
+          </View>
+          <Pressable
+            testID="roster-invite-accept"
+            disabled={acceptInviteMutation.isPending}
+            style={({ pressed }) => [styles.inviteAcceptBtn, (pressed || acceptInviteMutation.isPending) && { opacity: 0.7 }]}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              acceptInviteMutation.mutate(pendingInvites[0].id);
+            }}
+          >
+            {acceptInviteMutation.isPending ? (
+              <ActivityIndicator size="small" color={Colors.primaryForeground} />
+            ) : (
+              <Text style={styles.inviteAcceptText}>ACCEPT</Text>
+            )}
+          </Pressable>
+        </View>
+      )}
 
       <View style={styles.filterRow}>
         {(['upcoming', 'active', 'completed'] as Filter[]).map(f => (
@@ -417,6 +517,78 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: Colors.text,
     letterSpacing: 2,
+  },
+  confirmBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,153,0,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,153,0,0.35)',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 10,
+  },
+  confirmBarText: {
+    flex: 1,
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 12,
+    color: Colors.primary,
+    letterSpacing: 0.3,
+  },
+  thumbBtn: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+  },
+  thumbBtnDecline: {
+    backgroundColor: 'rgba(239,68,68,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.4)',
+  },
+  thumbBtnConfirm: {
+    backgroundColor: Colors.primary,
+  },
+  inviteBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(255,153,0,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,153,0,0.35)',
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  inviteBannerTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 12,
+    color: Colors.primary,
+    letterSpacing: 0.5,
+  },
+  inviteBannerText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  inviteAcceptBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteAcceptText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 12,
+    color: Colors.primaryForeground,
+    letterSpacing: 0.5,
   },
   filterRow: {
     flexDirection: 'row',

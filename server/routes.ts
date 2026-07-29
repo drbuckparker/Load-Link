@@ -1309,7 +1309,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       query += ` ORDER BY j.scheduled_date ASC NULLS LAST, j.created_at DESC`;
 
       const result = await pool.query(query, params);
-      return res.json(result.rows.map(addDualKeys));
+      const rows = result.rows.map(addDualKeys);
+
+      // Broker confirm/decline: flag jobs where the caller has a SENT, still-
+      // pending broker assignment awaiting their thumbs up/down. Held
+      // (sent_at NULL) assignments never reach this list — the visibility
+      // predicate above already excludes those jobs entirely.
+      try {
+        const pend = await pool.query(
+          `SELECT ja.id, ja.job_id, ja.sent_at
+           FROM job_assignments ja
+           JOIN jobs bj ON bj.id = ja.job_id
+           JOIN users bu ON bu.id::text = bj.contractor_id::text AND bu.role::text = 'broker'
+           WHERE ja.driver_id::text = $1
+             AND ja.status::text = 'pending'
+             AND ja.sent_at IS NOT NULL`,
+          [auth.userId]
+        );
+        if (pend.rows.length > 0) {
+          const byJob = new Map(pend.rows.map((r: any) => [String(r.job_id), r]));
+          for (const row of rows) {
+            const m = byJob.get(String(row.id));
+            if (m) {
+              row.needsConfirmation = true;
+              row.needs_confirmation = true;
+              row.assignmentId = m.id;
+              row.assignment_id = m.id;
+              row.assignmentSentAt = m.sent_at;
+              row.assignment_sent_at = m.sent_at;
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error("GET /api/jobs broker-confirm annotate error:", e.message);
+      }
+
+      return res.json(rows);
     } catch (e: any) {
       console.error("GET /api/jobs local error:", e.message);
       return res.json([]);
@@ -1408,10 +1443,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
         let hasAssignment = false;
         if (!isParticipant) {
+          // Broker "send-later" rule: a HELD assignment (sent_at NULL) on a
+          // broker-posted job grants NO visibility until the broker sends it.
           const aCheck = await pool.query(
-            `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
-             AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
-            [req.params.id, auth.userId]
+            `SELECT 1 FROM job_assignments ja WHERE ja.job_id = $1 AND ja.driver_id = $2
+             AND ja.status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired')
+             AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
+               SELECT 1 FROM users _bu WHERE _bu.id::text = $3 AND _bu.role::text = 'broker'))
+             LIMIT 1`,
+            [req.params.id, auth.userId, String(job.contractor_id)]
           );
           hasAssignment = aCheck.rows.length > 0;
         }
@@ -1495,6 +1535,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
           delete job.contractor_phone;
           delete job.contractor_email;
         }
+
+        // Broker jobs: non-poster viewers must never see HELD (unsent)
+        // assignments in the roster list, and a driver with their own SENT,
+        // still-pending assignment gets the confirm/decline flags.
+        try {
+          const brokerCheck = await pool.query(
+            `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'broker' LIMIT 1`,
+            [String(job.contractor_id)]
+          );
+          if (brokerCheck.rows.length > 0) {
+            if (String(job.contractor_id) !== auth.userId && Array.isArray(job.assignments)) {
+              job.assignments = job.assignments.filter((a: any) => a.sent_at || a.sentAt);
+            }
+            const mine = await pool.query(
+              `SELECT id, sent_at FROM job_assignments
+               WHERE job_id = $1 AND driver_id::text = $2
+                 AND status::text = 'pending' AND sent_at IS NOT NULL LIMIT 1`,
+              [req.params.id, auth.userId]
+            );
+            if (mine.rows.length > 0) {
+              job.needsConfirmation = true;
+              job.needs_confirmation = true;
+              job.assignmentId = mine.rows[0].id;
+              job.assignment_id = mine.rows[0].id;
+              job.assignmentSentAt = mine.rows[0].sent_at;
+              job.assignment_sent_at = mine.rows[0].sent_at;
+            }
+          }
+        } catch (e: any) {
+          console.error("GET /api/jobs/:id broker annotate error:", e.message);
+        }
+
         return res.json(addDualKeys(job));
       }
       return res.status(404).json({ message: "Job not found" });
@@ -1507,6 +1579,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+
+      // Broker job posting goes through the website API: the website owns the
+      // billing split (it strips billRate/billRateType/client* off the job row,
+      // writes broker_job_billing, and forces private visibility). The job
+      // lands in the shared DB via the website's write, so it shows up locally
+      // without any insert here. Never write billing fields into jobs locally.
+      const posterRole = String(auth.originalRole || auth.user?.role || "");
+      if (posterRole === "broker") {
+        if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+          return res.status(400).json({ message: "Broker job posting requires a live website account." });
+        }
+        const r = await websiteFetch("/api/jobs", { method: "POST", body: req.body, jwt: auth.jwt });
+        const text = await r.text();
+        let data: any; try { data = JSON.parse(text); } catch { data = { message: text }; }
+        return res.status(r.status).json(addDualKeys(data));
+      }
+
       const id = crypto.randomUUID();
       const body = { ...req.body, id, contractor_id: auth.userId, status: 'open', created_at: new Date().toISOString() };
 
@@ -1570,6 +1659,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "Failed to create job" });
     }
   });
+
+  // ---------------------------------------------------------------------
+  // Broker feature (Task #26): these operations proxy straight to the
+  // website API — it owns confirm/decline state, roster invitations, and
+  // the pay-rate/bill-rate split (broker_job_billing never gets queried
+  // from driver context here). Auth: user's website JWT + X-API-Key
+  // (verified: the website accepts Bearer auth on these routes and does
+  // not require the cookie-session CSRF token on the API-key path).
+  // A 401 passes through so the app's silent re-login retry kicks in.
+  // ---------------------------------------------------------------------
+  async function proxyToWebsite(req: Request, res: Response) {
+    const auth = getWebsiteAuth(req)!;
+    if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+      return res.status(400).json({ message: "This feature requires a live website account." });
+    }
+    try {
+      const r = await websiteFetch(req.originalUrl, {
+        method: req.method,
+        body: req.method === "GET" || req.method === "HEAD" ? undefined : (req.body ?? {}),
+        jwt: auth.jwt,
+      });
+      const text = await r.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { data = { message: text }; }
+      return res.status(r.status).json(addDualKeys(data));
+    } catch (e: any) {
+      console.error(`[WebsiteProxy] ${req.method} ${req.originalUrl} error:`, e.message);
+      return res.status(502).json({ message: "Website request failed" });
+    }
+  }
+
+  // Broker dashboard data + actions (broker-only enforcement is upstream).
+  app.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
+  // Driver thumbs up/down on a sent broker assignment.
+  app.post("/api/assignments/:id/confirm", requireAuth, proxyToWebsite);
+  app.post("/api/assignments/:id/decline", requireAuth, proxyToWebsite);
+  // Broker roster / client-company invitations.
+  app.get("/api/invitations/pending", requireAuth, proxyToWebsite);
+  app.post("/api/invitations/:id/accept", requireAuth, proxyToWebsite);
 
   app.put("/api/jobs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -2937,6 +3065,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       "alsoDriver", "also_driver",
       "notificationPreferences", "notification_preferences",
       "expoPushToken", "expo_push_token",
+      "confirmationSoundEnabled", "confirmation_sound_enabled",
     ]);
 
     const safeBody: Record<string, any> = {};
@@ -4039,14 +4168,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/driver/jobs", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
+      // Held broker assignments (sent_at IS NULL on a broker-posted job) are
+      // invisible to the truck until the broker sends them. Driver-created
+      // applications also have sent_at NULL, so the broker check is required.
       const result = await pool.query(
         `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
-         WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+         WHERE (j.driver_id = $1 OR j.id IN (
+           SELECT ja.job_id FROM job_assignments ja
+           WHERE ja.driver_id = $1
+             AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
+               SELECT 1 FROM users bu
+               WHERE bu.id::text = j.contractor_id::text AND bu.role::text = 'broker'))))
          AND j.archived_at IS NULL
          ORDER BY j.created_at DESC`,
         [auth.userId]
       );
-      return res.json(result.rows.map(addDualKeys));
+      const rows = result.rows.map(addDualKeys);
+      // Flag jobs with a SENT, still-pending broker assignment awaiting the
+      // driver's confirm/decline so the My Jobs list can render the prompt.
+      try {
+        const pend = await pool.query(
+          `SELECT ja.id, ja.job_id, ja.sent_at
+           FROM job_assignments ja
+           JOIN jobs bj ON bj.id = ja.job_id
+           JOIN users bu ON bu.id::text = bj.contractor_id::text AND bu.role::text = 'broker'
+           WHERE ja.driver_id::text = $1
+             AND ja.status::text = 'pending'
+             AND ja.sent_at IS NOT NULL`,
+          [auth.userId]
+        );
+        const byJob = new Map(pend.rows.map((r: any) => [String(r.job_id), r]));
+        for (const row of rows) {
+          const m = byJob.get(String(row.id));
+          if (m) {
+            row.needsConfirmation = true;
+            row.needs_confirmation = true;
+            row.assignmentId = m.id;
+            row.assignment_id = m.id;
+            row.assignmentSentAt = m.sent_at;
+            row.assignment_sent_at = m.sent_at;
+          }
+        }
+      } catch (e: any) {
+        console.error("GET /api/driver/jobs broker annotate error:", e.message);
+      }
+      return res.json(rows);
     } catch {
       return res.json([]);
     }

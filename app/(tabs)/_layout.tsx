@@ -34,7 +34,7 @@ function getNativeTabsModule() {
 }
 
 function isContractorRole(role: string): boolean {
-  return role.includes('contractor') || role === 'trucking_company';
+  return role.includes('contractor') || role === 'trucking_company' || role === 'broker';
 }
 
 function useUnreadCount() {
