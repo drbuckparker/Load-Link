@@ -96,7 +96,7 @@ function getMaterialWeightPerYard(mat: string): number {
 export default function CreateJobScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const routeParams = useLocalSearchParams<{ projectId?: string }>();
+  const routeParams = useLocalSearchParams<{ projectId?: string; clientName?: string; clientEmail?: string }>();
   const [submitting, setSubmitting] = useState(false);
 
   const [projectId, setProjectId] = useState(routeParams.projectId || '');
@@ -149,8 +149,8 @@ export default function CreateJobScreen() {
   const isBroker = user?.role === 'broker';
   const [billRate, setBillRate] = useState('');
   const [billRateType, setBillRateType] = useState('per_hour');
-  const [clientName, setClientName] = useState('');
-  const [clientEmail, setClientEmail] = useState('');
+  const [clientName, setClientName] = useState(typeof routeParams.clientName === 'string' ? routeParams.clientName : '');
+  const [clientEmail, setClientEmail] = useState(typeof routeParams.clientEmail === 'string' ? routeParams.clientEmail : '');
   const [trucksNeeded, setTrucksNeeded] = useState(1);
   const [estimatedTrips, setEstimatedTrips] = useState('');
   const [totalTonsNeeded, setTotalTonsNeeded] = useState('');
@@ -1190,14 +1190,21 @@ export default function CreateJobScreen() {
         body.capacityNeeded = capLabel;
       }
 
-      await apiRequest('POST', '/api/jobs', body);
+      const createRes = await apiRequest('POST', '/api/jobs', body);
+      let createdJobId: string | undefined;
+      try {
+        const created = await createRes.json();
+        createdJobId = created?.id || created?.job?.id;
+      } catch { /* non-JSON response; skip assign redirect */ }
 
       queryClient.invalidateQueries({ predicate: (query) => {
         const key = query.queryKey.join('');
-        return key.includes('/api/jobs') || key.includes('/api/contractor/jobs');
+        return key.includes('/api/jobs') || key.includes('/api/contractor/jobs') || key.includes('/api/broker/');
       }});
 
-      if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
+      if (isBroker && createdJobId) {
+        router.replace({ pathname: '/broker', params: { assign: createdJobId, tab: 'jobs' } } as any);
+      } else if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create job.');
     } finally {

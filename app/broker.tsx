@@ -7,13 +7,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest, queryClient } from '@/lib/query-client';
 import { playNotificationSound } from '@/lib/sounds';
 
-type BrokerTab = 'jobs' | 'roster' | 'clients';
+type BrokerTab = 'today' | 'clients' | 'jobs' | 'roster';
 
 interface AssignmentStats {
   assigned?: number;
@@ -40,6 +40,10 @@ interface BrokerJob {
   billRateType?: string;
   clientName?: string;
   client_name?: string;
+  clientEmail?: string;
+  client_email?: string;
+  clientUserId?: string;
+  client_user_id?: string;
   marginPerTruck?: string | number;
   assignmentStats?: AssignmentStats;
   assignments?: {
@@ -67,7 +71,9 @@ interface RosterDriver {
 }
 
 interface BrokerClient {
-  id: string;
+  id?: string;
+  invitationId?: string;
+  invitation_id?: string;
   name?: string;
   clientName?: string;
   client_name?: string;
@@ -75,6 +81,44 @@ interface BrokerClient {
   company_name?: string;
   email?: string;
   status?: string;
+  clientUserId?: string;
+  client_user_id?: string;
+  createdAt?: string;
+  created_at?: string;
+  activeJobsCount?: number;
+  active_jobs_count?: number;
+  unpaidInvoiceCount?: number;
+  unpaid_invoice_count?: number;
+  unpaidInvoiceTotal?: string | number;
+  unpaid_invoice_total?: string | number;
+}
+
+function clientKey(c: BrokerClient): string {
+  return c.invitationId || c.invitation_id || c.id || c.email || '';
+}
+
+function clientDisplayName(c: BrokerClient): string {
+  return c.name || c.clientName || c.client_name || c.companyName || c.company_name || c.email || 'Client';
+}
+
+function jobMatchesClient(j: BrokerJob, c: BrokerClient): boolean {
+  // Prefer stable identifiers, then email, then normalized name as last resort.
+  const jobUserId = j.clientUserId || j.client_user_id;
+  const clientUserId = c.clientUserId || c.client_user_id;
+  if (jobUserId && clientUserId) return jobUserId === clientUserId;
+  const jobEmail = (j.clientEmail || j.client_email || '').trim().toLowerCase();
+  const clientEmail = (c.email || '').trim().toLowerCase();
+  if (jobEmail && clientEmail) return jobEmail === clientEmail;
+  const jobName = (j.clientName || j.client_name || '').trim().toLowerCase();
+  const clientName = clientDisplayName(c).trim().toLowerCase();
+  return !!jobName && !!clientName && jobName === clientName;
+}
+
+function isTodayDate(d?: string): boolean {
+  if (!d) return false;
+  const dt = new Date(d.includes('T') ? d : `${d}T12:00:00`);
+  const now = new Date();
+  return dt.getFullYear() === now.getFullYear() && dt.getMonth() === now.getMonth() && dt.getDate() === now.getDate();
 }
 
 function fmt(n: string | number | undefined | null): string {
@@ -91,8 +135,13 @@ export default function BrokerDashboardScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, updateUser } = useAuth();
-  const [tab, setTab] = useState<BrokerTab>('jobs');
+  const params = useLocalSearchParams<{ assign?: string; tab?: string }>();
+  const [tab, setTab] = useState<BrokerTab>(
+    params.tab === 'today' || params.tab === 'jobs' || params.tab === 'roster' ? (params.tab as BrokerTab) : 'clients'
+  );
+  const [clientFilter, setClientFilter] = useState<BrokerClient | null>(null);
   const [assignJob, setAssignJob] = useState<BrokerJob | null>(null);
+  const handledAssignRef = useRef<string | null>(null);
   const [inviteVisible, setInviteVisible] = useState<'roster' | 'clients' | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
@@ -115,8 +164,21 @@ export default function BrokerDashboardScreen() {
   });
 
   const jobs = Array.isArray(jobsQuery.data) ? jobsQuery.data : [];
+  const todayJobs = jobs.filter(j => isTodayDate(j.scheduledDate || j.scheduled_date));
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
+
+  useEffect(() => {
+    const assignId = typeof params.assign === 'string' ? params.assign : undefined;
+    if (!assignId || handledAssignRef.current === assignId) return;
+    const job = jobs.find(j => j.id === assignId);
+    if (job) {
+      handledAssignRef.current = assignId;
+      setTab('jobs');
+      setAssignJob(job);
+      router.setParams({ assign: undefined } as any);
+    }
+  }, [params.assign, jobs]);
 
   const totalConfirmed = jobs.reduce((sum, j) => sum + (j.assignmentStats?.confirmed || 0), 0);
   useEffect(() => {
@@ -231,8 +293,8 @@ export default function BrokerDashboardScreen() {
 
         <View style={styles.statsRow}>
           <Text style={styles.statChip}>Assigned {stats.assigned ?? 0}/{stats.trucksNeeded ?? '—'}</Text>
-          <Text style={styles.statChip}>Sent {stats.sent ?? 0}</Text>
-          {held > 0 ? <Text style={[styles.statChip, { color: Colors.warning }]}>Held {held}</Text> : null}
+          {(stats.sent ?? 0) > 0 ? <Text style={[styles.statChip, { color: Colors.warning }]}>Awaiting {stats.sent}</Text> : <Text style={styles.statChip}>Sent 0</Text>}
+          {held > 0 ? <Text style={[styles.statChip, { color: Colors.info }]}>Held {held}</Text> : null}
           <Text style={[styles.statChip, { color: Colors.success }]}>Confirmed {stats.confirmed ?? 0}</Text>
           {(stats.declined ?? 0) > 0 ? <Text style={[styles.statChip, { color: Colors.destructive }]}>Declined {stats.declined}</Text> : null}
         </View>
@@ -241,7 +303,7 @@ export default function BrokerDashboardScreen() {
           <View style={{ gap: 6, marginTop: 8 }}>
             {heldAssignments.map(a => (
               <View key={a.id} style={styles.heldRow}>
-                <Ionicons name="pause-circle-outline" size={16} color={Colors.warning} />
+                <Ionicons name="pause-circle-outline" size={16} color={Colors.info} />
                 <Text style={styles.heldName} numberOfLines={1}>{a.driverName || a.driver_name || 'Driver'}</Text>
                 <Pressable
                   testID={`send-assignment-${a.id}`}
@@ -304,6 +366,62 @@ export default function BrokerDashboardScreen() {
     );
   }
 
+  function renderClientCard(c: BrokerClient) {
+    const name = clientDisplayName(c);
+    const activeJobs = c.activeJobsCount ?? c.active_jobs_count ?? 0;
+    const unpaidCount = c.unpaidInvoiceCount ?? c.unpaid_invoice_count ?? 0;
+    const unpaidTotal = Number(c.unpaidInvoiceTotal ?? c.unpaid_invoice_total ?? 0);
+    const status = (c.status || '').toLowerCase();
+    const key = clientKey(c);
+    return (
+      <View key={key} style={styles.clientCard} testID={`client-card-${key}`}>
+        <View style={styles.clientHeader}>
+          <View style={styles.personAvatar}>
+            <Ionicons name="business" size={18} color={Colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.personName} numberOfLines={1}>{name}</Text>
+            {c.email ? <Text style={styles.personEmail} numberOfLines={1}>{c.email}</Text> : null}
+          </View>
+          <Text style={[styles.personStatus, status === 'pending' && { color: Colors.warning }]}>
+            {status ? status.toUpperCase() : ''}
+          </Text>
+        </View>
+
+        <View style={styles.clientBadgeRow}>
+          <Pressable
+            testID={`client-jobs-badge-${key}`}
+            style={({ pressed }) => [styles.clientBadge, activeJobs > 0 && styles.clientBadgeActive, pressed && { opacity: 0.7 }]}
+            onPress={() => { haptic(); setClientFilter(c); setTab('jobs'); }}
+          >
+            <Ionicons name="briefcase-outline" size={13} color={activeJobs > 0 ? Colors.primary : Colors.textMuted} />
+            <Text style={[styles.clientBadgeText, activeJobs > 0 && { color: Colors.primary }]}>
+              {activeJobs} active job{activeJobs === 1 ? '' : 's'}
+            </Text>
+          </Pressable>
+          <View style={[styles.clientBadge, unpaidCount > 0 && styles.clientBadgeUnpaid]}>
+            <Ionicons name="cash-outline" size={13} color={unpaidCount > 0 ? Colors.warning : Colors.textMuted} />
+            <Text style={[styles.clientBadgeText, unpaidCount > 0 && { color: Colors.warning }]}>
+              {unpaidCount > 0 ? `${unpaidCount} unpaid · $${unpaidTotal.toFixed(2)}` : 'No unpaid invoices'}
+            </Text>
+          </View>
+        </View>
+
+        <Pressable
+          testID={`client-post-job-${key}`}
+          style={({ pressed }) => [styles.postJobBtn, { marginTop: 10 }, pressed && { opacity: 0.8 }]}
+          onPress={() => {
+            haptic(Haptics.ImpactFeedbackStyle.Medium);
+            router.push({ pathname: '/create-job', params: { clientName: name, clientEmail: c.email || '' } } as any);
+          }}
+        >
+          <Ionicons name="add-circle-outline" size={16} color={Colors.primaryForeground} />
+          <Text style={styles.postJobBtnText}>POST JOB</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   const assignedDriverIds = new Set(
     (assignJob?.assignments || [])
       .filter(a => a.status !== 'declined' && a.status !== 'withdrawn')
@@ -329,23 +447,26 @@ export default function BrokerDashboardScreen() {
       </View>
 
       <View style={styles.tabRow}>
-        {(['jobs', 'roster', 'clients'] as BrokerTab[]).map(t => (
+        {(['today', 'clients', 'jobs', 'roster'] as BrokerTab[]).map(t => (
           <Pressable
             key={t}
             testID={`broker-tab-${t}`}
             style={[styles.tabChip, tab === t && styles.tabChipActive]}
-            onPress={() => { haptic(); setTab(t); }}
+            onPress={() => { haptic(); if (t !== 'jobs') setClientFilter(null); setTab(t); }}
           >
-            <Text style={[styles.tabChipText, tab === t && styles.tabChipTextActive]}>
-              {t === 'jobs' ? `Jobs (${jobs.length})` : t === 'roster' ? `Roster (${roster.length})` : `Clients (${clients.length})`}
+            <Text style={[styles.tabChipText, tab === t && styles.tabChipTextActive]} numberOfLines={1}>
+              {t === 'today' ? `Today (${todayJobs.length})`
+                : t === 'clients' ? `Clients (${clients.length})`
+                : t === 'jobs' ? `Jobs (${jobs.length})`
+                : `Roster (${roster.length})`}
             </Text>
           </Pressable>
         ))}
       </View>
 
-      {tab === 'jobs' && (
+      {(tab === 'jobs' || tab === 'today') && (
         <FlatList
-          data={jobs}
+          data={tab === 'today' ? todayJobs : (clientFilter ? jobs.filter(j => jobMatchesClient(j, clientFilter)) : jobs)}
           renderItem={renderJob}
           keyExtractor={item => item.id}
           contentContainerStyle={[styles.listContent, { paddingBottom: Platform.OS === 'web' ? 60 : insets.bottom + 24 }]}
@@ -357,26 +478,43 @@ export default function BrokerDashboardScreen() {
               <View style={styles.emptyState}><ActivityIndicator size="large" color={Colors.primary} /></View>
             ) : (
               <View style={styles.emptyState}>
-                <Ionicons name="briefcase-outline" size={40} color={Colors.textMuted} />
-                <Text style={styles.emptyText}>No broker jobs yet</Text>
-                <Pressable style={styles.postJobBtn} onPress={() => router.push('/create-job' as any)} testID="broker-post-job-btn">
-                  <Text style={styles.postJobBtnText}>POST A JOB</Text>
-                </Pressable>
+                <Ionicons name={tab === 'today' ? 'sunny-outline' : 'briefcase-outline'} size={40} color={Colors.textMuted} />
+                <Text style={styles.emptyText}>
+                  {tab === 'today' ? 'No jobs scheduled for today'
+                    : clientFilter ? `No jobs for ${clientDisplayName(clientFilter)}`
+                    : 'No broker jobs yet'}
+                </Text>
+                {tab === 'jobs' && (
+                  <Pressable style={styles.postJobBtn} onPress={() => router.push('/create-job' as any)} testID="broker-post-job-btn">
+                    <Text style={styles.postJobBtnText}>POST A JOB</Text>
+                  </Pressable>
+                )}
               </View>
             )
           }
           ListHeaderComponent={
-            jobs.length > 0 ? (
-              <Pressable style={[styles.postJobBtn, { marginBottom: 12, alignSelf: 'stretch' }]} onPress={() => router.push('/create-job' as any)} testID="broker-post-job-btn-top">
-                <Ionicons name="add-circle-outline" size={18} color={Colors.primaryForeground} />
-                <Text style={styles.postJobBtnText}>POST A JOB</Text>
-              </Pressable>
-            ) : null
+            <>
+              {tab === 'jobs' && clientFilter ? (
+                <View style={styles.filterBanner}>
+                  <Ionicons name="funnel-outline" size={14} color={Colors.primary} />
+                  <Text style={styles.filterBannerText} numberOfLines={1}>Jobs for {clientDisplayName(clientFilter)}</Text>
+                  <Pressable onPress={() => { haptic(); setClientFilter(null); }} testID="clear-client-filter" style={styles.filterClearBtn}>
+                    <Ionicons name="close-circle" size={18} color={Colors.textSecondary} />
+                  </Pressable>
+                </View>
+              ) : null}
+              {tab === 'jobs' && jobs.length > 0 ? (
+                <Pressable style={[styles.postJobBtn, { marginBottom: 12, alignSelf: 'stretch' }]} onPress={() => router.push('/create-job' as any)} testID="broker-post-job-btn-top">
+                  <Ionicons name="add-circle-outline" size={18} color={Colors.primaryForeground} />
+                  <Text style={styles.postJobBtnText}>POST A JOB</Text>
+                </Pressable>
+              ) : null}
+            </>
           }
         />
       )}
 
-      {tab !== 'jobs' && (
+      {(tab === 'roster' || tab === 'clients') && (
         <ScrollView contentContainerStyle={[styles.listContent, { paddingBottom: Platform.OS === 'web' ? 60 : insets.bottom + 24 }]} showsVerticalScrollIndicator={false}>
           <Pressable
             style={styles.postJobBtn}
@@ -401,15 +539,18 @@ export default function BrokerDashboardScreen() {
           )}
           {tab === 'clients' && (
             clientsQuery.isLoading ? <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 40 }} /> :
+            clientsQuery.isError ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="alert-circle-outline" size={40} color={Colors.destructive} />
+                <Text style={styles.emptyText}>Couldn't load clients. Pull to retry or check your connection.</Text>
+              </View>
+            ) :
             clients.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="business-outline" size={40} color={Colors.textMuted} />
-                <Text style={styles.emptyText}>No client companies yet</Text>
+                <Text style={styles.emptyText}>No client companies yet. Invite your first client to get started.</Text>
               </View>
-            ) : clients.map(c => renderPersonRow(
-              c.name || c.clientName || c.client_name || c.companyName || c.company_name || c.email || 'Client',
-              c.email, c.status, c.id
-            ))
+            ) : clients.map(c => renderClientCard(c))
           )}
         </ScrollView>
       )}
@@ -568,8 +709,8 @@ const styles = StyleSheet.create({
   statChip: { fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.textSecondary },
   heldRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: 'rgba(255,183,0,0.06)', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10,
-    borderWidth: 1, borderColor: 'rgba(255,183,0,0.25)',
+    backgroundColor: 'rgba(59,130,246,0.06)', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10,
+    borderWidth: 1, borderColor: 'rgba(59,130,246,0.25)',
   },
   heldName: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
   smallBtn: {
@@ -593,6 +734,27 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Colors.primary, borderRadius: 10, minHeight: 44,
   },
   sendAllBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primary, letterSpacing: 0.5 },
+  clientCard: {
+    backgroundColor: Colors.card, borderRadius: 14, padding: 14, marginBottom: 10,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  clientHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  clientBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  clientBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  clientBadgeActive: { borderColor: 'rgba(255,153,0,0.4)', backgroundColor: 'rgba(255,153,0,0.08)' },
+  clientBadgeUnpaid: { borderColor: 'rgba(245,158,11,0.4)', backgroundColor: 'rgba(245,158,11,0.08)' },
+  clientBadgeText: { fontFamily: 'Inter_600SemiBold', fontSize: 12, color: Colors.textMuted },
+  filterBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10,
+    backgroundColor: 'rgba(255,153,0,0.08)', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+    borderWidth: 1, borderColor: 'rgba(255,153,0,0.3)',
+  },
+  filterBannerText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.text },
+  filterClearBtn: { minWidth: 32, minHeight: 32, alignItems: 'center', justifyContent: 'center' },
   personRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: Colors.card, borderRadius: 12, padding: 12, marginBottom: 8,

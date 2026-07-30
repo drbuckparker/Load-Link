@@ -1,0 +1,27 @@
+Title: Bring the clients-first broker workflow to the mobile app
+
+Background: The web broker dashboard (artifacts/loadlink/src/pages/BrokerDashboard.tsx) was reworked to be clients-first. Mobile already has broker job/roster management and the Today dispatch board (task #36) — this ports the remaining pieces. All backend endpoints exist already; no backend changes needed.
+
+1. Clients as the broker's front door
+
+Make a Clients screen the broker's default landing view (tab order like web: Today · Clients · Jobs · Roster).
+Data: GET /api/broker/clients — each entry: { invitationId, status ("pending"|"registered"), email, name, clientUserId, createdAt, activeJobsCount, unpaidInvoiceCount, unpaidInvoiceTotal }
+Each client card shows: name + email, pending/registered status, an active-jobs badge (tap → that client's jobs), an unpaid-invoices badge (orange with count + $ total when > 0, otherwise muted "No unpaid invoices"), and a prominent Post Job button.
+Keep the existing invite action (POST /api/broker/clients/invite with { email, name }).
+2. Post-job flow starts from the client
+
+"Post Job" opens the posting form with that client preselected (prefill clientName/clientEmail from the invitation entry).
+On successful post (POST /api/jobs with clientName/clientEmail + billRate/billRateType), immediately open the Assign Trucks screen for the new job — don't drop the broker back on a list. Reuse the existing mobile assign flow (GET /api/broker/jobs/:id/assignments, POST .../assign with sendNow flag, send / send-all / withdraw endpoints).
+After posting, refetch broker jobs, clients, and dispatch queries.
+3. Consistency + hard rules
+
+Use the same status colors as the dispatch board: green = confirmed, yellow = awaiting (sent, no reply), blue = held (not sent), red = declined.
+Critical invariants: bill rate must NEVER appear on any driver/fleet-facing screen (broker-only data), and held (unsent) assignments must never be visible to trucks.
+Done looks like: a broker on mobile lands on their client list, sees per-client job/invoice stats, taps "Post Job" on a client, fills details, and goes straight into assigning trucks — matching the web flow end-to-end. Errors surface visibly; loading states shown.
+
+Reference files:
+
+artifacts/loadlink/src/pages/BrokerDashboard.tsx — Clients tab cards, tab order, ?assign= flow
+artifacts/loadlink/src/pages/PostLoad.tsx — ?client= preselect, post→assign redirect
+artifacts/api-server/src/routes/routes.ts — broker endpoints (~line 6481 onward)
+artifacts/loadlink-mobile/ — existing broker screens to extend
