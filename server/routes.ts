@@ -3143,7 +3143,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // the three. This is how a user fixes a role they picked wrong at sign-up.
     // Driver/foreman are invite-only and linked to a parent account, so they are
     // NEVER a valid switch target here — they're only reachable via invitation.
-    const SELF_SERVE_COMPANY_ROLES = ["trucking_company", "contractor", "trucking_company_contractor"];
+    const SELF_SERVE_COMPANY_ROLES = ["trucking_company", "contractor", "trucking_company_contractor", "broker"];
     const permitted = new Set<string>(entitlementRoles);
     if (SELF_SERVE_COMPANY_ROLES.includes(String(baseRole))) {
       SELF_SERVE_COMPANY_ROLES.forEach((r) => permitted.add(r));

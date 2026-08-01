@@ -27,7 +27,7 @@ function getAccountRoleKey(user: any): string {
   return ROLES.some(r => r.key === accountRole) ? accountRole : (user?.role || '');
 }
 
-const SELF_SERVE_COMPANY_ROLES = ['trucking_company', 'contractor', 'trucking_company_contractor'];
+const SELF_SERVE_COMPANY_ROLES = ['trucking_company', 'contractor', 'trucking_company_contractor', 'broker'];
 
 // Which role cards this account may select on the Role screen. Mirrors the
 // server permission in PUT /api/profile/role: a self-serve company account can
@@ -63,6 +63,7 @@ const ROLES = [
   { key: 'trucking_company_contractor', label: 'TRUCKING COMPANY + CONTRACTOR', desc: 'Manage fleet and post loads', icon: 'business', color: '#8b5cf6' },
   { key: 'trucking_company', label: 'TRUCKING COMPANY', desc: 'Manage fleet and assign loads', icon: 'people', color: '#f97316' },
   { key: 'contractor', label: 'CONTRACTOR', desc: 'Post loads and manage drivers', icon: 'construct', color: '#eab308' },
+  { key: 'broker', label: 'BROKER', desc: 'Manage clients and dispatch trucks', icon: 'swap-horizontal', color: '#3b82f6' },
   { key: 'driver', label: 'DRIVER', desc: 'Haul loads and earn money', icon: 'car', color: '#22c55e' },
   { key: 'foreman', label: 'FOREMAN', desc: 'Manage loads for a company', icon: 'clipboard', color: '#f59e0b' },
 ];
@@ -77,6 +78,7 @@ function formatRoleLabel(role: string): string {
     driver_contractor: 'DRIVER/CONTRACTOR',
     driver_trucking_company: 'DRIVER/TRUCKING COMPANY',
     foreman: 'FOREMAN',
+    broker: 'BROKER',
   };
   return map[role] || role.replace(/_/g, ' ').toUpperCase();
 }
