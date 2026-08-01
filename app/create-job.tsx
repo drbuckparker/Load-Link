@@ -151,6 +151,8 @@ export default function CreateJobScreen() {
   const [billRateType, setBillRateType] = useState('per_hour');
   const [clientName, setClientName] = useState(typeof routeParams.clientName === 'string' ? routeParams.clientName : '');
   const [clientEmail, setClientEmail] = useState(typeof routeParams.clientEmail === 'string' ? routeParams.clientEmail : '');
+  const [clientUserId, setClientUserId] = useState('');
+  const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [trucksNeeded, setTrucksNeeded] = useState(1);
   const [estimatedTrips, setEstimatedTrips] = useState('');
   const [totalTonsNeeded, setTotalTonsNeeded] = useState('');
@@ -221,8 +223,60 @@ export default function CreateJobScreen() {
 
   const { data: _projects } = useQuery<any[]>({
     queryKey: ['/api/projects'],
+    enabled: !isBroker,
   });
-  const projects = _projects || [];
+  const { data: _brokerClients } = useQuery<any[]>({
+    queryKey: ['/api/broker/clients'],
+    enabled: isBroker,
+  });
+  const brokerClients = Array.isArray(_brokerClients) ? _brokerClients : [];
+  const { data: _clientProjects } = useQuery<any[]>({
+    queryKey: [`/api/broker/client-projects?clientUserId=${encodeURIComponent(clientUserId)}`],
+    enabled: isBroker && !!clientUserId,
+  });
+  // Brokers pick from the selected client's projects; everyone else uses their own.
+  const projects = isBroker ? (Array.isArray(_clientProjects) ? _clientProjects : []) : (_projects || []);
+
+  // If we arrived with a prefilled client (Post Job from a client card), link it
+  // to the full client entry once the list loads so their projects show up.
+  useEffect(() => {
+    if (!isBroker || clientUserId || brokerClients.length === 0) return;
+    const pe = clientEmail.trim().toLowerCase();
+    const pn = clientName.trim().toLowerCase();
+    if (!pe && !pn) return;
+    const match = brokerClients.find((c: any) => {
+      const ce = (c.email || '').trim().toLowerCase();
+      const cn = (c.name || c.client_name || c.clientName || '').trim().toLowerCase();
+      return (pe && ce && ce === pe) || (!pe && pn && cn && cn === pn);
+    });
+    if (match) {
+      setClientUserId(String(match.clientUserId || match.client_user_id || ''));
+      if (!clientName.trim()) setClientName(match.name || match.email || '');
+      if (!clientEmail.trim() && match.email) setClientEmail(match.email);
+    }
+  }, [isBroker, brokerClients]);
+
+  // The client identity a broker submit will be attributed to: must resolve to
+  // an entry in their actual client list (registered OR pending invite), never
+  // just a free-typed/prefilled name. Matched by email first, then name.
+  const brokerClientMatch = isBroker ? brokerClients.find((c: any) => {
+    const ce = (c.email || '').trim().toLowerCase();
+    const cn = (c.name || c.client_name || c.clientName || '').trim().toLowerCase();
+    const pe = clientEmail.trim().toLowerCase();
+    const pn = clientName.trim().toLowerCase();
+    return (pe && ce && ce === pe) || (!pe && pn && cn && cn === pn);
+  }) : undefined;
+
+  function selectBrokerClient(c: any) {
+    setClientName(c.name || c.client_name || c.clientName || c.email || '');
+    setClientEmail(c.email || '');
+    setClientUserId(String(c.clientUserId || c.client_user_id || ''));
+    // Projects belong to the client — reset any previous selection.
+    setProjectId('');
+    setProjectName('');
+    setShowClientDropdown(false);
+    setValidationErrors(prev => { const n = new Set(prev); n.delete('client'); return n; });
+  }
 
   useEffect(() => {
     AsyncStorage.getItem(DISMISSED_KEY).then(val => {
@@ -1057,6 +1111,7 @@ export default function CreateJobScreen() {
 
     const errors = new Set<string>();
     if (!isBroker && !projectId && !projectName.trim()) errors.add('project');
+    if (isBroker && !brokerClientMatch) errors.add('client');
     if (!material.trim()) errors.add('material');
     if (!originAddress.trim()) errors.add('origin');
     if (!destinationAddress.trim()) errors.add('destination');
@@ -1078,6 +1133,16 @@ export default function CreateJobScreen() {
         scrollRef.current?.scrollTo({ y: 0, animated: true });
         return;
       }
+      if (errors.has('client')) {
+        Alert.alert(
+          'Client Required',
+          clientName.trim()
+            ? `"${clientName.trim()}" isn't in your client list. Select a client from the dropdown at the top of the form.`
+            : 'Select the client this job is for at the top of the form.'
+        );
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+        return;
+      }
       const firstError = errors.has('material') ? 'Material' 
         : errors.has('origin') ? 'Origin address'
         : errors.has('destination') ? 'Destination address'
@@ -1094,7 +1159,9 @@ export default function CreateJobScreen() {
 
     setSubmitting(true);
     try {
-      let resolvedProjectId: string | undefined = isBroker ? undefined : (projectId || undefined);
+      // Brokers can attach the job to one of the client's existing projects
+      // (dropdown-only selection — brokers never create projects for a client).
+      let resolvedProjectId: string | undefined = projectId || undefined;
 
       if (!isBroker && !resolvedProjectId && projectName.trim()) {
         let inferredAddr = projectSiteAddress.trim();
@@ -1246,6 +1313,68 @@ export default function CreateJobScreen() {
       </View>
 
       <View style={styles.projectBarWrap}>
+        {isBroker && (
+          <>
+            <Pressable
+              testID="client-select-bar"
+              style={[
+                styles.projectBar,
+                !!clientName.trim() && styles.projectBarSelected,
+                validationErrors.has('client') && styles.inputError,
+              ]}
+              onPress={() => { setShowClientDropdown(!showClientDropdown); setShowProjectDropdown(false); }}
+            >
+              <Ionicons
+                name={clientName.trim() ? 'business' : 'business-outline'}
+                size={18}
+                color={clientName.trim() ? Colors.primary : Colors.textMuted}
+              />
+              <Text style={[styles.projectBarInput, !clientName.trim() && { color: Colors.textMuted }]} numberOfLines={1}>
+                {clientName.trim() || 'Select a client'}
+              </Text>
+              {clientName.trim() ? (
+                <Pressable onPress={() => { setClientName(''); setClientEmail(''); setClientUserId(''); setProjectId(''); setProjectName(''); }} hitSlop={8}>
+                  <Ionicons name="close-circle" size={20} color={Colors.textMuted} />
+                </Pressable>
+              ) : null}
+              <Ionicons name={showClientDropdown ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.textSecondary} />
+            </Pressable>
+            {showClientDropdown && (
+              <View style={styles.dropdownList}>
+                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+                  {brokerClients.length > 0 ? brokerClients.map((c: any, i: number) => {
+                    const cName = c.name || c.client_name || c.clientName || c.email || 'Client';
+                    const cUserId = String(c.clientUserId || c.client_user_id || '');
+                    const isSelected = clientName.trim() === cName || (!!cUserId && cUserId === clientUserId);
+                    return (
+                      <Pressable
+                        key={c.invitationId || c.invitation_id || c.id || c.email || i}
+                        style={[styles.dropdownItem, isSelected && styles.dropdownItemActive]}
+                        onPress={() => selectBrokerClient(c)}
+                      >
+                        <Ionicons name="business" size={18} color={isSelected ? Colors.primary : Colors.textSecondary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextActive]}>{cName}</Text>
+                          {c.status === 'pending' && <Text style={styles.dropdownItemSub}>Invite pending</Text>}
+                        </View>
+                        {isSelected && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
+                      </Pressable>
+                    );
+                  }) : (
+                    <View style={styles.dropdownEmpty}>
+                      <Text style={styles.dropdownEmptyText}>No clients yet — invite one from your Clients tab</Text>
+                    </View>
+                  )}
+                </ScrollView>
+              </View>
+            )}
+            {!!clientUserId && (
+              <View style={{ height: 8 }} />
+            )}
+          </>
+        )}
+        {(!isBroker || !!clientUserId) && (
+        <>
         <View style={[
           styles.projectBar,
           selectedProject && styles.projectBarSelected,
@@ -1258,7 +1387,7 @@ export default function CreateJobScreen() {
           />
           <TextInput
             style={styles.projectBarInput}
-            placeholder="Type or select a project"
+            placeholder={isBroker ? "Select the client's project" : 'Type or select a project'}
             placeholderTextColor={Colors.textMuted}
             value={projectName}
             onChangeText={handleProjectNameChange}
@@ -1271,7 +1400,7 @@ export default function CreateJobScreen() {
                 return;
               }
               setShowProjectDropdown(false);
-              openMapPicker('project');
+              if (!isBroker) openMapPicker('project');
             }}
           />
           {projectName.trim() ? (
@@ -1290,7 +1419,7 @@ export default function CreateJobScreen() {
             <Text style={styles.projectMatchText}>Existing project</Text>
           </View>
         )}
-        {!selectedProject && projectName.trim() && !exactMatch && (
+        {!isBroker && !selectedProject && projectName.trim() && !exactMatch && (
           <View style={styles.projectMatchBadge}>
             <Ionicons name="add-circle" size={14} color={Colors.primary} />
             <Text style={[styles.projectMatchText, { color: Colors.primary }]}>New project will be created</Text>
@@ -1331,12 +1460,14 @@ export default function CreateJobScreen() {
               ) : (
                 <View style={styles.dropdownEmpty}>
                   <Text style={styles.dropdownEmptyText}>
-                    {projectName.trim() ? 'No matching projects' : 'No projects yet'}
+                    {projectName.trim() ? 'No matching projects' : isBroker ? 'This client has no projects yet' : 'No projects yet'}
                   </Text>
                 </View>
               )}
             </ScrollView>
           </View>
+        )}
+        </>
         )}
       </View>
 
@@ -1346,7 +1477,7 @@ export default function CreateJobScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         bottomOffset={80}
-        onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowMaterialDropdown(false); setShowCalendar(false); setShowOriginSuggestions(false); setShowDestSuggestions(false); }}
+        onScrollBeginDrag={() => { setShowProjectDropdown(false); setShowClientDropdown(false); setShowMaterialDropdown(false); setShowCalendar(false); setShowOriginSuggestions(false); setShowDestSuggestions(false); }}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
@@ -2038,26 +2169,6 @@ export default function CreateJobScreen() {
                 />
                 <Text style={[styles.label, { marginTop: 14 }]}>Bill Rate Type</Text>
                 {renderChips(RATE_TYPES, billRateType, setBillRateType)}
-                <Text style={[styles.label, { marginTop: 14 }]}>Client Company Name</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Client company"
-                  placeholderTextColor={Colors.textMuted}
-                  value={clientName}
-                  onChangeText={setClientName}
-                  testID="client-name-input"
-                />
-                <Text style={[styles.label, { marginTop: 14 }]}>Client Email (optional)</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="client@example.com"
-                  placeholderTextColor={Colors.textMuted}
-                  value={clientEmail}
-                  onChangeText={setClientEmail}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  testID="client-email-input"
-                />
               </>
             )}
 

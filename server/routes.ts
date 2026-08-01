@@ -1690,6 +1690,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
+  // A registered client's projects, for the broker's Post Job form. Local DB
+  // read (contractor_projects is synced/shared), but gated on the requester
+  // actually having that client in their website client list — prevents any
+  // authenticated user from harvesting another company's project list.
+  // Registered BEFORE the /api/broker/.* wildcard so it wins over the proxy.
+  app.get("/api/broker/client-projects", requireAuth, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+      return res.status(400).json({ message: "This feature requires a live website account." });
+    }
+    const clientUserId = String(req.query.clientUserId || "").trim();
+    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
+    try {
+      const cr = await websiteFetch("/api/broker/clients", { method: "GET", jwt: auth.jwt });
+      if (!cr.ok) return res.status(cr.status).json({ message: "Could not verify client list" });
+      const clients = await cr.json().catch(() => []);
+      const isMyClient = Array.isArray(clients) && clients.some((c: any) =>
+        String(c.clientUserId || c.client_user_id || "") === clientUserId
+      );
+      if (!isMyClient) return res.status(403).json({ message: "Not one of your clients" });
+      const result = await pool.query(
+        `SELECT * FROM contractor_projects WHERE contractor_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
+        [clientUserId]
+      );
+      return res.json(result.rows.map(addDualKeys));
+    } catch (e: any) {
+      console.error("GET /api/broker/client-projects error:", e.message);
+      return res.status(500).json({ message: "Failed to load client projects" });
+    }
+  });
+
   // Broker dashboard data + actions (broker-only enforcement is upstream).
   app.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
   // Driver thumbs up/down on a sent broker assignment.
