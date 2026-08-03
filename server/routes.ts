@@ -4217,12 +4217,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // fleet-trucks view because we were unconditionally querying his
       // trucks below. Branch the widget builder on the active role.
       const isContractorOnly = role.includes('contractor') && role !== 'trucking_company';
+      // Brokers get the same poster-centric widget: their posted jobs each
+      // day with trucks-needed counts (the client renders a "N projects / M
+      // trucks" summary per day).
+      const isPosterView = isContractorOnly || role === 'broker';
 
       let userTrucks: any[] = [];
       let truckAssignments: any[] = [];
       let contractorJobsForDays: any[] = [];
 
-      if (isContractorOnly) {
+      if (isPosterView) {
         try {
           const cjRes = await pool.query(
             `SELECT j.id,
@@ -4356,9 +4360,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         d.setDate(today.getDate() + i);
         const dDateStr = fmtDate(d);
 
-        if (isContractorOnly) {
-          // Contractor view: each day lists posted jobs working that day with
-          // truck-needed / booked / applied counts. No fleet-trucks UI.
+        if (isPosterView) {
+          // Contractor/broker view: each day lists posted jobs working that
+          // day with truck-needed / booked / applied counts. No fleet-trucks UI.
           const dayJobs = contractorJobsForDays.filter((j: any) =>
             j.workingDates && j.workingDates.has(dDateStr)
           );

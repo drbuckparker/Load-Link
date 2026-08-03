@@ -538,6 +538,32 @@ export default function DashboardScreen() {
           {(dashboard?.upcomingDays || getDefaultDays()).map((day, i) => {
             const hasTrucks = !!(day.trucks && day.trucksTotal && day.trucksTotal > 0);
             const hasJobs = !!(day.jobs && day.jobs.length > 0);
+            // Broker view: summarize the day as "N projects / M trucks".
+            if (role === 'broker') {
+              const dayJobs = day.jobs || [];
+              const trucksReq = dayJobs.reduce((sum, j) => sum + (j.trucksNeeded || 0), 0);
+              return (
+                <Pressable
+                  key={i}
+                  style={styles.upcomingRow}
+                  onPress={() => {
+                    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push({ pathname: '/broker', params: { tab: 'today', date: day.date } } as any);
+                  }}
+                >
+                  <View style={styles.dateBox}>
+                    <Text style={styles.dateDay}>{day.dayName}</Text>
+                    <Text style={styles.dateNum}>{day.dayNum}</Text>
+                  </View>
+                  <Text style={[styles.upcomingStatus, { flex: 1 }, dayJobs.length > 0 && { color: Colors.text }]}>
+                    {dayJobs.length > 0
+                      ? `${dayJobs.length} ${dayJobs.length === 1 ? 'project' : 'projects'} / ${trucksReq} ${trucksReq === 1 ? 'truck' : 'trucks'}`
+                      : 'No jobs scheduled'}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                </Pressable>
+              );
+            }
             const trucksBooked = day.trucksBooked || 0;
             const trucksAvailable = day.trucksAvailable || 0;
             const trucksTotal = day.trucksTotal || 0;

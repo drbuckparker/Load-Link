@@ -149,7 +149,7 @@ export default function BrokerDashboardScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, updateUser } = useAuth();
-  const params = useLocalSearchParams<{ assign?: string; tab?: string }>();
+  const params = useLocalSearchParams<{ assign?: string; tab?: string; date?: string }>();
   const [tab, setTab] = useState<BrokerTab>(
     params.tab === 'today' || params.tab === 'jobs' || params.tab === 'roster' ? (params.tab as BrokerTab) : 'clients'
   );
@@ -159,7 +159,9 @@ export default function BrokerDashboardScreen() {
   const [inviteVisible, setInviteVisible] = useState<'roster' | 'clients' | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
-  const [selectedDate, setSelectedDate] = useState<string>(localDateKey(new Date()));
+  const [selectedDate, setSelectedDate] = useState<string>(() =>
+    typeof params.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : localDateKey(new Date())
+  );
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
 
   const soundEnabled = !!(user as any)?.confirmationSoundEnabled;
@@ -204,6 +206,11 @@ export default function BrokerDashboardScreen() {
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
 
   useEffect(() => {
+    const dateParam = typeof params.date === 'string' ? params.date : undefined;
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+      setSelectedDate(dateParam);
+      setTab('today');
+    }
     const assignId = typeof params.assign === 'string' ? params.assign : undefined;
     if (!assignId || handledAssignRef.current === assignId) return;
     const job = jobs.find(j => j.id === assignId);
@@ -213,7 +220,7 @@ export default function BrokerDashboardScreen() {
       setAssignJob(job);
       router.setParams({ assign: undefined } as any);
     }
-  }, [params.assign, jobs]);
+  }, [params.assign, params.date, jobs]);
 
   const totalConfirmed = jobs.reduce((sum, j) => sum + (j.assignmentStats?.confirmed || 0), 0);
   useEffect(() => {
