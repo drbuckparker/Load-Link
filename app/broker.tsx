@@ -124,8 +124,12 @@ function localDateKey(d: Date): string {
 function jobDateKey(j: BrokerJob): string {
   const raw = j.scheduledDate || j.scheduled_date || '';
   if (!raw) return '';
-  if (!raw.includes('T')) return raw.slice(0, 10);
-  return localDateKey(new Date(raw));
+  // scheduled_date is a calendar day stored as midnight ("2026-08-04T00:00:00.000Z"
+  // from the website, or "2026-08-04 00:00:00" locally). Converting through
+  // new Date() shifts it into the previous local day for US timezones, which
+  // made the Day Plan show "no jobs" while the Jobs tab had them. The first
+  // 10 chars ARE the scheduled day — use them directly.
+  return raw.slice(0, 10);
 }
 
 function isTodayDate(d?: string): boolean {
