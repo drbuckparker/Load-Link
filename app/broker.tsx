@@ -114,6 +114,20 @@ function jobMatchesClient(j: BrokerJob, c: BrokerClient): boolean {
   return !!jobName && !!clientName && jobName === clientName;
 }
 
+function localDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function jobDateKey(j: BrokerJob): string {
+  const raw = j.scheduledDate || j.scheduled_date || '';
+  if (!raw) return '';
+  if (!raw.includes('T')) return raw.slice(0, 10);
+  return localDateKey(new Date(raw));
+}
+
 function isTodayDate(d?: string): boolean {
   if (!d) return false;
   const dt = new Date(d.includes('T') ? d : `${d}T12:00:00`);
@@ -145,6 +159,8 @@ export default function BrokerDashboardScreen() {
   const [inviteVisible, setInviteVisible] = useState<'roster' | 'clients' | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
+  const [selectedDate, setSelectedDate] = useState<string>(localDateKey(new Date()));
+  const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
 
   const soundEnabled = !!(user as any)?.confirmationSoundEnabled;
   const prevConfirmedRef = useRef<number | null>(null);
@@ -183,7 +199,7 @@ export default function BrokerDashboardScreen() {
   const availabilityMap = availabilityQuery.data || {};
 
   const jobs = Array.isArray(jobsQuery.data) ? jobsQuery.data : [];
-  const todayJobs = jobs.filter(j => isTodayDate(j.scheduledDate || j.scheduled_date));
+  const todayJobs = jobs.filter(j => jobDateKey(j) === selectedDate);
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
 
@@ -246,6 +262,54 @@ export default function BrokerDashboardScreen() {
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to send assignments'),
+  });
+
+  // Day plan: pending scheduled auto-send for the selected date.
+  const scheduledSendQuery = useQuery<{ id: string; date: string; sendAt: string; status: string }[]>({
+    queryKey: ['/api/broker/scheduled-sends', selectedDate],
+    queryFn: async () => {
+      const res = await apiRequest('GET', `/api/broker/scheduled-sends?date=${selectedDate}`);
+      return res.json();
+    },
+    enabled: !!user && tab === 'today',
+  });
+  const pendingSchedule = (scheduledSendQuery.data || [])[0];
+
+  const scheduleMutation = useMutation({
+    mutationFn: async (sendAtIso: string) => {
+      return apiRequest('POST', '/api/broker/scheduled-sends', { date: selectedDate, sendAt: sendAtIso, tzOffsetMin: new Date().getTimezoneOffset() });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/scheduled-sends'] });
+      setScheduleModalVisible(false);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (e: any) => Alert.alert('Error', e.message || 'Failed to schedule send'),
+  });
+
+  const cancelScheduleMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest('DELETE', `/api/broker/scheduled-sends/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['/api/broker/scheduled-sends'] }),
+    onError: (e: any) => Alert.alert('Error', e.message || 'Failed to cancel'),
+  });
+
+  // Send held instructions on every job of the selected day, in one tap.
+  const sendDayMutation = useMutation({
+    mutationFn: async (jobIds: string[]) => {
+      for (const id of jobIds) {
+        await apiRequest('POST', `/api/broker/jobs/${id}/send-all`, {});
+      }
+      return jobIds.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert('Instructions sent', `Sent instructions on ${count} job${count === 1 ? '' : 's'}.`);
+    },
+    onError: (e: any) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+      Alert.alert('Error', e.message || 'Some instructions failed to send');
+    },
   });
 
   const inviteMutation = useMutation({
@@ -474,7 +538,7 @@ export default function BrokerDashboardScreen() {
             onPress={() => { haptic(); if (t !== 'jobs') setClientFilter(null); setTab(t); }}
           >
             <Text style={[styles.tabChipText, tab === t && styles.tabChipTextActive]} numberOfLines={1}>
-              {t === 'today' ? `Today (${todayJobs.length})`
+              {t === 'today' ? `Day Plan (${todayJobs.length})`
                 : t === 'clients' ? `Clients (${clients.length})`
                 : t === 'jobs' ? `Jobs (${jobs.length})`
                 : `Roster (${roster.length})`}
@@ -513,6 +577,91 @@ export default function BrokerDashboardScreen() {
           }
           ListHeaderComponent={
             <>
+              {tab === 'today' ? (() => {
+                const dayHeld = todayJobs.reduce((sum, j) => sum + (j.assignmentStats?.held || 0), 0);
+                const heldJobIds = todayJobs.filter(j => (j.assignmentStats?.held || 0) > 0).map(j => j.id);
+                const totalNeeded = todayJobs.reduce((sum, j) => sum + (j.assignmentStats?.trucksNeeded || 0), 0);
+                const totalAssigned = todayJobs.reduce((sum, j) => sum + (j.assignmentStats?.assigned || 0), 0);
+                const allFilled = totalNeeded > 0 && totalAssigned >= totalNeeded;
+                const dsel = new Date(`${selectedDate}T12:00:00`);
+                const shift = (days: number) => {
+                  const d = new Date(dsel); d.setDate(d.getDate() + days);
+                  setSelectedDate(localDateKey(d));
+                };
+                return (
+                  <View style={{ marginBottom: 12 }}>
+                    <View style={styles.dateNavRow}>
+                      <Pressable onPress={() => { haptic(); shift(-1); }} style={styles.dateNavBtn} testID="day-prev">
+                        <Ionicons name="chevron-back" size={20} color={Colors.text} />
+                      </Pressable>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={styles.dateNavTitle}>
+                          {dsel.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
+                        </Text>
+                        {selectedDate !== localDateKey(new Date()) && (
+                          <Pressable onPress={() => setSelectedDate(localDateKey(new Date()))}>
+                            <Text style={styles.dateNavToday}>Back to today</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                      <Pressable onPress={() => { haptic(); shift(1); }} style={styles.dateNavBtn} testID="day-next">
+                        <Ionicons name="chevron-forward" size={20} color={Colors.text} />
+                      </Pressable>
+                    </View>
+                    {todayJobs.length > 0 && (
+                      <View style={styles.daySummaryCard}>
+                        <View style={styles.daySummaryRow}>
+                          <Text style={styles.daySummaryText}>
+                            {todayJobs.length} job{todayJobs.length === 1 ? '' : 's'} · {totalAssigned}/{totalNeeded || '—'} trucks assigned
+                          </Text>
+                          {allFilled && (
+                            <View style={styles.filledBadge}>
+                              <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
+                              <Text style={styles.filledBadgeText}>ALL SPOTS FILLED</Text>
+                            </View>
+                          )}
+                        </View>
+                        {pendingSchedule ? (
+                          <View style={styles.scheduleBanner}>
+                            <Ionicons name="time-outline" size={16} color={Colors.primary} />
+                            <Text style={styles.scheduleBannerText}>
+                              Instructions go out at {new Date(pendingSchedule.sendAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                            </Text>
+                            <Pressable onPress={() => { haptic(); cancelScheduleMutation.mutate(pendingSchedule.id); }} testID="cancel-schedule">
+                              <Text style={styles.scheduleCancelText}>CANCEL</Text>
+                            </Pressable>
+                          </View>
+                        ) : null}
+                        {dayHeld > 0 && (
+                          <View style={styles.dayActionRow}>
+                            <Pressable
+                              testID="send-day-btn"
+                              disabled={sendDayMutation.isPending}
+                              style={({ pressed }) => [styles.dayPrimaryBtn, (pressed || sendDayMutation.isPending) && { opacity: 0.7 }]}
+                              onPress={() => { haptic(Haptics.ImpactFeedbackStyle.Medium); sendDayMutation.mutate(heldJobIds); }}
+                            >
+                              {sendDayMutation.isPending ? (
+                                <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                              ) : (
+                                <Ionicons name="send" size={16} color={Colors.primaryForeground} />
+                              )}
+                              <Text style={styles.dayPrimaryBtnText}>SEND ALL INSTRUCTIONS ({dayHeld})</Text>
+                            </Pressable>
+                            <Pressable
+                              testID="schedule-day-btn"
+                              style={({ pressed }) => [styles.daySecondaryBtn, pressed && { opacity: 0.7 }]}
+                              onPress={() => { haptic(); setScheduleModalVisible(true); }}
+                            >
+                              <Ionicons name="alarm-outline" size={16} color={Colors.primary} />
+                              <Text style={styles.daySecondaryBtnText}>SEND AT…</Text>
+                            </Pressable>
+                          </View>
+                        )}
+                      </View>
+                    )}
+                  </View>
+                );
+              })() : null}
               {tab === 'jobs' && clientFilter ? (
                 <View style={styles.filterBanner}>
                   <Ionicons name="funnel-outline" size={14} color={Colors.primary} />
@@ -618,7 +767,7 @@ export default function BrokerDashboardScreen() {
                           style={({ pressed }) => [styles.holdBtn, (pressed || assignMutation.isPending) && { opacity: 0.7 }]}
                           onPress={() => { haptic(); assignMutation.mutate({ jobId: assignJob!.id, driverId, sendNow: false }); }}
                         >
-                          <Text style={styles.holdBtnText}>HOLD</Text>
+                          <Text style={styles.holdBtnText}>SEND LATER</Text>
                         </Pressable>
                         <Pressable
                           testID={`assign-send-${d.id}`}
@@ -634,6 +783,51 @@ export default function BrokerDashboardScreen() {
                 );
               })}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={scheduleModalVisible} transparent animationType="slide" onRequestClose={() => setScheduleModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>SEND INSTRUCTIONS AT…</Text>
+              <Pressable onPress={() => setScheduleModalVisible(false)} style={styles.modalClose} testID="schedule-modal-close">
+                <Ionicons name="close" size={22} color={Colors.text} />
+              </Pressable>
+            </View>
+            <Text style={styles.modalSubtitle}>
+              All held trucks on {new Date(`${selectedDate}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })} get their job instructions automatically at this time.
+            </Text>
+            <View style={styles.timeChipWrap}>
+              {[
+                { label: '8:00 PM the night before', hour: 20, dayOffset: -1 },
+                { label: '4:00 AM', hour: 4, dayOffset: 0 },
+                { label: '5:00 AM', hour: 5, dayOffset: 0 },
+                { label: '6:00 AM', hour: 6, dayOffset: 0 },
+                { label: '7:00 AM', hour: 7, dayOffset: 0 },
+                { label: '8:00 AM', hour: 8, dayOffset: 0 },
+              ].map(opt => {
+                const t = new Date(`${selectedDate}T12:00:00`);
+                t.setDate(t.getDate() + opt.dayOffset);
+                t.setHours(opt.hour, 0, 0, 0);
+                const past = t.getTime() < Date.now() + 60_000;
+                return (
+                  <Pressable
+                    key={opt.label}
+                    disabled={past || scheduleMutation.isPending}
+                    style={({ pressed }) => [styles.timeChip, past && { opacity: 0.35 }, pressed && { opacity: 0.7 }]}
+                    onPress={() => { haptic(); scheduleMutation.mutate(t.toISOString()); }}
+                    testID={`schedule-time-${opt.hour}-${opt.dayOffset}`}
+                  >
+                    <Text style={styles.timeChipText}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.scheduleNote}>
+              Trucks you assign with SEND LATER stay invisible to drivers until this time. You can cancel the timer any time before it fires.
+            </Text>
           </View>
         </View>
       </Modal>
@@ -756,6 +950,27 @@ const styles = StyleSheet.create({
   holdBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.5 },
   unavailableBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5 },
   unavailableBadgeText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.destructive, letterSpacing: 0.5 },
+  dateNavRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  dateNavBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
+  dateNavTitle: { fontFamily: 'ChakraPetch_700Bold', fontSize: 15, color: Colors.text, letterSpacing: 0.5 },
+  dateNavToday: { fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.primary, marginTop: 2 },
+  daySummaryCard: { backgroundColor: Colors.card, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, padding: 12, gap: 10 },
+  daySummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 },
+  daySummaryText: { fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.textSecondary },
+  filledBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  filledBadgeText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.success, letterSpacing: 0.5 },
+  scheduleBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,153,0,0.1)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
+  scheduleBannerText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
+  scheduleCancelText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.destructive, letterSpacing: 0.5 },
+  dayActionRow: { flexDirection: 'row', gap: 8 },
+  dayPrimaryBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: Colors.primary, borderRadius: 10, height: 44 },
+  dayPrimaryBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primaryForeground, letterSpacing: 0.5 },
+  daySecondaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, height: 44, paddingHorizontal: 14, borderWidth: 1, borderColor: Colors.primary },
+  daySecondaryBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primary, letterSpacing: 0.5 },
+  timeChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  timeChip: { borderRadius: 10, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.background, paddingHorizontal: 14, height: 42, alignItems: 'center', justifyContent: 'center' },
+  timeChipText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.text, letterSpacing: 0.5 },
+  scheduleNote: { fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 14, lineHeight: 17 },
   jobActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   assignBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,

@@ -364,6 +364,105 @@ function startNewJobWatcher() {
 }
 // ----------------------------------------------------------------------------
 
+// Fires broker "send instructions at HH:MM" schedules: when one comes due,
+// send-all the held assignments on every job that broker has on that date.
+async function processDueBrokerScheduledSends() {
+  let due: any[] = [];
+  try {
+    // Atomically claim due rows so overlapping runs (or multiple instances)
+    // never fire the same schedule twice.
+    const r = await pool.query(
+      `UPDATE broker_scheduled_sends SET status = 'processing'
+       WHERE id IN (
+         SELECT id FROM broker_scheduled_sends
+         WHERE status = 'pending' AND send_at <= NOW()
+         ORDER BY send_at ASC LIMIT 20
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING id, broker_id, date, tz_offset_min, attempts`
+    );
+    due = r.rows;
+  } catch { return; }
+  for (const row of due) {
+    const dateKey = row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10);
+    const tzOffsetMin = Number(row.tz_offset_min) || 0;
+    // Same day-bucketing as the app: timestamped job dates are shifted into
+    // the broker's local timezone before taking the YYYY-MM-DD key.
+    const jobDayKey = (raw: string): string => {
+      if (!raw) return "";
+      if (!raw.includes("T")) return raw.slice(0, 10);
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return raw.slice(0, 10);
+      return new Date(d.getTime() - tzOffsetMin * 60_000).toISOString().slice(0, 10);
+    };
+    // Latest real (non-dev) session for this broker.
+    let jwt: string | null = null;
+    for (const [, auth] of tokenToJwt) {
+      if (auth.userId === row.broker_id && auth.jwt && !auth.jwt.startsWith("dev-local:")) jwt = auth.jwt;
+    }
+    if (!jwt) {
+      await pool.query(
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time' WHERE id = $1`,
+        [row.id]
+      ).catch(() => {});
+      continue;
+    }
+    try {
+      const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt });
+      if (!jr.ok) throw new Error(`jobs fetch ${jr.status}`);
+      const jobs = await jr.json().catch(() => []);
+      let sentJobs = 0;
+      const failedJobs: string[] = [];
+      for (const job of Array.isArray(jobs) ? jobs : []) {
+        const jobDate = jobDayKey(String(job.scheduledDate || job.scheduled_date || ""));
+        if (jobDate !== dateKey) continue;
+        const held = (job.assignmentStats?.held || 0) > 0 ||
+          (Array.isArray(job.assignments) && job.assignments.some(
+            (a: any) => (a.sentAt ?? a.sent_at) == null && a.status !== "declined" && a.status !== "withdrawn"
+          ));
+        if (!held) continue;
+        const sr = await websiteFetch(`/api/broker/jobs/${job.id}/send-all`, { method: "POST", body: {}, jwt });
+        if (sr.ok) sentJobs++;
+        else {
+          failedJobs.push(String(job.id));
+          console.error(`[BrokerSend] send-all failed for job ${job.id}: ${sr.status}`);
+        }
+      }
+      if (failedJobs.length > 0 && Number(row.attempts) < 5) {
+        // Leave it pending so the next pass retries the jobs still holding
+        // unsent assignments (already-sent jobs are naturally skipped).
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'pending', sent_jobs = $2,
+             attempts = attempts + 1, error = $3 WHERE id = $1`,
+          [row.id, sentJobs, `Retrying ${failedJobs.length} job(s): ${failedJobs.join(",").slice(0, 400)}`]
+        );
+      } else if (failedJobs.length > 0) {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'failed', sent_jobs = $2,
+             error = $3 WHERE id = $1`,
+          [row.id, sentJobs, `Gave up after retries; failed job(s): ${failedJobs.join(",").slice(0, 400)}`]
+        );
+      } else {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'sent', sent_jobs = $2, error = NULL WHERE id = $1`,
+          [row.id, sentJobs]
+        );
+      }
+      console.log(`[BrokerSend] schedule ${row.id}: sent instructions on ${sentJobs} job(s) for ${dateKey}${failedJobs.length ? `, ${failedJobs.length} failed (will retry)` : ""}`);
+    } catch (e: any) {
+      console.error("[BrokerSend] error:", e.message);
+      await pool.query(
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1`,
+        [row.id, String(e.message || e).slice(0, 500)]
+      ).catch(() => {});
+    }
+  }
+}
+
+function startBrokerScheduledSendWorker() {
+  setInterval(() => { processDueBrokerScheduledSends().catch(() => {}); }, 60000);
+}
+
 function saveJsonMap<T>(filename: string, map: Map<string, T>) {
   try {
     if (map.size > 200) {
@@ -1800,6 +1899,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       console.error("GET /api/broker/roster-availability error:", e.message);
       return res.status(500).json({ message: "Failed to load availability" });
+    }
+  });
+
+  // --- Scheduled day sends: broker stages held assignments, then either sends
+  // them all now (client loops send-all) or schedules an automatic send time.
+  app.get("/api/broker/scheduled-sends", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const date = String(req.query.date || "").slice(0, 10);
+    try {
+      const params: any[] = [auth.userId];
+      let where = `broker_id = $1 AND status = 'pending'`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) { where += ` AND date = $2`; params.push(date); }
+      const r = await pool.query(
+        `SELECT id, date, send_at, status, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
+        params
+      );
+      return res.json(r.rows.map((row: any) => ({
+        id: row.id,
+        date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
+        sendAt: row.send_at,
+        status: row.status,
+      })));
+    } catch (e: any) {
+      console.error("GET /api/broker/scheduled-sends error:", e.message);
+      return res.status(500).json({ message: "Failed to load scheduled sends" });
+    }
+  });
+
+  app.post("/api/broker/scheduled-sends", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    if (auth.jwt && auth.jwt.startsWith("dev-local:")) {
+      return res.status(400).json({ message: "Scheduled sends require a LoadLink login" });
+    }
+    const date = String(req.body?.date || "").slice(0, 10);
+    const sendAt = new Date(String(req.body?.sendAt || ""));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: "date must be YYYY-MM-DD" });
+    if (isNaN(sendAt.getTime())) return res.status(400).json({ message: "sendAt must be a valid timestamp" });
+    if (sendAt.getTime() < Date.now() - 60_000) return res.status(400).json({ message: "sendAt is in the past" });
+    try {
+      // One pending schedule per broker per day: replace any existing one.
+      await pool.query(
+        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status = 'pending'`,
+        [auth.userId, date]
+      );
+      // Broker's local timezone offset (minutes, getTimezoneOffset semantics)
+      // so the worker buckets timestamped job dates into the same local day.
+      const tzOffsetMin = Number(req.body?.tzOffsetMin ?? req.header("X-TZ-Offset") ?? 0) || 0;
+      const r = await pool.query(
+        `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min) VALUES ($1, $2, $3, $4)
+         RETURNING id, date, send_at, status`,
+        [auth.userId, date, sendAt.toISOString(), tzOffsetMin]
+      );
+      const row = r.rows[0];
+      return res.status(201).json({
+        id: row.id,
+        date,
+        sendAt: row.send_at,
+        status: row.status,
+      });
+    } catch (e: any) {
+      console.error("POST /api/broker/scheduled-sends error:", e.message);
+      return res.status(500).json({ message: "Failed to schedule send" });
+    }
+  });
+
+  app.delete("/api/broker/scheduled-sends/:id", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    try {
+      const r = await pool.query(
+        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status = 'pending' RETURNING id`,
+        [req.params.id, auth.userId]
+      );
+      if (r.rowCount === 0) return res.status(404).json({ message: "Scheduled send not found" });
+      return res.json({ ok: true });
+    } catch (e: any) {
+      console.error("DELETE /api/broker/scheduled-sends error:", e.message);
+      return res.status(500).json({ message: "Failed to cancel scheduled send" });
     }
   });
 
@@ -6151,6 +6327,7 @@ function initMap(){
   });
 
   startNewJobWatcher();
+  startBrokerScheduledSendWorker();
 
   startPeriodicSync(() => {
     const latestPerUser = new Map<string, { jwt: string; userId: string; user: any }>();
