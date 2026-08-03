@@ -98,10 +98,18 @@ export default function JobsBrowseScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const isContractor = isContractorRole(user?.role);
+  const isBroker = user?.role === 'broker';
   const params = useLocalSearchParams<{ filter?: string; date?: string; tab?: string; projectId?: string }>();
   const queryClient = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<'jobs' | 'projects'>(params.tab === 'projects' ? 'projects' : 'jobs');
+  // Brokers land on Clients (their tab lineup is Clients | Projects).
+  const [activeTab, setActiveTab] = useState<'jobs' | 'projects' | 'clients'>(
+    params.tab === 'projects' ? 'projects' : (user?.role === 'broker' ? 'clients' : 'jobs')
+  );
+  const [clientSearch, setClientSearch] = useState('');
+  const [showInviteClient, setShowInviteClient] = useState(false);
+  const [inviteClientName, setInviteClientName] = useState('');
+  const [inviteClientEmail, setInviteClientEmail] = useState('');
   const [activeFilter, setActiveFilter] = useState<string>(params.filter || (params.date ? 'All' : 'Open'));
   const [dateFilter, setDateFilter] = useState<string | undefined>(params.date || undefined);
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(params.projectId || null);
@@ -212,9 +220,39 @@ export default function JobsBrowseScreen() {
   const projectsQueryUrl = '/api/projects?include_deleted=true';
   const { data: _projects, isLoading: projectsLoading, refetch: refetchProjects } = useQuery<ProjectItem[]>({
     queryKey: [projectsQueryUrl],
-    enabled: !!user && isContractor,
+    enabled: !!user && (isContractor || isBroker),
   });
   const projects = _projects || [];
+
+  const { data: _brokerClients, isLoading: clientsLoading, refetch: refetchClients } = useQuery<any[]>({
+    queryKey: ['/api/broker/clients'],
+    enabled: !!user && isBroker,
+  });
+  const brokerClients = Array.isArray(_brokerClients) ? _brokerClients : [];
+  const filteredClients = useMemo(() => {
+    const q = clientSearch.trim().toLowerCase();
+    if (!q) return brokerClients;
+    return brokerClients.filter((c: any) =>
+      `${c.name || c.client_name || c.clientName || ''} ${c.email || ''}`.toLowerCase().includes(q)
+    );
+  }, [brokerClients, clientSearch]);
+
+  const inviteClientMutation = useMutation({
+    mutationFn: async (data: { name: string; email: string }) => {
+      const res = await apiRequest('POST', '/api/broker/clients/invite', data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/broker/clients')) });
+      setShowInviteClient(false);
+      setInviteClientName('');
+      setInviteClientEmail('');
+      Alert.alert('Invite Sent', 'Your client will appear here once they accept — you can post jobs for them right away.');
+    },
+    onError: (e: any) => {
+      Alert.alert('Invite Failed', e?.message || 'Could not send the invitation. Please try again.');
+    },
+  });
 
   const createProjectMutation = useMutation({
     mutationFn: async (data: { name: string; job_number?: string; site_address?: string; site_lat?: number; site_lng?: number; notes?: string }) => {
@@ -813,13 +851,22 @@ export default function JobsBrowseScreen() {
         <Text style={styles.headerTitle}>
           {selectedProjectFilter && selectedProjectData
             ? selectedProjectData.name.toUpperCase()
-            : isContractor ? 'MY JOBS' : (user?.role === 'trucking_company' ? 'FIND JOBS' : 'FIND LOADS')}
+            : (isContractor || isBroker) ? 'MY JOBS' : (user?.role === 'trucking_company' ? 'FIND JOBS' : 'FIND LOADS')}
         </Text>
         <View style={{ width: 44 }} />
       </View>
 
-      {isContractor && !selectedProjectFilter && (
+      {(isContractor || isBroker) && !selectedProjectFilter && (
         <View style={styles.tabToggleRow}>
+          {isBroker ? (
+            <Pressable
+              style={[styles.tabToggle, activeTab === 'clients' && styles.tabToggleActive]}
+              onPress={() => { setActiveTab('clients'); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+            >
+              <Ionicons name="business" size={16} color={activeTab === 'clients' ? Colors.primary : Colors.textMuted} />
+              <Text style={[styles.tabToggleText, activeTab === 'clients' && styles.tabToggleTextActive]}>Clients</Text>
+            </Pressable>
+          ) : (
           <Pressable
             style={[styles.tabToggle, activeTab === 'jobs' && styles.tabToggleActive]}
             onPress={() => { setActiveTab('jobs'); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
@@ -827,6 +874,7 @@ export default function JobsBrowseScreen() {
             <Ionicons name="briefcase" size={16} color={activeTab === 'jobs' ? Colors.primary : Colors.textMuted} />
             <Text style={[styles.tabToggleText, activeTab === 'jobs' && styles.tabToggleTextActive]}>Jobs</Text>
           </Pressable>
+          )}
           <Pressable
             style={[styles.tabToggle, activeTab === 'projects' && styles.tabToggleActive]}
             onPress={() => { setActiveTab('projects'); if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
@@ -1044,7 +1092,92 @@ export default function JobsBrowseScreen() {
         </>
       )}
 
-      {activeTab === 'projects' && isContractor && (
+      {activeTab === 'clients' && isBroker && (
+        <>
+          <View style={styles.searchRow}>
+            <View style={styles.searchBar}>
+              <Ionicons name="search" size={18} color={Colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search clients..."
+                placeholderTextColor={Colors.textMuted}
+                value={clientSearch}
+                onChangeText={setClientSearch}
+                returnKeyType="search"
+              />
+              {clientSearch.length > 0 && (
+                <Pressable onPress={() => setClientSearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+
+          {clientsLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+            </View>
+          ) : filteredClients.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="business-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>{clientSearch ? 'No matching clients' : 'No clients yet'}</Text>
+              <Text style={styles.emptySubtitle}>
+                {clientSearch ? 'Try a different search term' : 'Invite a client so you can post and dispatch jobs for them'}
+              </Text>
+              {!clientSearch && (
+                <Pressable style={styles.emptyCreateBtn} onPress={() => setShowInviteClient(true)}>
+                  <Ionicons name="add" size={18} color={Colors.primaryForeground} />
+                  <Text style={styles.emptyCreateBtnText}>Invite Client</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <FlatList
+              data={filteredClients}
+              keyExtractor={(item: any, i) => String(item.invitationId || item.invitation_id || item.id || item.email || i)}
+              renderItem={({ item }: { item: any }) => {
+                const cName = item.name || item.client_name || item.clientName || item.email || 'Client';
+                const pending = item.status === 'pending';
+                const activeJobs = Number(item.activeJobsCount ?? item.active_jobs_count ?? 0);
+                return (
+                  <Pressable
+                    style={styles.projectCard}
+                    onPress={() => router.push({ pathname: '/create-job', params: { clientName: cName, clientEmail: item.email || '' } } as any)}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Ionicons name="business" size={20} color={Colors.primary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.projectCardName} numberOfLines={1}>{cName}</Text>
+                        {!!item.email && <Text style={styles.projectJobNumber} numberOfLines={1}>{item.email}</Text>}
+                      </View>
+                      <View style={[styles.projectStatusBadge, { backgroundColor: pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
+                        <Text style={[styles.projectStatusText, { color: pending ? '#eab308' : '#22c55e' }]}>
+                          {pending ? 'PENDING' : 'ACTIVE'}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
+                      <Ionicons name="briefcase" size={14} color={Colors.primary} />
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.primary }}>
+                        {activeJobs > 0 ? `${activeJobs} active job${activeJobs !== 1 ? 's' : ''}` : 'Tap to post a job'}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
+                    </View>
+                  </Pressable>
+                );
+              }}
+              contentContainerStyle={styles.listContent}
+              ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+              showsVerticalScrollIndicator={false}
+              onRefresh={refetchClients}
+              refreshing={false}
+              ListFooterComponent={<View style={{ height: 80 }} />}
+            />
+          )}
+        </>
+      )}
+
+      {activeTab === 'projects' && (isContractor || isBroker) && (
         <>
           <View style={styles.searchRow}>
             {showArchived ? (
@@ -1129,11 +1262,13 @@ export default function JobsBrowseScreen() {
         </>
       )}
 
-      {isContractor && (
+      {(isContractor || isBroker) && (
         <Pressable
           style={[styles.fab, { bottom: Platform.OS === 'web' ? 34 + 20 : insets.bottom + 20 }]}
           onPress={() => {
-            if (activeTab === 'projects') {
+            if (activeTab === 'clients') {
+              setShowInviteClient(true);
+            } else if (activeTab === 'projects') {
               setShowCreateProject(true);
             } else {
               if (selectedProjectFilter) {
@@ -1147,6 +1282,56 @@ export default function JobsBrowseScreen() {
           <Ionicons name="add" size={28} color={Colors.primaryForeground} />
         </Pressable>
       )}
+
+      <Modal
+        visible={showInviteClient}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowInviteClient(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowInviteClient(false)}>
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>INVITE CLIENT</Text>
+              <Pressable onPress={() => setShowInviteClient(false)} hitSlop={8}>
+                <Ionicons name="close" size={24} color={Colors.textMuted} />
+              </Pressable>
+            </View>
+            <Text style={styles.modalLabel}>Client / Company Name</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="e.g. Wilson Excavation"
+              placeholderTextColor={Colors.textMuted}
+              value={inviteClientName}
+              onChangeText={setInviteClientName}
+              testID="invite-client-name"
+            />
+            <Text style={styles.modalLabel}>Email</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="client@example.com"
+              placeholderTextColor={Colors.textMuted}
+              value={inviteClientEmail}
+              onChangeText={setInviteClientEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              testID="invite-client-email"
+            />
+            <Pressable
+              style={[styles.modalCreateBtn, (!inviteClientName.trim() || !inviteClientEmail.trim() || inviteClientMutation.isPending) && { opacity: 0.5 }]}
+              disabled={!inviteClientName.trim() || !inviteClientEmail.trim() || inviteClientMutation.isPending}
+              onPress={() => inviteClientMutation.mutate({ name: inviteClientName.trim(), email: inviteClientEmail.trim() })}
+              testID="invite-client-submit"
+            >
+              {inviteClientMutation.isPending ? (
+                <ActivityIndicator size="small" color={Colors.primaryForeground} />
+              ) : (
+                <Text style={styles.modalCreateBtnText}>Send Invite</Text>
+              )}
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={showCreateProject}
