@@ -118,6 +118,60 @@ export default function CreateJobScreen() {
   const [projectSiteLng, setProjectSiteLng] = useState<number | null>(null);
   const [mapPin, setMapPin] = useState<{ latitude: number; longitude: number } | null>(null);
   const [reversingGeocode, setReversingGeocode] = useState(false);
+  // Address search inside the map picker (essential on web, where the map
+  // fallback can't be tapped precisely).
+  const [mapSearch, setMapSearch] = useState('');
+  const [mapSearchSugs, setMapSearchSugs] = useState<any[]>([]);
+  const [mapPinAddress, setMapPinAddress] = useState('');
+  const mapSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleMapSearchChange(text: string) {
+    setMapSearch(text);
+    if (mapSearchDebounceRef.current) clearTimeout(mapSearchDebounceRef.current);
+    if (text.trim().length < 2) { setMapSearchSugs([]); return; }
+    mapSearchDebounceRef.current = setTimeout(async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const headers: Record<string, string> = {};
+        const token = getAuthToken();
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const url = new URL('/api/places/autocomplete', baseUrl);
+        url.searchParams.set('input', text);
+        const biasLat = userLat ?? originLat ?? destLat;
+        const biasLng = userLng ?? originLng ?? destLng;
+        if (biasLat != null && biasLng != null) {
+          url.searchParams.set('lat', String(biasLat));
+          url.searchParams.set('lng', String(biasLng));
+        }
+        const res = await fetch(url.toString(), { credentials: 'include', headers });
+        const data = res.ok ? await res.json() : [];
+        setMapSearchSugs(Array.isArray(data) ? data : []);
+      } catch {
+        setMapSearchSugs([]);
+      }
+    }, 300);
+  }
+
+  async function selectMapSearchSuggestion(placeId: string, description: string) {
+    setMapSearch(description);
+    setMapSearchSugs([]);
+    try {
+      const baseUrl = getApiUrl();
+      const headers: Record<string, string> = {};
+      const token = getAuthToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const url = new URL('/api/places/details', baseUrl);
+      url.searchParams.set('place_id', placeId);
+      const res = await fetch(url.toString(), { credentials: 'include', headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.lat != null && data.lng != null) {
+          setMapPin({ latitude: data.lat, longitude: data.lng });
+          setMapPinAddress(data.address || description);
+        }
+      }
+    } catch {}
+  }
   const [distance, setDistance] = useState('');
   const [originSuggestions, setOriginSuggestions] = useState<any[]>([]);
   const [destSuggestions, setDestSuggestions] = useState<any[]>([]);
@@ -509,16 +563,18 @@ export default function CreateJobScreen() {
 
   function handleMapPress(e: any) {
     setMapPin(e.nativeEvent.coordinate);
+    // A manually dropped pin invalidates any address chosen via search.
+    setMapPinAddress('');
   }
 
   async function confirmMapPin() {
     if (!mapPin || !mapPickerTarget) return;
 
     setReversingGeocode(true);
-    let address = `${mapPin.latitude.toFixed(5)}, ${mapPin.longitude.toFixed(5)}`;
+    let address = mapPinAddress.trim() || `${mapPin.latitude.toFixed(5)}, ${mapPin.longitude.toFixed(5)}`;
 
     try {
-      if (Platform.OS !== 'web') {
+      if (!mapPinAddress.trim() && Platform.OS !== 'web') {
         const results = await Location.reverseGeocodeAsync({
           latitude: mapPin.latitude,
           longitude: mapPin.longitude,
@@ -567,6 +623,9 @@ export default function CreateJobScreen() {
     setReversingGeocode(false);
     setMapPickerTarget(null);
     setMapPin(null);
+    setMapSearch('');
+    setMapSearchSugs([]);
+    setMapPinAddress('');
 
     if (pinTarget && pinTarget.target === mapPickerTarget) {
       setPinProjectTarget(null);
@@ -2553,11 +2612,11 @@ export default function CreateJobScreen() {
       <Modal
         visible={mapPickerTarget !== null}
         animationType="slide"
-        onRequestClose={() => { setMapPickerTarget(null); setMapPin(null); }}
+        onRequestClose={() => { setMapPickerTarget(null); setMapPin(null); setMapSearch(''); setMapSearchSugs([]); setMapPinAddress(''); }}
       >
         <View style={styles.mapContainer}>
           <View style={[styles.mapHeader, { paddingTop: Platform.OS === 'web' ? 20 : insets.top }]}>
-            <Pressable onPress={() => { setMapPickerTarget(null); setMapPin(null); }} style={styles.backBtn}>
+            <Pressable onPress={() => { setMapPickerTarget(null); setMapPin(null); setMapSearch(''); setMapSearchSugs([]); setMapPinAddress(''); }} style={styles.backBtn}>
               <Ionicons name="close" size={24} color={Colors.text} />
             </Pressable>
             <Text style={styles.mapHeaderTitle}>
@@ -2570,7 +2629,44 @@ export default function CreateJobScreen() {
             <View style={{ width: 40 }} />
           </View>
 
-          <Text style={styles.mapHint}>Tap the map to drop a pin</Text>
+          <View style={{ paddingHorizontal: 16, paddingBottom: 8, zIndex: 20 }}>
+            <View style={styles.mapSearchBar}>
+              <Ionicons name="search" size={16} color={Colors.textMuted} />
+              <TextInput
+                style={styles.mapSearchInput}
+                placeholder="Search for an address..."
+                placeholderTextColor={Colors.textMuted}
+                value={mapSearch}
+                onChangeText={handleMapSearchChange}
+                autoCapitalize="none"
+                autoCorrect={false}
+                testID="map-search-input"
+              />
+              {mapSearch.length > 0 && (
+                <Pressable onPress={() => { setMapSearch(''); setMapSearchSugs([]); }} hitSlop={8}>
+                  <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+                </Pressable>
+              )}
+            </View>
+            {mapSearchSugs.length > 0 && (
+              <View style={styles.mapSearchSugs}>
+                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{ maxHeight: 220 }}>
+                  {mapSearchSugs.map((s: any) => (
+                    <Pressable
+                      key={s.place_id}
+                      style={styles.suggestionItem}
+                      onPress={() => selectMapSearchSuggestion(s.place_id, s.description)}
+                    >
+                      <Ionicons name="location-outline" size={16} color={Colors.textSecondary} />
+                      <Text style={styles.suggestionMain} numberOfLines={1}>{s.description}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.mapHint}>Or tap the map to drop a pin</Text>
 
           <MapPickerView
             mapPin={mapPin}
@@ -2585,8 +2681,8 @@ export default function CreateJobScreen() {
             <View style={[styles.mapFooter, { paddingBottom: Platform.OS === 'web' ? 20 : insets.bottom + 16 }]}>
               <View style={styles.mapCoordRow}>
                 <Ionicons name="location" size={16} color={Colors.primary} />
-                <Text style={styles.mapCoordText}>
-                  {mapPin.latitude.toFixed(5)}, {mapPin.longitude.toFixed(5)}
+                <Text style={styles.mapCoordText} numberOfLines={1}>
+                  {mapPinAddress.trim() || `${mapPin.latitude.toFixed(5)}, ${mapPin.longitude.toFixed(5)}`}
                 </Text>
               </View>
               <Pressable
@@ -3400,6 +3496,32 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: Colors.text,
     letterSpacing: 1,
+  },
+  mapSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 12,
+    height: 44,
+  },
+  mapSearchInput: {
+    flex: 1,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: Colors.text,
+    height: 44,
+  },
+  mapSearchSugs: {
+    backgroundColor: Colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 6,
+    overflow: 'hidden',
   },
   mapHint: {
     fontFamily: 'Inter_400Regular',
