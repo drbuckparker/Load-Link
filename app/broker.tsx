@@ -163,6 +163,25 @@ export default function BrokerDashboardScreen() {
     enabled: !!user,
   });
 
+  // When the assign sheet is open, check which roster drivers marked
+  // themselves unavailable on the job's date.
+  const assignJobDate = (assignJob?.scheduledDate || assignJob?.scheduled_date || '').slice(0, 10);
+  const rosterDriverIds = (Array.isArray(rosterQuery.data) ? rosterQuery.data : [])
+    .map((d: any) => d.driverId || d.driver_id || d.id)
+    .filter(Boolean);
+  const availabilityQuery = useQuery<Record<string, { unavailable: boolean; notes: string | null }>>({
+    queryKey: ['/api/broker/roster-availability', assignJobDate],
+    queryFn: async () => {
+      const res = await apiRequest(
+        'GET',
+        `/api/broker/roster-availability?date=${encodeURIComponent(assignJobDate)}`
+      );
+      return res.json();
+    },
+    enabled: !!user && !!assignJob && /^\d{4}-\d{2}-\d{2}$/.test(assignJobDate) && rosterDriverIds.length > 0,
+  });
+  const availabilityMap = availabilityQuery.data || {};
+
   const jobs = Array.isArray(jobsQuery.data) ? jobsQuery.data : [];
   const todayJobs = jobs.filter(j => isTodayDate(j.scheduledDate || j.scheduled_date));
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
@@ -572,14 +591,26 @@ export default function BrokerDashboardScreen() {
                 const driverId = d.driverId || d.driver_id || d.id;
                 const already = assignedDriverIds.has(driverId);
                 const pendingInvite = d.status === 'pending';
+                const unavailable = !!availabilityMap[String(driverId)]?.unavailable;
                 return (
-                  <View key={d.id} style={styles.assignRow}>
+                  <View key={d.id} style={[styles.assignRow, unavailable && { opacity: 0.55 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.personName} numberOfLines={1}>{d.name || d.driverName || d.driver_name || d.email || 'Driver'}</Text>
                       {already ? <Text style={styles.personEmail}>Already assigned</Text> :
-                       pendingInvite ? <Text style={styles.personEmail}>Invite pending</Text> : null}
+                       pendingInvite ? <Text style={styles.personEmail}>Invite pending</Text> :
+                       unavailable ? (
+                        <Text style={[styles.personEmail, { color: Colors.destructive }]}>
+                          Unavailable this day{availabilityMap[String(driverId)]?.notes ? ` — ${availabilityMap[String(driverId)]!.notes}` : ''}
+                        </Text>
+                       ) : null}
                     </View>
-                    {!already && !pendingInvite && (
+                    {unavailable && !already && !pendingInvite && (
+                      <View style={styles.unavailableBadge}>
+                        <Ionicons name="close-circle" size={14} color={Colors.destructive} />
+                        <Text style={styles.unavailableBadgeText}>UNAVAILABLE</Text>
+                      </View>
+                    )}
+                    {!already && !pendingInvite && !unavailable && (
                       <>
                         <Pressable
                           testID={`assign-hold-${d.id}`}
@@ -723,6 +754,8 @@ const styles = StyleSheet.create({
     minHeight: 36, alignItems: 'center', justifyContent: 'center', marginRight: 8,
   },
   holdBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.5 },
+  unavailableBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5 },
+  unavailableBadgeText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.destructive, letterSpacing: 0.5 },
   jobActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   assignBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,

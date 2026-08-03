@@ -1753,6 +1753,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Roster availability for a given date: reads the shared driver_availability
+  // table (drivers mark trucks unavailable in their calendar) so the broker's
+  // assign sheet can flag who can't run that day.
+  app.get("/api/broker/roster-availability", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const date = String(req.query.date || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ message: "date=YYYY-MM-DD required" });
+    }
+    try {
+      // Derive the driver list from the broker's own roster (upstream) —
+      // never trust caller-supplied IDs, or any broker could read any
+      // driver's availability.
+      const auth = getWebsiteAuth(req)!;
+      let driverIds: string[] = [];
+      if (auth.jwt && !auth.jwt.startsWith("dev-local:")) {
+        const rr = await websiteFetch("/api/broker/roster", { method: "GET", jwt: auth.jwt });
+        if (rr.ok) {
+          const rosterData = await rr.json().catch(() => []);
+          if (Array.isArray(rosterData)) {
+            driverIds = rosterData
+              .map((d: any) => String(d.driverId || d.driver_id || d.id || ""))
+              .filter(Boolean)
+              .slice(0, 200);
+          }
+        }
+      }
+      if (driverIds.length === 0) return res.json({});
+      const result = await pool.query(
+        `SELECT driver_id, is_available, notes
+         FROM driver_availability
+         WHERE date = $1 AND driver_id = ANY($2)`,
+        [date, driverIds]
+      );
+      const map: Record<string, { unavailable: boolean; notes: string | null }> = {};
+      for (const r of result.rows) {
+        // A driver is unavailable for the day if ANY of their records for that
+        // date says so (e.g. their only truck is blocked).
+        if (r.is_available === false) {
+          map[String(r.driver_id)] = { unavailable: true, notes: r.notes || null };
+        } else if (!map[String(r.driver_id)]) {
+          map[String(r.driver_id)] = { unavailable: false, notes: null };
+        }
+      }
+      return res.json(map);
+    } catch (e: any) {
+      console.error("GET /api/broker/roster-availability error:", e.message);
+      return res.status(500).json({ message: "Failed to load availability" });
+    }
+  });
+
   // Add a client manually (no invite). Stored companion-side only; the client
   // does not need a LoadLink account for the broker to post jobs for them.
   app.post("/api/broker/clients", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
