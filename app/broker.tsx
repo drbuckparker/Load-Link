@@ -325,7 +325,7 @@ export default function BrokerDashboardScreen() {
             onPress={() => { haptic(Haptics.ImpactFeedbackStyle.Medium); setAssignJob(item); }}
           >
             <Ionicons name="person-add" size={16} color={Colors.primaryForeground} />
-            <Text style={styles.assignBtnText}>ASSIGN</Text>
+            <Text style={styles.assignBtnText}>ASSIGN TRUCKS</Text>
           </Pressable>
           {held > 0 && (
             <Pressable
@@ -559,7 +559,7 @@ export default function BrokerDashboardScreen() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>ASSIGN DRIVER</Text>
+              <Text style={styles.modalTitle}>ASSIGN TRUCKS FROM YOUR ROSTER</Text>
               <Pressable onPress={() => setAssignJob(null)} style={styles.modalClose} testID="assign-modal-close">
                 <Ionicons name="close" size={22} color={Colors.text} />
               </Pressable>
