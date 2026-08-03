@@ -613,6 +613,16 @@ export default function CreateJobScreen() {
       setProjectSiteAddress(address);
       setProjectSiteLat(mapPin.latitude);
       setProjectSiteLng(mapPin.longitude);
+      // New project site just picked — ask which way they're hauling so the
+      // pickup/dropoff autofills from it, same as selecting an existing project.
+      setPendingProject({
+        id: projectId || null,
+        name: projectName.trim() || 'this project',
+        site_address: address,
+        site_lat: mapPin.latitude,
+        site_lng: mapPin.longitude,
+      });
+      setShowHaulDirectionModal(true);
     }
 
     const pinTarget = pinProjectTarget;
