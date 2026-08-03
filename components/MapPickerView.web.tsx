@@ -29,15 +29,34 @@ html,body,#map{margin:0;padding:0;width:100%;height:100%;background:#161a22;}
 .my-loc-btn svg{fill:#FF9900;}
 .my-loc-btn.loading svg{animation:spin 1s linear infinite;}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.day-night-btn{position:absolute;top:64px;right:12px;width:44px;height:44px;border-radius:22px;
+  background:rgba(22,26,34,0.9);border:1px solid #2a3040;z-index:1000;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:20px;transition:background 0.15s;}
+.day-night-btn:hover{background:#1e2430;}
 </style>
 </head><body>
 <div id="map"></div>
+<div id="dayNightBtn" class="day-night-btn" title="Toggle day/night map">&#9728;&#65039;</div>
 <div id="myLocBtn" class="my-loc-btn" title="Find my location">
   <svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0013 3.06V1h-2v2.06A8.994 8.994 0 003.06 11H1v2h2.06A8.994 8.994 0 0011 20.94V23h2v-2.06A8.994 8.994 0 0020.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
 </div>
 <script>
 var map=L.map('map',{attributionControl:false}).setView([${lat},${lng}],${hasMarker ? 14 : 11});
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
+var darkTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19});
+var lightTiles=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19});
+var isDark=true;
+try{isDark=(localStorage.getItem('mapDayNight')||'dark')==='dark';}catch(ex){}
+(isDark?darkTiles:lightTiles).addTo(map);
+var dnBtn=document.getElementById('dayNightBtn');
+function syncDnBtn(){dnBtn.innerHTML=isDark?'&#9728;&#65039;':'&#127769;';}
+syncDnBtn();
+dnBtn.addEventListener('click',function(){
+  isDark=!isDark;
+  try{localStorage.setItem('mapDayNight',isDark?'dark':'light');}catch(ex){}
+  if(isDark){map.removeLayer(lightTiles);darkTiles.addTo(map);}
+  else{map.removeLayer(darkTiles);lightTiles.addTo(map);}
+  syncDnBtn();
+});
 
 var orangeIcon=L.divIcon({
   html:'<div style="width:24px;height:24px;background:#FF9900;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.5);"></div>',
