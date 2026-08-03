@@ -98,6 +98,93 @@ async function notifyDriverJobAwarded(driverId: string, jobId: string, jobMateri
   }
 }
 
+// After a driver thumbs-up/down on a sent broker assignment: tell the broker.
+// Thumbs up -> running tally push ("3 of 14 trucks confirmed" / "All trucks
+// confirmed"); thumbs down -> immediate reassign alert. Counts come from the
+// upstream broker jobs API (authoritative for sent/confirmed), using the
+// broker's latest persisted session JWT; without one we still send the basic
+// per-truck alert, just without day totals.
+async function notifyBrokerAssignmentResponse(assignmentId: string, driverId: string, action: "confirm" | "decline") {
+  const info = await pool.query(
+    `SELECT ja.job_id, j.contractor_id AS broker_id, j.material, j.scheduled_date,
+            bu.role::text AS poster_role, du.full_name AS driver_name
+       FROM job_assignments ja
+       JOIN jobs j ON j.id = ja.job_id
+       JOIN users bu ON bu.id::text = j.contractor_id::text
+       LEFT JOIN users du ON du.id::text = $2
+      WHERE ja.id = $1`,
+    [assignmentId, driverId]
+  );
+  const row = info.rows[0];
+  if (!row || String(row.poster_role) !== "broker") return;
+  const brokerId = String(row.broker_id);
+  const driverName = row.driver_name || "A driver";
+  const rawDate = row.scheduled_date instanceof Date
+    ? row.scheduled_date.toISOString()
+    : String(row.scheduled_date || "");
+  const dateKey = rawDate.slice(0, 10);
+  const dayLabel = dateKey
+    ? new Date(`${dateKey}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })
+    : "";
+
+  let title: string;
+  let body: string;
+  if (action === "decline") {
+    title = "Truck declined — reassign needed";
+    body = `${driverName} declined the ${row.material || "job"}${dayLabel ? ` on ${dayLabel}` : ""}. The spot is open — assign another truck and send it out.`;
+  } else {
+    title = "Truck confirmed";
+    body = `${driverName} confirmed the ${row.material || "job"}${dayLabel ? ` for ${dayLabel}` : ""}.`;
+    // Day-wide tally via upstream broker jobs (needs the broker's user JWT).
+    let jwt: string | null = null;
+    for (const [, a] of tokenToJwt) {
+      if (a.userId === brokerId && a.jwt && !a.jwt.startsWith("dev-local:")) jwt = a.jwt;
+    }
+    if (jwt && dateKey) {
+      try {
+        const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt });
+        if (jr.ok) {
+          const jobs = await jr.json().catch(() => []);
+          let confirmed = 0;
+          let totalOut = 0;
+          for (const job of Array.isArray(jobs) ? jobs : []) {
+            const jd = String(job.scheduledDate || job.scheduled_date || "").slice(0, 10);
+            if (jd !== dateKey) continue;
+            const s = job.assignmentStats || {};
+            confirmed += Number(s.confirmed) || 0;
+            totalOut += (Number(s.confirmed) || 0) + (Number(s.sent) || 0);
+          }
+          if (totalOut > 0) {
+            if (confirmed >= totalOut) {
+              title = "All trucks confirmed";
+              body = `All ${totalOut} truck${totalOut === 1 ? "" : "s"} confirmed${dayLabel ? ` for ${dayLabel}` : ""}.`;
+            } else {
+              body = `${driverName} confirmed. ${confirmed} of ${totalOut} trucks confirmed${dayLabel ? ` for ${dayLabel}` : ""}.`;
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error("Broker tally fetch error:", e.message);
+      }
+    }
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+       VALUES ($1, $2, 'new_load', $3, $4, $5, false, NOW())`,
+      [crypto.randomUUID(), brokerId, title, body, row.job_id]
+    );
+  } catch (e: any) {
+    console.error("Broker confirm notification insert error:", e.message);
+  }
+  await sendPushNotification(brokerId, title, body, {
+    type: action === "decline" ? "broker_truck_declined" : "broker_truck_confirmed",
+    jobId: String(row.job_id),
+    date: dateKey,
+  });
+}
+
 // Alert drivers with a truck horn when a new job is posted within their area so
 // they can apply as soon as possible. "Their area" = the job's pickup location
 // falling within a driver's search_radius_miles of any of their saved locations
@@ -2142,9 +2229,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Broker dashboard data + actions (broker-only enforcement is upstream).
   app.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
-  // Driver thumbs up/down on a sent broker assignment.
-  app.post("/api/assignments/:id/confirm", requireAuth, proxyToWebsite);
-  app.post("/api/assignments/:id/decline", requireAuth, proxyToWebsite);
+  // Driver thumbs up/down on a sent broker assignment. Proxies upstream, then
+  // (fire-and-forget) alerts the posting broker: running confirmed-count pushes
+  // on thumbs up, and an immediate "reassign needed" alert on thumbs down.
+  const handleAssignmentResponse = (action: "confirm" | "decline") =>
+    async (req: Request, res: Response) => {
+      const auth = getWebsiteAuth(req)!;
+      const assignmentId = String(req.params.id);
+      try {
+        const up = await websiteFetch(`/api/assignments/${assignmentId}/${action}`, {
+          method: "POST",
+          body: req.body ?? {},
+          jwt: auth.jwt,
+        });
+        const text = await up.text();
+        res.status(up.status);
+        try { res.json(JSON.parse(text)); } catch { res.send(text); }
+        if (up.ok) {
+          notifyBrokerAssignmentResponse(assignmentId, auth.userId, action).catch((e) =>
+            console.error("Broker confirm-notify error:", e.message)
+          );
+        }
+      } catch (e: any) {
+        console.error(`POST /api/assignments/:id/${action} error:`, e.message);
+        if (!res.headersSent) res.status(502).json({ message: "Failed to reach website" });
+      }
+    };
+  app.post("/api/assignments/:id/confirm", requireAuth, handleAssignmentResponse("confirm"));
+  app.post("/api/assignments/:id/decline", requireAuth, handleAssignmentResponse("decline"));
   // Broker roster / client-company invitations.
   app.get("/api/invitations/pending", requireAuth, proxyToWebsite);
   app.post("/api/invitations/:id/accept", requireAuth, proxyToWebsite);
@@ -4444,7 +4556,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Broker home card: per-day truck confirmation tallies (replaces the
+      // location/status widgets client-side). Counts come from the upstream
+      // broker jobs API, which is authoritative for sent/confirmed/declined.
+      let brokerConfirmations: any[] | undefined;
+      if (role === 'broker' && auth.jwt && !auth.jwt.startsWith('dev-local:')) {
+        try {
+          const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt: auth.jwt });
+          if (jr.ok) {
+            const bJobs = await jr.json().catch(() => []);
+            const byDay = new Map<string, { confirmed: number; sent: number; declined: number; jobs: number }>();
+            for (const job of Array.isArray(bJobs) ? bJobs : []) {
+              const jd = String(job.scheduledDate || job.scheduled_date || "").slice(0, 10);
+              if (!jd) continue;
+              const s = job.assignmentStats || {};
+              const cur = byDay.get(jd) || { confirmed: 0, sent: 0, declined: 0, jobs: 0 };
+              cur.confirmed += Number(s.confirmed) || 0;
+              cur.sent += Number(s.sent) || 0;
+              cur.declined += Number(s.declined) || 0;
+              cur.jobs += 1;
+              byDay.set(jd, cur);
+            }
+            brokerConfirmations = upcomingDays.map((d: any) => {
+              const g = byDay.get(d.date) || { confirmed: 0, sent: 0, declined: 0, jobs: 0 };
+              const totalOut = g.confirmed + g.sent;
+              return {
+                date: d.date,
+                confirmed: g.confirmed,
+                totalSent: totalOut,
+                declined: g.declined,
+                allConfirmed: totalOut > 0 && g.confirmed >= totalOut,
+              };
+            });
+          }
+        } catch (e: any) {
+          console.error("Dashboard broker confirmations error:", e.message);
+        }
+      }
+
       const dashboard = {
+        brokerConfirmations,
         openJobs, activeJobs, completedJobs, pendingApplications,
         totalJobs: jobs.length,
         earnings: {

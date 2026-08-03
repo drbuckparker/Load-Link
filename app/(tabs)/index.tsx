@@ -71,6 +71,7 @@ interface DashboardData {
     jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; activeRunCount?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[];
   }[];
   recentActivity: { id: string; type: string; title: string; message: string; createdAt: string; isRead: boolean }[];
+  brokerConfirmations?: { date: string; confirmed: number; totalSent: number; declined: number; allConfirmed: boolean }[];
 }
 
 export default function DashboardScreen() {
@@ -465,6 +466,60 @@ export default function DashboardScreen() {
 
         {contractor ? renderContractorStats() : null}
 
+        {role === 'broker' ? (
+          <View style={styles.confirmCard}>
+            <View style={styles.mapSectionHeader}>
+              <Ionicons name="thumbs-up" size={14} color={Colors.text} />
+              <Text style={styles.mapSectionTitle}>TRUCK CONFIRMATIONS</Text>
+            </View>
+            {(() => {
+              const days = (dashboard?.brokerConfirmations || []).filter(d => d.totalSent > 0 || d.declined > 0);
+              if (days.length === 0) {
+                return <Text style={styles.confirmEmptyText}>No instructions sent out yet. Assign trucks in your Day Plan, then send instructions.</Text>;
+              }
+              const todayKey = dashboard?.upcomingDays?.[0]?.date;
+              const tomorrowKey = dashboard?.upcomingDays?.[1]?.date;
+              const dayLabel = (dateStr: string) => {
+                if (dateStr === todayKey) return 'today';
+                if (dateStr === tomorrowKey) return 'tomorrow';
+                return new Date(`${dateStr}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+              };
+              return days.map(d => (
+                <Pressable
+                  key={d.date}
+                  style={styles.confirmRow}
+                  onPress={() => {
+                    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push({ pathname: '/broker', params: { tab: 'today', date: d.date } } as any);
+                  }}
+                >
+                  {d.allConfirmed ? (
+                    <>
+                      <Ionicons name="checkmark-circle" size={20} color={Colors.success} />
+                      <Text style={[styles.confirmRowText, { color: Colors.success }]}>
+                        All trucks confirmed for {dayLabel(d.date)} ({d.confirmed}/{d.totalSent})
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Ionicons name="time-outline" size={20} color={Colors.warning} />
+                      <Text style={styles.confirmRowText}>
+                        {d.confirmed} of {d.totalSent} trucks confirmed {dayLabel(d.date)}
+                      </Text>
+                    </>
+                  )}
+                  {d.declined > 0 ? (
+                    <View style={styles.declinedPill}>
+                      <Ionicons name="thumbs-down" size={12} color={Colors.destructive} />
+                      <Text style={styles.declinedPillText}>{d.declined} DECLINED</Text>
+                    </View>
+                  ) : null}
+                  <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                </Pressable>
+              ));
+            })()}
+          </View>
+        ) : (
         <View style={styles.mapStatusRow}>
           <View style={styles.mapContainer}>
             <View style={styles.mapSectionHeader}>
@@ -498,6 +553,7 @@ export default function DashboardScreen() {
             </View>
           </View>
         </View>
+        )}
 
         {(() => {
           const todayJobs = dashboard?.upcomingDays?.[0]?.jobs || [];
@@ -985,6 +1041,12 @@ const styles = StyleSheet.create({
     top: 14,
     right: 12,
   },
+  confirmCard: { backgroundColor: Colors.card, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, padding: 14, marginBottom: 20, gap: 10 },
+  confirmEmptyText: { fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted, lineHeight: 18 },
+  confirmRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  confirmRowText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
+  declinedPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  declinedPillText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.destructive, letterSpacing: 0.5 },
   mapStatusRow: {
     flexDirection: 'row',
     gap: 12,
