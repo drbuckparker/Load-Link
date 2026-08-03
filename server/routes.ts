@@ -3726,6 +3726,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
         (auth as any).originalRole = role;
       } catch {}
+      // The website keeps its OWN users record (separate from this DB) and
+      // gates /api/broker/* etc. on it. If the role only changes here, the
+      // website 403s broker/company endpoints while the app shows them —
+      // jobs "disappear". Mirror the change upstream (PUT /api/users/:id is
+      // the accepted endpoint; PUT /api/profile rejects role).
+      try {
+        const ur = await websiteFetch(`/api/users/${auth.userId}`, {
+          method: "PUT",
+          body: { role },
+          jwt: auth.jwt,
+        });
+        if (!ur.ok) {
+          console.error(`[RoleSync] Failed to push role '${role}' to website for ${auth.userId}: ${ur.status}`);
+        }
+      } catch (e: any) {
+        console.error(`[RoleSync] Error pushing role to website:`, e.message);
+      }
     }
     const localToken = req.headers.authorization?.slice(7) || "";
     if (localToken) {
