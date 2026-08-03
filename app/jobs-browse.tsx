@@ -110,6 +110,10 @@ export default function JobsBrowseScreen() {
   const [showInviteClient, setShowInviteClient] = useState(false);
   const [inviteClientName, setInviteClientName] = useState('');
   const [inviteClientEmail, setInviteClientEmail] = useState('');
+  const [inviteClientContact, setInviteClientContact] = useState('');
+  const [inviteClientPhone, setInviteClientPhone] = useState('');
+  const [inviteClientAddress, setInviteClientAddress] = useState('');
+  const [inviteClientNotes, setInviteClientNotes] = useState('');
   const [activeFilter, setActiveFilter] = useState<string>(params.filter || (params.date ? 'All' : 'Open'));
   const [dateFilter, setDateFilter] = useState<string | undefined>(params.date || undefined);
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(params.projectId || null);
@@ -238,7 +242,7 @@ export default function JobsBrowseScreen() {
   }, [brokerClients, clientSearch]);
 
   const inviteClientMutation = useMutation({
-    mutationFn: async (data: { name: string; email?: string }) => {
+    mutationFn: async (data: { name: string; email?: string; contactName?: string; phone?: string; address?: string; notes?: string }) => {
       const res = await apiRequest('POST', '/api/broker/clients', data);
       return res.json();
     },
@@ -247,6 +251,10 @@ export default function JobsBrowseScreen() {
       setShowInviteClient(false);
       setInviteClientName('');
       setInviteClientEmail('');
+      setInviteClientContact('');
+      setInviteClientPhone('');
+      setInviteClientAddress('');
+      setInviteClientNotes('');
       Alert.alert('Client Added', 'You can post and dispatch jobs for this client right away.');
     },
     onError: (e: any) => {
@@ -1148,7 +1156,11 @@ export default function JobsBrowseScreen() {
                       <Ionicons name="business" size={20} color={Colors.primary} />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.projectCardName} numberOfLines={1}>{cName}</Text>
-                        {!!item.email && <Text style={styles.projectJobNumber} numberOfLines={1}>{item.email}</Text>}
+                        {!!(item.email || item.phone) && (
+                          <Text style={styles.projectJobNumber} numberOfLines={1}>
+                            {[item.email, item.phone].filter(Boolean).join(' · ')}
+                          </Text>
+                        )}
                       </View>
                       <View style={[styles.projectStatusBadge, { backgroundColor: pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
                         <Text style={[styles.projectStatusText, { color: pending ? '#eab308' : '#22c55e' }]}>
@@ -1297,30 +1309,77 @@ export default function JobsBrowseScreen() {
                 <Ionicons name="close" size={24} color={Colors.textMuted} />
               </Pressable>
             </View>
-            <Text style={styles.modalLabel}>Client / Company Name</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="e.g. Wilson Excavation"
-              placeholderTextColor={Colors.textMuted}
-              value={inviteClientName}
-              onChangeText={setInviteClientName}
-              testID="invite-client-name"
-            />
-            <Text style={styles.modalLabel}>Email (optional)</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="client@example.com"
-              placeholderTextColor={Colors.textMuted}
-              value={inviteClientEmail}
-              onChangeText={setInviteClientEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              testID="invite-client-email"
-            />
+            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalLabel}>Client / Company Name</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. Wilson Excavation"
+                placeholderTextColor={Colors.textMuted}
+                value={inviteClientName}
+                onChangeText={setInviteClientName}
+                testID="invite-client-name"
+              />
+              <Text style={styles.modalLabel}>Contact Person (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. John Wilson"
+                placeholderTextColor={Colors.textMuted}
+                value={inviteClientContact}
+                onChangeText={setInviteClientContact}
+                testID="invite-client-contact"
+              />
+              <Text style={styles.modalLabel}>Email (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="client@example.com"
+                placeholderTextColor={Colors.textMuted}
+                value={inviteClientEmail}
+                onChangeText={setInviteClientEmail}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                testID="invite-client-email"
+              />
+              <Text style={styles.modalLabel}>Phone (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="(555) 123-4567"
+                placeholderTextColor={Colors.textMuted}
+                value={inviteClientPhone}
+                onChangeText={setInviteClientPhone}
+                keyboardType="phone-pad"
+                testID="invite-client-phone"
+              />
+              <Text style={styles.modalLabel}>Address (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Street, city, state"
+                placeholderTextColor={Colors.textMuted}
+                value={inviteClientAddress}
+                onChangeText={setInviteClientAddress}
+                testID="invite-client-address"
+              />
+              <Text style={styles.modalLabel}>Notes (optional)</Text>
+              <TextInput
+                style={[styles.modalInput, { height: 72, textAlignVertical: 'top' }]}
+                placeholder="Anything worth remembering about this client..."
+                placeholderTextColor={Colors.textMuted}
+                value={inviteClientNotes}
+                onChangeText={setInviteClientNotes}
+                multiline
+                testID="invite-client-notes"
+              />
+            </ScrollView>
             <Pressable
               style={[styles.modalCreateBtn, (!inviteClientName.trim() || inviteClientMutation.isPending) && { opacity: 0.5 }]}
               disabled={!inviteClientName.trim() || inviteClientMutation.isPending}
-              onPress={() => inviteClientMutation.mutate({ name: inviteClientName.trim(), email: inviteClientEmail.trim() || undefined })}
+              onPress={() => inviteClientMutation.mutate({
+                name: inviteClientName.trim(),
+                email: inviteClientEmail.trim() || undefined,
+                contactName: inviteClientContact.trim() || undefined,
+                phone: inviteClientPhone.trim() || undefined,
+                address: inviteClientAddress.trim() || undefined,
+                notes: inviteClientNotes.trim() || undefined,
+              })}
               testID="invite-client-submit"
             >
               {inviteClientMutation.isPending ? (

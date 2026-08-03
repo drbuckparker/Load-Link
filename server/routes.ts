@@ -1737,6 +1737,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         name: r.name,
         email: r.email || "",
         phone: r.phone || "",
+        contactName: r.contact_name || "",
+        contact_name: r.contact_name || "",
+        address: r.address || "",
+        notes: r.notes || "",
         status: "active",
         isManual: true,
         is_manual: true,
@@ -1756,6 +1760,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const name = String(req.body?.name || "").trim();
     const email = String(req.body?.email || "").trim();
     const phone = String(req.body?.phone || "").trim();
+    const contactName = String(req.body?.contactName || req.body?.contact_name || "").trim();
+    const address = String(req.body?.address || "").trim();
+    const notes = String(req.body?.notes || "").trim();
     if (!name) return res.status(400).json({ message: "Client name is required" });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ message: "Invalid email address" });
@@ -1767,8 +1774,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       if (dupe.rows[0]) return res.status(409).json({ message: "You already have a client with that name" });
       const result = await pool.query(
-        `INSERT INTO broker_manual_clients (broker_id, name, email, phone) VALUES ($1, $2, $3, $4) RETURNING *`,
-        [auth.userId, name, email || null, phone || null]
+        `INSERT INTO broker_manual_clients (broker_id, name, email, phone, contact_name, address, notes) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [auth.userId, name, email || null, phone || null, contactName || null, address || null, notes || null]
       );
       return res.status(201).json(addDualKeys(result.rows[0]));
     } catch (e: any) {
