@@ -1695,13 +1695,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // actually having that client in their website client list — prevents any
   // authenticated user from harvesting another company's project list.
   // Registered BEFORE the /api/broker/.* wildcard so it wins over the proxy.
-  app.get("/api/broker/client-projects", requireAuth, async (req: Request, res: Response) => {
+  // Broker-role gate for companion-local /api/broker/* handlers. The proxy
+  // wildcard relies on upstream enforcement, but local handlers registered
+  // before it must enforce the role themselves.
+  async function requireBrokerRole(req: Request, res: Response, next: Function) {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const r = await pool.query(
+        `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'broker' LIMIT 1`,
+        [auth.userId]
+      );
+      if (!r.rows[0]) return res.status(403).json({ message: "Broker access required" });
+      next();
+    } catch (e: any) {
+      console.error("requireBrokerRole error:", e.message);
+      return res.status(500).json({ message: "Authorization check failed" });
+    }
+  }
+
+  // Merged client list: upstream registered clients + companion-local manual
+  // clients (added by the broker without a LoadLink invite). Registered BEFORE
+  // the /api/broker/.* wildcard so it wins over the proxy.
+  app.get("/api/broker/clients", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req)!;
+    try {
+      let upstream: any[] = [];
+      if (auth.jwt && !auth.jwt.startsWith("dev-local:")) {
+        const cr = await websiteFetch("/api/broker/clients", { method: "GET", jwt: auth.jwt });
+        if (cr.ok) {
+          const data = await cr.json().catch(() => []);
+          if (Array.isArray(data)) upstream = data;
+        }
+      }
+      const local = await pool.query(
+        `SELECT * FROM broker_manual_clients WHERE broker_id = $1 ORDER BY created_at DESC`,
+        [auth.userId]
+      );
+      const manual = local.rows.map((r: any) => ({
+        clientUserId: `manual-${r.id}`,
+        client_user_id: `manual-${r.id}`,
+        name: r.name,
+        email: r.email || "",
+        phone: r.phone || "",
+        status: "active",
+        isManual: true,
+        is_manual: true,
+        activeJobs: 0,
+      }));
+      return res.json([...manual, ...upstream]);
+    } catch (e: any) {
+      console.error("GET /api/broker/clients error:", e.message);
+      return res.status(500).json({ message: "Failed to load clients" });
+    }
+  });
+
+  // Add a client manually (no invite). Stored companion-side only; the client
+  // does not need a LoadLink account for the broker to post jobs for them.
+  app.post("/api/broker/clients", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "").trim();
+    const phone = String(req.body?.phone || "").trim();
+    if (!name) return res.status(400).json({ message: "Client name is required" });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: "Invalid email address" });
+    }
+    try {
+      const dupe = await pool.query(
+        `SELECT id FROM broker_manual_clients WHERE broker_id = $1 AND lower(name) = lower($2)`,
+        [auth.userId, name]
+      );
+      if (dupe.rows[0]) return res.status(409).json({ message: "You already have a client with that name" });
+      const result = await pool.query(
+        `INSERT INTO broker_manual_clients (broker_id, name, email, phone) VALUES ($1, $2, $3, $4) RETURNING *`,
+        [auth.userId, name, email || null, phone || null]
+      );
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("POST /api/broker/clients error:", e.message);
+      return res.status(500).json({ message: "Failed to add client" });
+    }
+  });
+
+  app.get("/api/broker/client-projects", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const clientUserId = String(req.query.clientUserId || "").trim();
+    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
+    // Manual (companion-local) clients have no LoadLink account, so no projects.
+    if (clientUserId.startsWith("manual-")) {
+      const own = await pool.query(
+        `SELECT id FROM broker_manual_clients WHERE id::text = $1 AND broker_id = $2`,
+        [clientUserId.slice(7), auth.userId]
+      ).catch(() => ({ rows: [] as any[] }));
+      if (!own.rows[0]) return res.status(403).json({ message: "Not one of your clients" });
+      return res.json([]);
+    }
     if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
       return res.status(400).json({ message: "This feature requires a live website account." });
     }
-    const clientUserId = String(req.query.clientUserId || "").trim();
-    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
     try {
       const cr = await websiteFetch("/api/broker/clients", { method: "GET", jwt: auth.jwt });
       if (!cr.ok) return res.status(cr.status).json({ message: "Could not verify client list" });

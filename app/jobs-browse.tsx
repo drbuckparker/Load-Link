@@ -238,8 +238,8 @@ export default function JobsBrowseScreen() {
   }, [brokerClients, clientSearch]);
 
   const inviteClientMutation = useMutation({
-    mutationFn: async (data: { name: string; email: string }) => {
-      const res = await apiRequest('POST', '/api/broker/clients/invite', data);
+    mutationFn: async (data: { name: string; email?: string }) => {
+      const res = await apiRequest('POST', '/api/broker/clients', data);
       return res.json();
     },
     onSuccess: () => {
@@ -247,10 +247,10 @@ export default function JobsBrowseScreen() {
       setShowInviteClient(false);
       setInviteClientName('');
       setInviteClientEmail('');
-      Alert.alert('Invite Sent', 'Your client will appear here once they accept — you can post jobs for them right away.');
+      Alert.alert('Client Added', 'You can post and dispatch jobs for this client right away.');
     },
     onError: (e: any) => {
-      Alert.alert('Invite Failed', e?.message || 'Could not send the invitation. Please try again.');
+      Alert.alert('Could Not Add Client', e?.message || 'Please try again.');
     },
   });
 
@@ -1122,19 +1122,19 @@ export default function JobsBrowseScreen() {
               <Ionicons name="business-outline" size={48} color={Colors.textMuted} />
               <Text style={styles.emptyTitle}>{clientSearch ? 'No matching clients' : 'No clients yet'}</Text>
               <Text style={styles.emptySubtitle}>
-                {clientSearch ? 'Try a different search term' : 'Invite a client so you can post and dispatch jobs for them'}
+                {clientSearch ? 'Try a different search term' : 'Add a client so you can post and dispatch jobs for them'}
               </Text>
               {!clientSearch && (
                 <Pressable style={styles.emptyCreateBtn} onPress={() => setShowInviteClient(true)}>
                   <Ionicons name="add" size={18} color={Colors.primaryForeground} />
-                  <Text style={styles.emptyCreateBtnText}>Invite Client</Text>
+                  <Text style={styles.emptyCreateBtnText}>Add Client</Text>
                 </Pressable>
               )}
             </View>
           ) : (
             <FlatList
               data={filteredClients}
-              keyExtractor={(item: any, i) => String(item.invitationId || item.invitation_id || item.id || item.email || i)}
+              keyExtractor={(item: any, i) => String(item.clientUserId || item.client_user_id || item.invitationId || item.invitation_id || item.id || item.email || i)}
               renderItem={({ item }: { item: any }) => {
                 const cName = item.name || item.client_name || item.clientName || item.email || 'Client';
                 const pending = item.status === 'pending';
@@ -1292,7 +1292,7 @@ export default function JobsBrowseScreen() {
         <Pressable style={styles.modalOverlay} onPress={() => setShowInviteClient(false)}>
           <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>INVITE CLIENT</Text>
+              <Text style={styles.modalTitle}>ADD CLIENT</Text>
               <Pressable onPress={() => setShowInviteClient(false)} hitSlop={8}>
                 <Ionicons name="close" size={24} color={Colors.textMuted} />
               </Pressable>
@@ -1306,7 +1306,7 @@ export default function JobsBrowseScreen() {
               onChangeText={setInviteClientName}
               testID="invite-client-name"
             />
-            <Text style={styles.modalLabel}>Email</Text>
+            <Text style={styles.modalLabel}>Email (optional)</Text>
             <TextInput
               style={styles.modalInput}
               placeholder="client@example.com"
@@ -1318,15 +1318,15 @@ export default function JobsBrowseScreen() {
               testID="invite-client-email"
             />
             <Pressable
-              style={[styles.modalCreateBtn, (!inviteClientName.trim() || !inviteClientEmail.trim() || inviteClientMutation.isPending) && { opacity: 0.5 }]}
-              disabled={!inviteClientName.trim() || !inviteClientEmail.trim() || inviteClientMutation.isPending}
-              onPress={() => inviteClientMutation.mutate({ name: inviteClientName.trim(), email: inviteClientEmail.trim() })}
+              style={[styles.modalCreateBtn, (!inviteClientName.trim() || inviteClientMutation.isPending) && { opacity: 0.5 }]}
+              disabled={!inviteClientName.trim() || inviteClientMutation.isPending}
+              onPress={() => inviteClientMutation.mutate({ name: inviteClientName.trim(), email: inviteClientEmail.trim() || undefined })}
               testID="invite-client-submit"
             >
               {inviteClientMutation.isPending ? (
                 <ActivityIndicator size="small" color={Colors.primaryForeground} />
               ) : (
-                <Text style={styles.modalCreateBtnText}>Send Invite</Text>
+                <Text style={styles.modalCreateBtnText}>Add Client</Text>
               )}
             </Pressable>
           </Pressable>
