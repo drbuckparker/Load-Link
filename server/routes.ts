@@ -1784,38 +1784,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/broker/client-projects", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
-    const auth = getWebsiteAuth(req)!;
-    const clientUserId = String(req.query.clientUserId || "").trim();
-    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
-    // Manual (companion-local) clients have no LoadLink account, so no projects.
+  // Verifies the given clientUserId belongs to this broker. Manual clients are
+  // checked against the companion-local table; registered clients against the
+  // broker's upstream client list. Returns null on success or an error tuple.
+  async function verifyBrokerClient(auth: { userId: string; jwt?: string }, clientUserId: string): Promise<{ status: number; message: string } | null> {
     if (clientUserId.startsWith("manual-")) {
       const own = await pool.query(
         `SELECT id FROM broker_manual_clients WHERE id::text = $1 AND broker_id = $2`,
         [clientUserId.slice(7), auth.userId]
       ).catch(() => ({ rows: [] as any[] }));
-      if (!own.rows[0]) return res.status(403).json({ message: "Not one of your clients" });
-      return res.json([]);
+      return own.rows[0] ? null : { status: 403, message: "Not one of your clients" };
     }
     if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
-      return res.status(400).json({ message: "This feature requires a live website account." });
+      return { status: 400, message: "This feature requires a live website account." };
     }
+    const cr = await websiteFetch("/api/broker/clients", { method: "GET", jwt: auth.jwt });
+    if (!cr.ok) return { status: cr.status, message: "Could not verify client list" };
+    const clients = await cr.json().catch(() => []);
+    const isMyClient = Array.isArray(clients) && clients.some((c: any) =>
+      String(c.clientUserId || c.client_user_id || "") === clientUserId
+    );
+    return isMyClient ? null : { status: 403, message: "Not one of your clients" };
+  }
+
+  app.get("/api/broker/client-projects", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const clientUserId = String(req.query.clientUserId || "").trim();
+    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
     try {
-      const cr = await websiteFetch("/api/broker/clients", { method: "GET", jwt: auth.jwt });
-      if (!cr.ok) return res.status(cr.status).json({ message: "Could not verify client list" });
-      const clients = await cr.json().catch(() => []);
-      const isMyClient = Array.isArray(clients) && clients.some((c: any) =>
-        String(c.clientUserId || c.client_user_id || "") === clientUserId
+      const err = await verifyBrokerClient(auth, clientUserId);
+      if (err) return res.status(err.status).json({ message: err.message });
+      // Broker-created projects for this client (companion-local).
+      const brokerProjects = await pool.query(
+        `SELECT * FROM broker_client_projects WHERE broker_id = $1 AND client_user_id = $2 AND deleted_at IS NULL ORDER BY created_at DESC`,
+        [auth.userId, clientUserId]
       );
-      if (!isMyClient) return res.status(403).json({ message: "Not one of your clients" });
-      const result = await pool.query(
-        `SELECT * FROM contractor_projects WHERE contractor_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
-        [clientUserId]
-      );
-      return res.json(result.rows.map(addDualKeys));
+      // Registered clients may also have their own synced projects.
+      let clientOwn: any[] = [];
+      if (!clientUserId.startsWith("manual-")) {
+        const result = await pool.query(
+          `SELECT * FROM contractor_projects WHERE contractor_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
+          [clientUserId]
+        );
+        clientOwn = result.rows;
+      }
+      return res.json([
+        ...brokerProjects.rows.map((r: any) => ({ ...r, is_broker_project: true, isBrokerProject: true })),
+        ...clientOwn.map((r: any) => ({ ...r, is_broker_project: false, isBrokerProject: false })),
+      ].map(addDualKeys));
     } catch (e: any) {
       console.error("GET /api/broker/client-projects error:", e.message);
       return res.status(500).json({ message: "Failed to load client projects" });
+    }
+  });
+
+  // Broker creates a project for one of their clients. Stored companion-side
+  // (broker_client_projects) — never pushed upstream, since the project belongs
+  // to the broker's bookkeeping, not the client's own website account.
+  app.post("/api/broker/client-projects", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const clientUserId = String(req.body?.clientUserId || req.body?.client_user_id || "").trim();
+    const name = String(req.body?.name || "").trim();
+    const jobNumber = String(req.body?.jobNumber || req.body?.job_number || "").trim();
+    const siteAddress = String(req.body?.siteAddress || req.body?.site_address || "").trim();
+    const notes = String(req.body?.notes || "").trim();
+    const siteLat = req.body?.siteLat ?? req.body?.site_lat;
+    const siteLng = req.body?.siteLng ?? req.body?.site_lng;
+    const lat = siteLat != null && siteLat !== "" && isFinite(Number(siteLat)) ? Number(siteLat) : null;
+    const lng = siteLng != null && siteLng !== "" && isFinite(Number(siteLng)) ? Number(siteLng) : null;
+    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
+    if (!name) return res.status(400).json({ message: "Project name is required" });
+    try {
+      const err = await verifyBrokerClient(auth, clientUserId);
+      if (err) return res.status(err.status).json({ message: err.message });
+      const dupe = await pool.query(
+        `SELECT id FROM broker_client_projects WHERE broker_id = $1 AND client_user_id = $2 AND lower(name) = lower($3) AND deleted_at IS NULL`,
+        [auth.userId, clientUserId, name]
+      );
+      if (dupe.rows[0]) return res.status(409).json({ message: "This client already has a project with that name" });
+      const result = await pool.query(
+        `INSERT INTO broker_client_projects (broker_id, client_user_id, name, job_number, site_address, site_lat, site_lng, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [auth.userId, clientUserId, name, jobNumber || null, siteAddress || null, lat, lng, notes || null]
+      );
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("POST /api/broker/client-projects error:", e.message);
+      return res.status(500).json({ message: "Failed to create project" });
+    }
+  });
+
+  // Update a broker-created client project (site location, name, notes...).
+  app.put("/api/broker/client-projects/:id", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    try {
+      const own = await pool.query(
+        `SELECT * FROM broker_client_projects WHERE id::text = $1 AND broker_id = $2 AND deleted_at IS NULL`,
+        [String(req.params.id), auth.userId]
+      );
+      if (!own.rows[0]) return res.status(404).json({ message: "Project not found" });
+      const b = req.body || {};
+      const name = b.name != null ? String(b.name).trim() : null;
+      if (b.name != null && !name) return res.status(400).json({ message: "Project name cannot be empty" });
+      const siteLatRaw = b.siteLat ?? b.site_lat;
+      const siteLngRaw = b.siteLng ?? b.site_lng;
+      const result = await pool.query(
+        `UPDATE broker_client_projects SET
+           name = COALESCE($3, name),
+           job_number = COALESCE($4, job_number),
+           site_address = COALESCE($5, site_address),
+           site_lat = COALESCE($6, site_lat),
+           site_lng = COALESCE($7, site_lng),
+           notes = COALESCE($8, notes)
+         WHERE id::text = $1 AND broker_id = $2 RETURNING *`,
+        [
+          String(req.params.id), auth.userId,
+          name,
+          b.jobNumber != null || b.job_number != null ? String(b.jobNumber ?? b.job_number).trim() : null,
+          b.siteAddress != null || b.site_address != null ? String(b.siteAddress ?? b.site_address).trim() : null,
+          siteLatRaw != null && siteLatRaw !== "" && isFinite(Number(siteLatRaw)) ? Number(siteLatRaw) : null,
+          siteLngRaw != null && siteLngRaw !== "" && isFinite(Number(siteLngRaw)) ? Number(siteLngRaw) : null,
+          b.notes != null ? String(b.notes).trim() : null,
+        ]
+      );
+      return res.json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("PUT /api/broker/client-projects/:id error:", e.message);
+      return res.status(500).json({ message: "Failed to update project" });
     }
   });
 

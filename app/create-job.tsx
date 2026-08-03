@@ -579,13 +579,22 @@ export default function CreateJobScreen() {
             text: 'Save',
             onPress: async () => {
               try {
-                await apiRequest('PUT', `/api/projects/${pinTarget.projectId}`, {
-                  siteLat: finalLat,
-                  siteLng: finalLng,
-                  siteAddress: finalAddress,
-                });
+                // Broker-created client projects live under a different endpoint;
+                // fall back to it when the standard project update 404s.
+                const isBrokerProject = isBroker && projects.some((p: any) => String(p.id) === String(pinTarget.projectId) && (p.broker_id || p.brokerId));
+                await apiRequest(
+                  'PUT',
+                  isBrokerProject
+                    ? `/api/broker/client-projects/${pinTarget.projectId}`
+                    : `/api/projects/${pinTarget.projectId}`,
+                  {
+                    siteLat: finalLat,
+                    siteLng: finalLng,
+                    siteAddress: finalAddress,
+                  }
+                );
                 queryClient.invalidateQueries({
-                  predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')),
+                  predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && (k.includes('/api/projects') || k.includes('/api/broker/client-projects'))),
                 });
               } catch (e: any) {
                 Alert.alert('Could not save', e?.message || 'Failed to save pin to project. It will still apply to this job.');
@@ -1159,11 +1168,11 @@ export default function CreateJobScreen() {
 
     setSubmitting(true);
     try {
-      // Brokers can attach the job to one of the client's existing projects
-      // (dropdown-only selection — brokers never create projects for a client).
+      // Brokers can attach the job to one of the client's existing projects or
+      // type a new name to create one for the client (companion-local).
       let resolvedProjectId: string | undefined = projectId || undefined;
 
-      if (!isBroker && !resolvedProjectId && projectName.trim()) {
+      if (!resolvedProjectId && projectName.trim()) {
         let inferredAddr = projectSiteAddress.trim();
         let inferredLat: number | null = projectSiteLat;
         let inferredLng: number | null = projectSiteLng;
@@ -1176,15 +1185,18 @@ export default function CreateJobScreen() {
             if (!inferredAddr) inferredAddr = originAddress.trim();
           }
         }
-        const newProject = await apiRequest('POST', '/api/projects', {
+        const projectBody = {
           name: projectName.trim(),
           ...(inferredAddr ? { siteAddress: inferredAddr } : {}),
           ...(inferredLat != null ? { siteLat: String(inferredLat) } : {}),
           ...(inferredLng != null ? { siteLng: String(inferredLng) } : {}),
-        });
+        };
+        const newProject = isBroker
+          ? await apiRequest('POST', '/api/broker/client-projects', { ...projectBody, clientUserId })
+          : await apiRequest('POST', '/api/projects', projectBody);
         const proj = await newProject.json();
         resolvedProjectId = proj.id;
-        queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
+        queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && (k.includes('/api/projects') || k.includes('/api/broker/client-projects'))) });
       }
 
       const body: Record<string, any> = {
@@ -1387,7 +1399,7 @@ export default function CreateJobScreen() {
           />
           <TextInput
             style={styles.projectBarInput}
-            placeholder={isBroker ? "Select the client's project" : 'Type or select a project'}
+            placeholder="Type or select a project"
             placeholderTextColor={Colors.textMuted}
             value={projectName}
             onChangeText={handleProjectNameChange}
@@ -1400,7 +1412,7 @@ export default function CreateJobScreen() {
                 return;
               }
               setShowProjectDropdown(false);
-              if (!isBroker) openMapPicker('project');
+              openMapPicker('project');
             }}
           />
           {projectName.trim() ? (
@@ -1419,7 +1431,7 @@ export default function CreateJobScreen() {
             <Text style={styles.projectMatchText}>Existing project</Text>
           </View>
         )}
-        {!isBroker && !selectedProject && projectName.trim() && !exactMatch && (
+        {!selectedProject && projectName.trim() && !exactMatch && (
           <View style={styles.projectMatchBadge}>
             <Ionicons name="add-circle" size={14} color={Colors.primary} />
             <Text style={[styles.projectMatchText, { color: Colors.primary }]}>New project will be created</Text>
