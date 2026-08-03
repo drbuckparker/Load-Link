@@ -156,6 +156,7 @@ export default function BrokerDashboardScreen() {
   const [clientFilter, setClientFilter] = useState<BrokerClient | null>(null);
   const [assignJob, setAssignJob] = useState<BrokerJob | null>(null);
   const handledAssignRef = useRef<string | null>(null);
+  const handledDateRef = useRef<string | null>(null);
   const [inviteVisible, setInviteVisible] = useState<'roster' | 'clients' | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
@@ -207,9 +208,11 @@ export default function BrokerDashboardScreen() {
 
   useEffect(() => {
     const dateParam = typeof params.date === 'string' ? params.date : undefined;
-    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) && handledDateRef.current !== dateParam) {
+      handledDateRef.current = dateParam;
       setSelectedDate(dateParam);
       setTab('today');
+      router.setParams({ date: undefined } as any);
     }
     const assignId = typeof params.assign === 'string' ? params.assign : undefined;
     if (!assignId || handledAssignRef.current === assignId) return;
