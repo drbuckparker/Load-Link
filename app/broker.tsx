@@ -195,6 +195,39 @@ function jobCoversDay(j: BrokerJob, dateKey: string): boolean {
   return false;
 }
 
+// A job is "past" (inactive) when its whole working-day span is behind us and
+// it isn't actively running, or it was completed/cancelled/expired. These jobs
+// move to the Past view so the Jobs tab stays clean.
+function jobLastDayKey(j: BrokerJob): string {
+  const startKey = jobDateKey(j);
+  if (!startKey) return '';
+  const days = Math.ceil(Number(j.estimatedDays ?? j.estimated_days ?? 1) || 1);
+  if (days <= 1) return startKey;
+  const weekends = !!(j.includesWeekends ?? j.includes_weekends);
+  const sat = weekends || !!(j.includesSaturday ?? j.includes_saturday);
+  const sun = weekends || !!(j.includesSunday ?? j.includes_sunday);
+  const d = new Date(`${startKey}T12:00:00`);
+  let counted = 0;
+  let last = startKey;
+  for (let i = 0; i < 400 && counted < days; i++) {
+    const dow = d.getDay();
+    if ((dow !== 6 || sat) && (dow !== 0 || sun)) {
+      counted++;
+      last = localDateKey(d);
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  return last;
+}
+
+function isPastJob(j: BrokerJob, todayKey: string): boolean {
+  const status = String((j as any).status || '').toLowerCase();
+  if (status === 'completed' || status === 'cancelled' || status === 'expired') return true;
+  if (status === 'in_progress') return false;
+  const lastKey = jobLastDayKey(j);
+  return !!lastKey && lastKey < todayKey;
+}
+
 // Alert.alert buttons are a no-op on react-native-web, so use window.confirm there.
 function confirmRemoveTruck(onConfirm: () => void) {
   const title = 'Remove truck from job?';
@@ -236,6 +269,8 @@ export default function BrokerDashboardScreen() {
     params.tab === 'today' || params.tab === 'jobs' || params.tab === 'roster' ? (params.tab as BrokerTab) : 'clients'
   );
   const [clientFilter, setClientFilter] = useState<BrokerClient | null>(null);
+  // Jobs tab sub-view: Active (upcoming/running) vs Past (finished or dated in the past).
+  const [jobsFilter, setJobsFilter] = useState<'active' | 'past'>('active');
   const [assignJob, setAssignJob] = useState<BrokerJob | null>(null);
   const handledAssignRef = useRef<string | null>(null);
   const handledDateRef = useRef<string | null>(null);
@@ -300,6 +335,9 @@ export default function BrokerDashboardScreen() {
       },
     };
   });
+  const todayKey = localDateKey(new Date());
+  const activeJobs = jobs.filter(j => !isPastJob(j, todayKey));
+  const pastJobs = jobs.filter(j => isPastJob(j, todayKey));
   const todayJobs = jobs.filter(j => jobCoversDay(j, selectedDate));
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
@@ -647,7 +685,7 @@ export default function BrokerDashboardScreen() {
           <Pressable
             testID={`client-jobs-badge-${key}`}
             style={({ pressed }) => [styles.clientBadge, activeJobs > 0 && styles.clientBadgeActive, pressed && { opacity: 0.7 }]}
-            onPress={() => { haptic(); setClientFilter(c); setTab('jobs'); }}
+            onPress={() => { haptic(); setClientFilter(c); setJobsFilter('active'); setTab('jobs'); }}
           >
             <Ionicons name="briefcase-outline" size={13} color={activeJobs > 0 ? Colors.primary : Colors.textMuted} />
             <Text style={[styles.clientBadgeText, activeJobs > 0 && { color: Colors.primary }]}>
@@ -712,7 +750,7 @@ export default function BrokerDashboardScreen() {
             <Text style={[styles.tabChipText, tab === t && styles.tabChipTextActive]} numberOfLines={1}>
               {t === 'today' ? `Day Plan (${todayJobs.length})`
                 : t === 'clients' ? `Clients (${clients.length})`
-                : t === 'jobs' ? `Jobs (${jobs.length})`
+                : t === 'jobs' ? `Jobs (${activeJobs.length})`
                 : `Roster (${roster.length})`}
             </Text>
           </Pressable>
@@ -721,7 +759,12 @@ export default function BrokerDashboardScreen() {
 
       {(tab === 'jobs' || tab === 'today') && (
         <FlatList
-          data={tab === 'today' ? todayJobs : (clientFilter ? jobs.filter(j => jobMatchesClient(j, clientFilter)) : jobs)}
+          data={tab === 'today'
+            ? todayJobs
+            : (() => {
+                const base = jobsFilter === 'past' ? pastJobs : activeJobs;
+                return clientFilter ? base.filter(j => jobMatchesClient(j, clientFilter)) : base;
+              })()}
           renderItem={renderJob}
           keyExtractor={item => item.id}
           contentContainerStyle={[styles.listContent, { paddingBottom: Platform.OS === 'web' ? 60 : insets.bottom + 24 }]}
@@ -737,7 +780,8 @@ export default function BrokerDashboardScreen() {
                 <Text style={styles.emptyText}>
                   {tab === 'today' ? 'No jobs scheduled for today'
                     : clientFilter ? `No jobs for ${clientDisplayName(clientFilter)}`
-                    : 'No broker jobs yet'}
+                    : jobsFilter === 'past' ? 'No past jobs'
+                    : 'No active jobs — check the Past view or post a new one'}
                 </Text>
                 {tab === 'jobs' && (
                   <Pressable style={styles.postJobBtn} onPress={() => router.push('/create-job' as any)} testID="broker-post-job-btn">
@@ -834,6 +878,22 @@ export default function BrokerDashboardScreen() {
                   </View>
                 );
               })() : null}
+              {tab === 'jobs' ? (
+                <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                  {(['active', 'past'] as const).map(f => (
+                    <Pressable
+                      key={f}
+                      testID={`jobs-filter-${f}`}
+                      style={[styles.tabChip, { flex: 1 }, jobsFilter === f && styles.tabChipActive]}
+                      onPress={() => { haptic(); setJobsFilter(f); }}
+                    >
+                      <Text style={[styles.tabChipText, jobsFilter === f && styles.tabChipTextActive]} numberOfLines={1}>
+                        {f === 'active' ? `Active (${activeJobs.length})` : `Past (${pastJobs.length})`}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
               {tab === 'jobs' && clientFilter ? (
                 <View style={styles.filterBanner}>
                   <Ionicons name="funnel-outline" size={14} color={Colors.primary} />
