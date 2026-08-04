@@ -89,6 +89,13 @@ export default function JobCard({ job, onPress, showStatus = false, isOwnPosting
         </View>
       ) : null}
 
+      {job.projectName ? (
+        <View style={styles.projectRow}>
+          <Ionicons name="folder-outline" size={13} color={Colors.textSecondary} />
+          <Text style={styles.projectRowText} numberOfLines={1}>{job.projectName}</Text>
+        </View>
+      ) : null}
+
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.material} numberOfLines={1}>{job.material}</Text>
@@ -226,6 +233,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
+  },
+  projectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 4,
+  },
+  projectRowText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    letterSpacing: 0.3,
     flex: 1,
   },
   material: {

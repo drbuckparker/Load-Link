@@ -2049,14 +2049,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [auth.userId]
       );
       const linkMap = new Map(links.rows.map((l: any) => [String(l.job_id), l]));
+      // The website strips project info off broker jobs, but the local jobs
+      // table keeps project_id; resolve names from both project tables so the
+      // app can show "which project is this job under".
+      const projRows = await pool.query(
+        `SELECT j.id, j.project_id, COALESCE(bp.name, cp.name) AS project_name
+         FROM jobs j
+         LEFT JOIN contractor_projects cp ON cp.id::text = j.project_id::text
+         LEFT JOIN broker_client_projects bp ON bp.id::text = j.project_id::text
+         WHERE j.contractor_id = $1 AND j.project_id IS NOT NULL`,
+        [auth.userId]
+      );
+      const projMap = new Map(projRows.rows.map((r: any) => [String(r.id), r]));
       const merged = jobs.map((j: any) => {
         const l = linkMap.get(String(j.id));
-        if (!l) return j;
+        const p = projMap.get(String(j.id));
+        if (!l && !p) return j;
         return {
           ...j,
-          clientName: l.client_name || j.clientName,
-          clientEmail: l.client_email || j.clientEmail,
-          clientUserId: l.client_key || j.clientUserId,
+          ...(l ? {
+            clientName: l.client_name || j.clientName,
+            clientEmail: l.client_email || j.clientEmail,
+            clientUserId: l.client_key || j.clientUserId,
+          } : {}),
+          ...(p ? {
+            projectId: j.projectId || p.project_id,
+            projectName: j.projectName || p.project_name || undefined,
+          } : {}),
         };
       });
       return res.json(addDualKeys(merged));
