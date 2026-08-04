@@ -941,11 +941,11 @@ export default function BrokerDashboardScreen() {
                       />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.personName} numberOfLines={1}>
-                          {t ? truckTitle(t) : driverName}
+                          {[companyName, driverName].filter(Boolean).join(' - ') || driverName}
                         </Text>
-                        <Text style={styles.personEmail} numberOfLines={1}>
-                          {[companyName, driverName].filter(Boolean).join(' · ') || driverName}
-                        </Text>
+                        {t ? (
+                          <Text style={styles.personEmail} numberOfLines={1}>{truckTitle(t)}</Text>
+                        ) : null}
                         {t ? (
                           <Text style={styles.personEmail} numberOfLines={1}>
                             {[
