@@ -1287,6 +1287,7 @@ export default function JobsBrowseScreen() {
                   <View style={styles.projectCard}>
                     <Pressable
                       testID={`client-row-${cKey}`}
+                      style={{ flex: 1 }}
                       onPress={() => {
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         setSelectedProjectFilter(null);
@@ -1304,11 +1305,6 @@ export default function JobsBrowseScreen() {
                             </Text>
                           )}
                         </View>
-                        {isManualClient && (
-                          <Pressable onPress={() => openEditClient(item)} hitSlop={10} testID={`edit-client-${cKey}`}>
-                            <Ionicons name="ellipsis-horizontal" size={20} color={Colors.textMuted} />
-                          </Pressable>
-                        )}
                         <View style={[styles.projectStatusBadge, { backgroundColor: pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
                           <Text style={[styles.projectStatusText, { color: pending ? '#eab308' : '#22c55e' }]}>
                             {pending ? 'PENDING' : 'ACTIVE'}
@@ -1320,7 +1316,14 @@ export default function JobsBrowseScreen() {
                         <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.primary }}>
                           {activeJobs > 0 ? `${activeJobs} active job${activeJobs !== 1 ? 's' : ''}` : 'No active jobs'}
                         </Text>
-                        <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginLeft: 'auto' }}>
+                          {isManualClient && (
+                            <Pressable onPress={() => openEditClient(item)} hitSlop={10} testID={`edit-client-${cKey}`}>
+                              <Ionicons name="ellipsis-horizontal" size={20} color={Colors.textMuted} />
+                            </Pressable>
+                          )}
+                          <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                        </View>
                       </View>
                     </Pressable>
                   </View>
