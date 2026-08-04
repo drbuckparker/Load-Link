@@ -2230,11 +2230,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       // Also flag drivers already booked (approved) on another active job
-      // whose scheduled window covers this date — e.g. a roster driver who
-      // booked his own work that day. Calendar-unavailable notes win.
+      // that runs on this date. No detail is exposed to the broker — the row
+      // just reads unavailable (notes stay null). The job's working days are
+      // computed the same way the app does (weekend-skipping continuation
+      // days), so a Mon–Fri job leaves the weekend open.
       try {
         const booked = await pool.query(
-          `SELECT DISTINCT ja.driver_id, j.material
+          `SELECT DISTINCT ja.driver_id, j.scheduled_date, j.estimated_days,
+                  j.includes_weekends, j.includes_saturday, j.includes_sunday
              FROM job_assignments ja
              JOIN jobs j ON j.id = ja.job_id
             WHERE ja.driver_id::text = ANY($2)
@@ -2242,13 +2245,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
               AND j.status::text NOT IN ('completed','cancelled','expired')
               AND $1::date >= j.scheduled_date::date
               AND $1::date <= (j.scheduled_date::date
-                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) - 1) * INTERVAL '1 day')::date`,
+                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) * 3) * INTERVAL '1 day')::date`,
           [date, driverIds.map(String)]
         );
         for (const r of booked.rows) {
           const key = String(r.driver_id);
-          if (!map[key]?.unavailable) {
-            map[key] = { unavailable: true, notes: `Booked on another job${r.material ? ` (${r.material})` : ''}` };
+          if (map[key]?.unavailable) continue;
+          const workingDays = getJobDateRange(
+            r.scheduled_date,
+            Number(r.estimated_days) || 1,
+            !!r.includes_weekends,
+            r.includes_saturday !== false,
+            r.includes_sunday !== false
+          );
+          if (workingDays.includes(date)) {
+            map[key] = { unavailable: true, notes: null };
           }
         }
       } catch (e: any) {
