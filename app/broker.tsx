@@ -462,16 +462,20 @@ export default function BrokerDashboardScreen() {
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to send assignments'),
   });
 
-  // Day plan: pending scheduled auto-send for the selected date.
-  const scheduledSendQuery = useQuery<{ id: string; date: string; sendAt: string; status: string }[]>({
+  // Day plan: pending or failed scheduled auto-send for the selected date.
+  const scheduledSendQuery = useQuery<{ id: string; date: string; sendAt: string; status: string; error?: string | null; sentJobs?: number }[]>({
     queryKey: ['/api/broker/scheduled-sends', selectedDate],
     queryFn: async () => {
       const res = await apiRequest('GET', `/api/broker/scheduled-sends?date=${selectedDate}`);
       return res.json();
     },
     enabled: !!user && tab === 'today',
+    // Poll while the Day Plan is open so a send that fails (worker runs every
+    // 60s) surfaces without needing to navigate away and back.
+    refetchInterval: 60000,
   });
-  const pendingSchedule = (scheduledSendQuery.data || [])[0];
+  const pendingSchedule = (scheduledSendQuery.data || []).find(s => s.status === 'pending');
+  const failedSchedule = (scheduledSendQuery.data || []).find(s => s.status === 'failed');
 
   const scheduleMutation = useMutation({
     mutationFn: async (sendAtIso: string) => {
@@ -489,6 +493,29 @@ export default function BrokerDashboardScreen() {
     mutationFn: async (id: string) => apiRequest('DELETE', `/api/broker/scheduled-sends/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['/api/broker/scheduled-sends'] }),
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to cancel'),
+  });
+
+  // Retry a failed scheduled send: send held instructions now, then clear the
+  // failed row so the warning goes away.
+  const retryFailedMutation = useMutation({
+    mutationFn: async ({ scheduleId, jobIds }: { scheduleId: string; jobIds: string[] }) => {
+      for (const id of jobIds) {
+        await apiRequest('POST', `/api/broker/jobs/${id}/send-all`, {});
+      }
+      await apiRequest('DELETE', `/api/broker/scheduled-sends/${scheduleId}`);
+      return jobIds.length;
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/scheduled-sends'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (count > 0) Alert.alert('Instructions sent', `Sent instructions on ${count} job${count === 1 ? '' : 's'}.`);
+    },
+    onError: (e: any) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/scheduled-sends'] });
+      Alert.alert('Error', e.message || 'Failed to send instructions');
+    },
   });
 
   // Send held instructions on every job of the selected day, in one tap.
@@ -824,6 +851,43 @@ export default function BrokerDashboardScreen() {
                         <Ionicons name="chevron-forward" size={20} color={Colors.text} />
                       </Pressable>
                     </View>
+                    {failedSchedule ? (
+                      <View style={styles.failedBanner} testID="failed-send-banner">
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Ionicons name="alert-circle" size={18} color={Colors.destructive} />
+                          <Text style={styles.failedBannerTitle}>Scheduled send failed</Text>
+                        </View>
+                        <Text style={styles.failedBannerText}>
+                          {failedSchedule.error || 'Instructions could not be sent automatically.'}
+                        </Text>
+                        <View style={styles.failedBannerActions}>
+                          {heldJobIds.length > 0 ? (
+                            <Pressable
+                              testID="retry-failed-send"
+                              disabled={retryFailedMutation.isPending}
+                              style={({ pressed }) => [styles.failedRetryBtn, (pressed || retryFailedMutation.isPending) && { opacity: 0.7 }]}
+                              onPress={() => { haptic(Haptics.ImpactFeedbackStyle.Medium); retryFailedMutation.mutate({ scheduleId: failedSchedule.id, jobIds: heldJobIds }); }}
+                            >
+                              {retryFailedMutation.isPending ? (
+                                <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                              ) : (
+                                <Ionicons name="send" size={14} color={Colors.primaryForeground} />
+                              )}
+                              <Text style={styles.failedRetryBtnText}>SEND NOW ({dayHeld})</Text>
+                            </Pressable>
+                          ) : (
+                            <Text style={styles.failedBannerHint}>No unsent instructions remain for this day.</Text>
+                          )}
+                          <Pressable
+                            testID="dismiss-failed-send"
+                            disabled={cancelScheduleMutation.isPending}
+                            onPress={() => { haptic(); cancelScheduleMutation.mutate(failedSchedule.id); }}
+                          >
+                            <Text style={styles.failedDismissText}>DISMISS</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ) : null}
                     {todayJobs.length > 0 && (
                       <View style={styles.daySummaryCard}>
                         <View style={styles.daySummaryRow}>
@@ -1281,6 +1345,14 @@ const styles = StyleSheet.create({
   daySummaryText: { fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.textSecondary },
   filledBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   filledBadgeText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.success, letterSpacing: 0.5 },
+  failedBanner: { backgroundColor: Colors.destructiveBg, borderRadius: 10, padding: 12, gap: 6, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(239,68,68,0.4)' },
+  failedBannerTitle: { fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.destructive, letterSpacing: 0.5 },
+  failedBannerText: { fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
+  failedBannerHint: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 12, color: Colors.textSecondary },
+  failedBannerActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 4 },
+  failedRetryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.destructive, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  failedRetryBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primaryForeground, letterSpacing: 0.5 },
+  failedDismissText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.5 },
   scheduleBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,153,0,0.1)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
   scheduleBannerText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
   scheduleCancelText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.destructive, letterSpacing: 0.5 },

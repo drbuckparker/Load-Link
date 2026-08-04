@@ -2313,10 +2313,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const date = String(req.query.date || "").slice(0, 10);
     try {
       const params: any[] = [auth.userId];
-      let where = `broker_id = $1 AND status = 'pending'`;
+      // Failed rows are returned too so the app can warn the broker instead of
+      // the schedule silently vanishing; 'sent' rows stay hidden.
+      let where = `broker_id = $1 AND status IN ('pending', 'failed')`;
       if (/^\d{4}-\d{2}-\d{2}$/.test(date)) { where += ` AND date = $2`; params.push(date); }
       const r = await pool.query(
-        `SELECT id, date, send_at, status, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
+        `SELECT id, date, send_at, status, error, sent_jobs, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
         params
       );
       return res.json(r.rows.map((row: any) => ({
@@ -2324,6 +2326,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
         sendAt: row.send_at,
         status: row.status,
+        error: row.error ?? null,
+        sentJobs: row.sent_jobs ?? 0,
       })));
     } catch (e: any) {
       console.error("GET /api/broker/scheduled-sends error:", e.message);
@@ -2344,7 +2348,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // One pending schedule per broker per day: replace any existing one.
       await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status = 'pending'`,
+        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status IN ('pending', 'failed')`,
         [auth.userId, date]
       );
       // Broker's local timezone offset (minutes, getTimezoneOffset semantics)
@@ -2372,7 +2376,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const auth = getWebsiteAuth(req)!;
     try {
       const r = await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status = 'pending' RETURNING id`,
+        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status IN ('pending', 'failed') RETURNING id`,
         [req.params.id, auth.userId]
       );
       if (r.rowCount === 0) return res.status(404).json({ message: "Scheduled send not found" });
