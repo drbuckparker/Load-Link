@@ -2052,10 +2052,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let roster = await fetchRoster();
       if (roster === null) return res.status(502).json({ message: "Failed to load roster" });
 
+      // Note: the broker's own account IS eligible when they've put themselves
+      // down as a truck's assigned driver (self-invites are auto-accepted below).
       const own = await pool.query(
         `SELECT DISTINCT u.id, u.email, u.full_name FROM users u
-         WHERE u.id::text <> $1 AND u.email IS NOT NULL AND (
-           u.trucking_company_id::text = $1
+         WHERE u.email IS NOT NULL AND (
+           (u.id::text <> $1 AND u.trucking_company_id::text = $1)
            OR u.id::text IN (
              SELECT assigned_driver_id::text FROM trucks
              WHERE trucking_company_id::text = $1 AND assigned_driver_id IS NOT NULL AND archived_at IS NULL
@@ -2068,6 +2070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         roster.map((r: any) => String(r.driverEmail || r.driver_email || r.email || "").toLowerCase()).filter(Boolean)
       );
       let invitedAny = false;
+      let invitedSelf = false;
       for (const u of own.rows) {
         const email = String(u.email || "").toLowerCase();
         if (!email || rosterIds.has(String(u.id)) || rosterEmails.has(email)) continue;
@@ -2077,10 +2080,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
             body: { email: u.email, name: u.full_name || u.email },
             jwt: auth.jwt,
           });
-          if (ir.ok) invitedAny = true;
-          else console.error(`[RosterAutoInvite] invite for ${u.id} failed: ${ir.status}`);
+          if (ir.ok) {
+            invitedAny = true;
+            if (String(u.id) === String(auth.userId)) invitedSelf = true;
+          } else console.error(`[RosterAutoInvite] invite for ${u.id} failed: ${ir.status}`);
         } catch (e: any) {
           console.error("[RosterAutoInvite] error:", e.message);
+        }
+      }
+      // A broker inviting themselves shouldn't have to "accept" their own
+      // invite — auto-accept it with the same account so they're immediately
+      // assignable. (Also catches a self-invite left pending from before.)
+      const selfPending = roster.some(
+        (r: any) =>
+          String(r.driverId || r.driver_id || "") === String(auth.userId) &&
+          String(r.status || "").toLowerCase() === "pending"
+      );
+      if (invitedSelf || selfPending) {
+        try {
+          const pr = await websiteFetch("/api/invitations/pending", { method: "GET", jwt: auth.jwt });
+          const pending = pr.ok ? await pr.json().catch(() => []) : [];
+          for (const inv of Array.isArray(pending) ? pending : []) {
+            // Only auto-accept the broker's OWN invite to themselves — require
+            // a POSITIVE inviter match; if we can't prove they sent it, leave
+            // it pending for the user to act on manually.
+            const inviter = String(inv.brokerId || inv.broker_id || inv.inviterId || inv.inviter_id || inv.invitedBy || inv.invited_by || "");
+            if (inviter !== String(auth.userId)) continue;
+            try {
+              const ar = await websiteFetch(`/api/invitations/${inv.id}/accept`, { method: "POST", jwt: auth.jwt });
+              if (ar.ok) invitedAny = true;
+              else console.error(`[RosterAutoInvite] self-accept ${inv.id} failed: ${ar.status}`);
+            } catch (e: any) {
+              console.error("[RosterAutoInvite] self-accept error:", e.message);
+            }
+          }
+        } catch (e: any) {
+          console.error("[RosterAutoInvite] self-accept fetch error:", e.message);
         }
       }
       if (invitedAny) roster = (await fetchRoster()) || roster;
@@ -3986,8 +4021,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               AND (j.contractor_id = u.id OR j.driver_id = u.id)
           ) THEN u.phone ELSE NULL END AS phone
         FROM users u
-        WHERE (u.role LIKE '%driver%' OR u.also_driver = true)
-          AND u.id != $1`;
+        WHERE (u.role LIKE '%driver%' OR u.also_driver = true OR u.id = $1)`;
       const params: any[] = [auth.userId];
       if (search) {
         query += ` AND (u.full_name ILIKE $2)`;
