@@ -2084,6 +2084,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       if (invitedAny) roster = (await fetchRoster()) || roster;
+
+      // Enrich each roster driver with truck details for the assign sheet:
+      // trucks assigned to them directly, else the active trucks of their
+      // company (their parent trucking company, or their own account).
+      try {
+        const driverIds = roster
+          .map((r: any) => String(r.driverId || r.driver_id || ""))
+          .filter(Boolean);
+        if (driverIds.length > 0) {
+          const du = await pool.query(
+            `SELECT id::text AS id, full_name, company, COALESCE(trucking_company_id::text, id::text) AS company_key
+               FROM users WHERE id::text = ANY($1)`,
+            [driverIds]
+          );
+          const userMap = new Map(du.rows.map((u: any) => [u.id, u]));
+          // Tenant guard: the company-wide truck fallback only applies to the
+          // broker's OWN company. For external roster drivers we only show
+          // trucks explicitly assigned to them — otherwise a rostered driver
+          // from another company would leak that company's whole fleet
+          // (plates, capacities) into this broker's view.
+          const brokerKey = String(auth.userId);
+          const tr = await pool.query(
+            `SELECT t.id, t.truck_number, t.year, t.make, t.model, t.truck_type, t.capacity,
+                    t.license_plate, t.assigned_driver_id::text AS assigned_driver_id,
+                    t.trucking_company_id::text AS trucking_company_id,
+                    o.company AS owner_company, o.full_name AS owner_name
+               FROM trucks t
+               LEFT JOIN users o ON o.id::text = t.trucking_company_id::text
+              WHERE t.archived_at IS NULL AND t.is_active = true
+                AND (t.assigned_driver_id::text = ANY($1) OR t.trucking_company_id::text = $2)`,
+            [driverIds, brokerKey]
+          );
+          roster = roster.map((r: any) => {
+            const dId = String(r.driverId || r.driver_id || "");
+            const u = userMap.get(dId);
+            const assigned = tr.rows.filter((t: any) => t.assigned_driver_id === dId);
+            const pool_ = assigned.length > 0
+              ? assigned
+              : tr.rows.filter((t: any) =>
+                  u && u.company_key === brokerKey && t.trucking_company_id === brokerKey && !t.assigned_driver_id);
+            return {
+              ...r,
+              companyName: pool_[0]?.owner_company || u?.company || "",
+              trucks: pool_.map((t: any) => ({
+                id: t.id,
+                truckNumber: t.truck_number,
+                year: t.year,
+                make: t.make,
+                model: t.model,
+                truckType: t.truck_type,
+                capacity: t.capacity,
+                licensePlate: t.license_plate,
+              })),
+            };
+          });
+        }
+      } catch (e: any) {
+        console.error("[Roster] truck enrichment failed:", e.message);
+      }
+
       return res.json(addDualKeys(roster));
     } catch (e: any) {
       console.error("GET /api/broker/roster error:", e.message);

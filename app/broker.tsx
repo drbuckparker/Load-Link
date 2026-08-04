@@ -67,6 +67,17 @@ interface BrokerJob {
   }[];
 }
 
+interface RosterTruck {
+  id: string;
+  truckNumber?: string | number;
+  year?: string | number;
+  make?: string;
+  model?: string;
+  truckType?: string;
+  capacity?: string | number;
+  licensePlate?: string;
+}
+
 interface RosterDriver {
   id: string;
   driverId?: string;
@@ -76,6 +87,19 @@ interface RosterDriver {
   driver_name?: string;
   email?: string;
   status?: string;
+  companyName?: string;
+  company_name?: string;
+  trucks?: RosterTruck[];
+}
+
+function truckTypeLabel(t?: string): string {
+  if (!t) return '';
+  return t.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function truckTitle(t: RosterTruck): string {
+  const s = [t.year, t.make, t.model].filter(Boolean).join(' ');
+  return s || `Truck ${t.truckNumber ?? ''}`.trim();
 }
 
 interface BrokerClient {
@@ -312,6 +336,30 @@ export default function BrokerDashboardScreen() {
     },
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to assign driver'),
   });
+
+  const [selectedAssign, setSelectedAssign] = useState<Set<string>>(new Set());
+
+  const toggleAssignSelect = (driverId: string) => {
+    haptic();
+    setSelectedAssign(prev => {
+      const next = new Set(prev);
+      if (next.has(driverId)) next.delete(driverId); else next.add(driverId);
+      return next;
+    });
+  };
+
+  const assignSelected = async (sendNow: boolean) => {
+    if (!assignJob || selectedAssign.size === 0) return;
+    haptic(Haptics.ImpactFeedbackStyle.Medium);
+    for (const driverId of Array.from(selectedAssign)) {
+      try {
+        await assignMutation.mutateAsync({ jobId: assignJob.id, driverId, sendNow });
+      } catch {
+        // assignMutation.onError already alerts; keep going for the rest.
+      }
+    }
+    setSelectedAssign(new Set());
+  };
 
   const removeAssignmentMutation = useMutation({
     mutationFn: async (assignmentId: string) => {
@@ -787,10 +835,35 @@ export default function BrokerDashboardScreen() {
                 <Ionicons name="people-outline" size={40} color={Colors.textMuted} />
                 <Text style={styles.emptyText}>No drivers on your roster yet</Text>
               </View>
-            ) : roster.map(d => renderPersonRow(
-              d.name || d.driverName || d.driver_name || d.email || 'Driver',
-              d.email, d.status, d.id
-            ))
+            ) : roster.map(d => {
+              const driverName = d.name || d.driverName || d.driver_name || d.email || 'Driver';
+              const companyName = d.companyName || d.company_name || '';
+              return (
+                <View key={d.id}>
+                  {renderPersonRow(
+                    driverName,
+                    [companyName, d.email].filter(Boolean).join(' · ') || d.email,
+                    d.status, d.id
+                  )}
+                  {(d.trucks || []).map(t => (
+                    <View key={t.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 46, paddingBottom: 8 }}>
+                      <Ionicons name="bus-outline" size={14} color={Colors.textMuted} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.personName} numberOfLines={1}>{truckTitle(t)}</Text>
+                        <Text style={styles.personEmail} numberOfLines={1}>
+                          {[
+                            t.capacity ? `${t.capacity}T` : '',
+                            truckTypeLabel(t.truckType),
+                            t.truckNumber ? `#${t.truckNumber}` : '',
+                            t.licensePlate ? `Plate: ${t.licensePlate}` : '',
+                          ].filter(Boolean).join('  ')}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              );
+            })
           )}
           {tab === 'clients' && (
             clientsQuery.isLoading ? <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 40 }} /> :
@@ -810,12 +883,12 @@ export default function BrokerDashboardScreen() {
         </ScrollView>
       )}
 
-      <Modal visible={!!assignJob} transparent animationType="slide" onRequestClose={() => setAssignJob(null)}>
+      <Modal visible={!!assignJob} transparent animationType="slide" onRequestClose={() => { setAssignJob(null); setSelectedAssign(new Set()); }}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>ASSIGN TRUCKS FROM YOUR ROSTER</Text>
-              <Pressable onPress={() => setAssignJob(null)} style={styles.modalClose} testID="assign-modal-close">
+              <Pressable onPress={() => { setAssignJob(null); setSelectedAssign(new Set()); }} style={styles.modalClose} testID="assign-modal-close">
                 <Ionicons name="close" size={22} color={Colors.text} />
               </Pressable>
             </View>
@@ -841,70 +914,100 @@ export default function BrokerDashboardScreen() {
                     Invited drivers sign up on LoadLink, then appear here once they accept.
                   </Text>
                 </View>
-              ) : roster.map(d => {
-                const driverId = d.driverId || d.driver_id || d.id;
+              ) : roster.flatMap(d => {
+                const driverId = String(d.driverId || d.driver_id || d.id);
                 const already = assignedDriverIds.has(driverId);
                 const pendingInvite = d.status === 'pending';
-                const unavailable = !!availabilityMap[String(driverId)]?.unavailable;
-                return (
-                  <View key={d.id} style={[styles.assignRow, unavailable && { opacity: 0.55 }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.personName} numberOfLines={1}>{d.name || d.driverName || d.driver_name || d.email || 'Driver'}</Text>
-                      {already ? <Text style={styles.personEmail}>On this job — every day until removed</Text> :
-                       pendingInvite ? <Text style={styles.personEmail}>Invite pending</Text> :
-                       unavailable ? (
-                        <Text style={[styles.personEmail, { color: Colors.destructive }]}>
-                          Unavailable this day{availabilityMap[String(driverId)]?.notes ? ` — ${availabilityMap[String(driverId)]!.notes}` : ''}
+                const unavailable = !!availabilityMap[driverId]?.unavailable;
+                const selectable = !already && !pendingInvite && !unavailable;
+                const checked = selectedAssign.has(driverId);
+                const driverName = d.name || d.driverName || d.driver_name || d.email || 'Driver';
+                const companyName = d.companyName || d.company_name || '';
+                const trucks: (RosterTruck | null)[] = (d.trucks && d.trucks.length > 0) ? d.trucks : [null];
+                return trucks.map((t, ti) => {
+                  const rowKey = `${d.id}-${t?.id || ti}`;
+                  return (
+                    <Pressable
+                      key={rowKey}
+                      testID={`assign-truck-${rowKey}`}
+                      disabled={!selectable}
+                      style={[styles.assignRow, (unavailable || pendingInvite) && { opacity: 0.55 }]}
+                      onPress={() => toggleAssignSelect(driverId)}
+                    >
+                      <Ionicons
+                        name={checked ? 'checkbox' : 'square-outline'}
+                        size={24}
+                        color={checked ? Colors.primary : (selectable ? Colors.textMuted : 'rgba(255,255,255,0.2)')}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.personName} numberOfLines={1}>
+                          {t ? truckTitle(t) : driverName}
                         </Text>
-                       ) : null}
-                    </View>
-                    {unavailable && !already && !pendingInvite && (
-                      <View style={styles.unavailableBadge}>
-                        <Ionicons name="close-circle" size={14} color={Colors.destructive} />
-                        <Text style={styles.unavailableBadgeText}>UNAVAILABLE</Text>
+                        <Text style={styles.personEmail} numberOfLines={1}>
+                          {[companyName, driverName].filter(Boolean).join(' · ') || driverName}
+                        </Text>
+                        {t ? (
+                          <Text style={styles.personEmail} numberOfLines={1}>
+                            {[
+                              t.capacity ? `${t.capacity}T` : '',
+                              truckTypeLabel(t.truckType),
+                              t.truckNumber ? `#${t.truckNumber}` : '',
+                              t.licensePlate ? `Plate: ${t.licensePlate}` : '',
+                            ].filter(Boolean).join('  ')}
+                          </Text>
+                        ) : null}
+                        {already ? <Text style={[styles.personEmail, { color: Colors.success }]}>On this job — every day until removed</Text> :
+                         pendingInvite ? <Text style={[styles.personEmail, { color: Colors.warning }]}>Invite pending</Text> :
+                         unavailable ? (
+                          <Text style={[styles.personEmail, { color: Colors.destructive }]}>
+                            Unavailable this day{availabilityMap[driverId]?.notes ? ` — ${availabilityMap[driverId]!.notes}` : ''}
+                          </Text>
+                         ) : null}
                       </View>
-                    )}
-                    {already && (
-                      <Pressable
-                        testID={`assign-remove-${d.id}`}
-                        disabled={removeAssignmentMutation.isPending}
-                        style={({ pressed }) => [styles.holdBtn, (pressed || removeAssignmentMutation.isPending) && { opacity: 0.7 }]}
-                        onPress={() => {
-                          const a = (assignJob?.assignments || []).find(
-                            x => x.driverId === driverId && x.status !== 'declined' && x.status !== 'withdrawn'
-                          );
-                          if (!a) return;
-                          haptic();
-                          confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id));
-                        }}
-                      >
-                        <Text style={styles.holdBtnText}>REMOVE</Text>
-                      </Pressable>
-                    )}
-                    {!already && !pendingInvite && !unavailable && (
-                      <>
+                      {already && ti === 0 && (
                         <Pressable
-                          testID={`assign-hold-${d.id}`}
-                          disabled={assignMutation.isPending}
-                          style={({ pressed }) => [styles.holdBtn, (pressed || assignMutation.isPending) && { opacity: 0.7 }]}
-                          onPress={() => { haptic(); assignMutation.mutate({ jobId: assignJob!.id, driverId, sendNow: false }); }}
+                          testID={`assign-remove-${d.id}`}
+                          disabled={removeAssignmentMutation.isPending}
+                          style={({ pressed }) => [styles.holdBtn, (pressed || removeAssignmentMutation.isPending) && { opacity: 0.7 }]}
+                          onPress={() => {
+                            const a = (assignJob?.assignments || []).find(
+                              x => x.driverId === driverId && x.status !== 'declined' && x.status !== 'withdrawn'
+                            );
+                            if (!a) return;
+                            haptic();
+                            confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id));
+                          }}
                         >
-                          <Text style={styles.holdBtnText}>SEND LATER</Text>
+                          <Text style={styles.holdBtnText}>REMOVE</Text>
                         </Pressable>
-                        <Pressable
-                          testID={`assign-send-${d.id}`}
-                          disabled={assignMutation.isPending}
-                          style={({ pressed }) => [styles.smallBtn, (pressed || assignMutation.isPending) && { opacity: 0.7 }]}
-                          onPress={() => { haptic(); assignMutation.mutate({ jobId: assignJob!.id, driverId, sendNow: true }); }}
-                        >
-                          <Text style={styles.smallBtnText}>SEND NOW</Text>
-                        </Pressable>
-                      </>
-                    )}
-                  </View>
-                );
+                      )}
+                    </Pressable>
+                  );
+                });
               })}
             </ScrollView>
+            {roster.length > 0 && (
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                <Pressable
+                  testID="assign-selected-hold"
+                  disabled={selectedAssign.size === 0 || assignMutation.isPending}
+                  style={({ pressed }) => [styles.holdBtn, { flex: 1, alignItems: 'center', paddingVertical: 12 },
+                    (selectedAssign.size === 0 || assignMutation.isPending || pressed) && { opacity: 0.6 }]}
+                  onPress={() => assignSelected(false)}
+                >
+                  <Text style={styles.holdBtnText}>SEND LATER ({selectedAssign.size})</Text>
+                </Pressable>
+                <Pressable
+                  testID="assign-selected-send"
+                  disabled={selectedAssign.size === 0 || assignMutation.isPending}
+                  style={({ pressed }) => [styles.smallBtn, { flex: 1, alignItems: 'center', paddingVertical: 12 },
+                    (selectedAssign.size === 0 || assignMutation.isPending || pressed) && { opacity: 0.6 }]}
+                  onPress={() => assignSelected(true)}
+                >
+                  <Text style={styles.smallBtnText}>SEND NOW ({selectedAssign.size})</Text>
+                </Pressable>
+              </View>
+            )}
           </View>
         </View>
       </Modal>
