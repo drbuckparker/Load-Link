@@ -33,6 +33,14 @@ interface BrokerJob {
   destination_address?: string;
   scheduledDate?: string;
   scheduled_date?: string;
+  estimatedDays?: string | number;
+  estimated_days?: string | number;
+  includesWeekends?: boolean;
+  includes_weekends?: boolean;
+  includesSaturday?: boolean;
+  includes_saturday?: boolean;
+  includesSunday?: boolean;
+  includes_sunday?: boolean;
   status?: string;
   rate?: string | number;
   rateType?: string;
@@ -132,6 +140,52 @@ function jobDateKey(j: BrokerJob): string {
   return raw.slice(0, 10);
 }
 
+// A multi-day job works on `dateKey` if it falls inside the job's working-day
+// span: estimated_days consecutive working days from scheduled_date, skipping
+// weekend days the job excludes. Mirrors the server's getJobDateRange used by
+// the week-in-review, so both surfaces agree on which days a job covers.
+function jobCoversDay(j: BrokerJob, dateKey: string): boolean {
+  const startKey = jobDateKey(j);
+  if (!startKey) return false;
+  if (startKey === dateKey) return true;
+  if (dateKey < startKey) return false;
+  const days = Math.ceil(Number(j.estimatedDays ?? j.estimated_days ?? 1) || 1);
+  if (days <= 1) return false;
+  const weekends = !!(j.includesWeekends ?? j.includes_weekends);
+  const sat = weekends || !!(j.includesSaturday ?? j.includes_saturday);
+  const sun = weekends || !!(j.includesSunday ?? j.includes_sunday);
+  const d = new Date(`${startKey}T12:00:00`);
+  let counted = 0;
+  // Walk forward one calendar day at a time, counting only working days,
+  // until we've covered the job's span (capped for safety).
+  for (let i = 0; i < 400 && counted < days; i++) {
+    const dow = d.getDay();
+    const isWorkDay = (dow !== 6 || sat) && (dow !== 0 || sun);
+    if (isWorkDay) {
+      counted++;
+      if (localDateKey(d) === dateKey) return true;
+    }
+    if (localDateKey(d) > dateKey) return false;
+    d.setDate(d.getDate() + 1);
+  }
+  return false;
+}
+
+// Alert.alert buttons are a no-op on react-native-web, so use window.confirm there.
+function confirmRemoveTruck(onConfirm: () => void) {
+  const title = 'Remove truck from job?';
+  const msg = 'This frees the truck for other jobs and opens the spot back up on every remaining day of this job.';
+  if (Platform.OS === 'web') {
+    // eslint-disable-next-line no-alert
+    if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${msg}`)) onConfirm();
+    return;
+  }
+  Alert.alert(title, msg, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Remove', style: 'destructive', onPress: onConfirm },
+  ]);
+}
+
 function isTodayDate(d?: string): boolean {
   if (!d) return false;
   const dt = new Date(d.includes('T') ? d : `${d}T12:00:00`);
@@ -206,7 +260,7 @@ export default function BrokerDashboardScreen() {
   const availabilityMap = availabilityQuery.data || {};
 
   const jobs = Array.isArray(jobsQuery.data) ? jobsQuery.data : [];
-  const todayJobs = jobs.filter(j => jobDateKey(j) === selectedDate);
+  const todayJobs = jobs.filter(j => jobCoversDay(j, selectedDate));
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
 
@@ -257,6 +311,17 @@ export default function BrokerDashboardScreen() {
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to assign driver'),
+  });
+
+  const removeAssignmentMutation = useMutation({
+    mutationFn: async (assignmentId: string) => {
+      return apiRequest('DELETE', `/api/broker/assignments/${assignmentId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (e: any) => Alert.alert('Error', e.message || 'Failed to remove truck'),
   });
 
   const sendMutation = useMutation({
@@ -409,6 +474,14 @@ export default function BrokerDashboardScreen() {
                   onPress={() => { haptic(); sendMutation.mutate({ jobId: item.id, assignmentId: a.id }); }}
                 >
                   <Text style={styles.smallBtnText}>SEND</Text>
+                </Pressable>
+                <Pressable
+                  testID={`remove-assignment-${a.id}`}
+                  disabled={removeAssignmentMutation.isPending}
+                  style={({ pressed }) => [(pressed || removeAssignmentMutation.isPending) && { opacity: 0.6 }, { padding: 4 }]}
+                  onPress={() => { haptic(); confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id)); }}
+                >
+                  <Ionicons name="trash-outline" size={16} color={Colors.destructive} />
                 </Pressable>
               </View>
             ))}
@@ -777,7 +850,7 @@ export default function BrokerDashboardScreen() {
                   <View key={d.id} style={[styles.assignRow, unavailable && { opacity: 0.55 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.personName} numberOfLines={1}>{d.name || d.driverName || d.driver_name || d.email || 'Driver'}</Text>
-                      {already ? <Text style={styles.personEmail}>Already assigned</Text> :
+                      {already ? <Text style={styles.personEmail}>On this job — every day until removed</Text> :
                        pendingInvite ? <Text style={styles.personEmail}>Invite pending</Text> :
                        unavailable ? (
                         <Text style={[styles.personEmail, { color: Colors.destructive }]}>
@@ -790,6 +863,23 @@ export default function BrokerDashboardScreen() {
                         <Ionicons name="close-circle" size={14} color={Colors.destructive} />
                         <Text style={styles.unavailableBadgeText}>UNAVAILABLE</Text>
                       </View>
+                    )}
+                    {already && (
+                      <Pressable
+                        testID={`assign-remove-${d.id}`}
+                        disabled={removeAssignmentMutation.isPending}
+                        style={({ pressed }) => [styles.holdBtn, (pressed || removeAssignmentMutation.isPending) && { opacity: 0.7 }]}
+                        onPress={() => {
+                          const a = (assignJob?.assignments || []).find(
+                            x => x.driverId === driverId && x.status !== 'declined' && x.status !== 'withdrawn'
+                          );
+                          if (!a) return;
+                          haptic();
+                          confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id));
+                        }}
+                      >
+                        <Text style={styles.holdBtnText}>REMOVE</Text>
+                      </Pressable>
                     )}
                     {!already && !pendingInvite && !unavailable && (
                       <>
