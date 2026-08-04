@@ -1779,6 +1779,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const r = await websiteFetch("/api/jobs", { method: "POST", body: req.body, jwt: auth.jwt });
         const text = await r.text();
         let data: any; try { data = JSON.parse(text); } catch { data = { message: text }; }
+        // The website strips client fields off the job row (it only keeps the
+        // billing split), so persist the job→client link companion-side. The
+        // client key resolves to a manual client id when the name/email
+        // matches one, else we keep just the name/email for display.
+        if (r.ok && data?.id && (req.body.clientName || req.body.clientEmail)) {
+          try {
+            const cName = String(req.body.clientName || "").trim();
+            const cEmail = String(req.body.clientEmail || "").trim().toLowerCase();
+            let clientKey = "";
+            const m = await pool.query(
+              `SELECT id FROM broker_manual_clients WHERE broker_id = $1
+                 AND (($2 <> '' AND lower(name) = lower($2)) OR ($3 <> '' AND lower(email) = $3))
+               LIMIT 1`,
+              [auth.userId, cName, cEmail]
+            );
+            if (m.rows[0]) clientKey = `manual-${m.rows[0].id}`;
+            await pool.query(
+              `INSERT INTO broker_job_clients (job_id, broker_id, client_key, client_name, client_email)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (job_id) DO UPDATE SET client_key = $3, client_name = $4, client_email = $5`,
+              [String(data.id), auth.userId, clientKey, cName, cEmail]
+            );
+          } catch (e: any) {
+            console.error("[JobClientLink] save failed:", e.message);
+          }
+        }
         return res.status(r.status).json(addDualKeys(data));
       }
 
@@ -1917,25 +1943,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `SELECT * FROM broker_manual_clients WHERE broker_id = $1 ORDER BY created_at DESC`,
         [auth.userId]
       );
-      const manual = local.rows.map((r: any) => ({
-        clientUserId: `manual-${r.id}`,
-        client_user_id: `manual-${r.id}`,
-        name: r.name,
-        email: r.email || "",
-        phone: r.phone || "",
-        contactName: r.contact_name || "",
-        contact_name: r.contact_name || "",
-        address: r.address || "",
-        notes: r.notes || "",
-        status: "active",
-        isManual: true,
-        is_manual: true,
-        activeJobs: 0,
-      }));
-      return res.json([...manual, ...upstream]);
+      // Active-job counts come from the companion-side job→client links
+      // (the website strips client fields off broker jobs entirely).
+      const countMap = new Map<string, number>();
+      try {
+        const counts = await pool.query(
+          `SELECT l.client_key, COUNT(*)::int AS n
+             FROM broker_job_clients l
+             JOIN jobs j ON j.id::text = l.job_id
+            WHERE l.broker_id = $1 AND l.client_key <> ''
+              AND j.archived_at IS NULL
+              AND j.status::text NOT IN ('cancelled', 'completed')
+            GROUP BY l.client_key`,
+          [auth.userId]
+        );
+        for (const row of counts.rows) countMap.set(String(row.client_key), Number(row.n));
+      } catch (e: any) {
+        console.error("[BrokerClients] job counts failed:", e.message);
+      }
+      const manual = local.rows.map((r: any) => {
+        const key = `manual-${r.id}`;
+        const n = countMap.get(key) || 0;
+        return {
+          clientUserId: key,
+          client_user_id: key,
+          name: r.name,
+          email: r.email || "",
+          phone: r.phone || "",
+          contactName: r.contact_name || "",
+          contact_name: r.contact_name || "",
+          address: r.address || "",
+          notes: r.notes || "",
+          status: "active",
+          isManual: true,
+          is_manual: true,
+          activeJobs: n,
+          activeJobsCount: n,
+          active_jobs_count: n,
+        };
+      });
+      const upstreamWithCounts = upstream.map((c: any) => {
+        const key = String(c.clientUserId || c.client_user_id || "");
+        const n = countMap.get(key);
+        return n === undefined ? c : { ...c, activeJobsCount: n, active_jobs_count: n };
+      });
+      return res.json([...manual, ...upstreamWithCounts]);
     } catch (e: any) {
       console.error("GET /api/broker/clients error:", e.message);
       return res.status(500).json({ message: "Failed to load clients" });
+    }
+  });
+
+  // Broker jobs (pre-wildcard): upstream jobs enriched with the companion-side
+  // job→client link — the website strips clientName/clientEmail off broker
+  // jobs, so without this merge no job can be tied back to a client in the app.
+  app.get("/api/broker/jobs", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    try {
+      if (!auth.jwt || auth.jwt.startsWith("dev-local:")) return res.json([]);
+      const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+      const jr = await websiteFetch(`/api/broker/jobs${qs}`, { method: "GET", jwt: auth.jwt });
+      if (!jr.ok) {
+        const text = await jr.text();
+        let data: any; try { data = JSON.parse(text); } catch { data = { message: text }; }
+        return res.status(jr.status).json(data);
+      }
+      const jobs = await jr.json().catch(() => []);
+      if (!Array.isArray(jobs)) return res.json(addDualKeys(jobs));
+      const links = await pool.query(
+        `SELECT job_id, client_key, client_name, client_email FROM broker_job_clients WHERE broker_id = $1`,
+        [auth.userId]
+      );
+      const linkMap = new Map(links.rows.map((l: any) => [String(l.job_id), l]));
+      const merged = jobs.map((j: any) => {
+        const l = linkMap.get(String(j.id));
+        if (!l) return j;
+        return {
+          ...j,
+          clientName: l.client_name || j.clientName,
+          clientEmail: l.client_email || j.clientEmail,
+          clientUserId: l.client_key || j.clientUserId,
+        };
+      });
+      return res.json(addDualKeys(merged));
+    } catch (e: any) {
+      console.error("GET /api/broker/jobs error:", e.message);
+      return res.status(500).json({ message: "Failed to load jobs" });
     }
   });
 

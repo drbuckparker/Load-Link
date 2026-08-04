@@ -10,3 +10,6 @@ Brokers can add clients without a LoadLink invite. These live in the companion-o
 - Any companion-local `/api/broker/*` handler registered before the wildcard MUST enforce the broker role itself (`users.role = 'broker'` check) — the wildcard relies on upstream enforcement, so local handlers bypass it. This gap was caught in review once already.
 
 **Why:** brokers take clients by phone ("I need four trucks") and must post jobs immediately; forcing an invite/accept loop blocked the flow.
+
+## Job→client links are companion-side too
+The website strips clientName/clientEmail off broker jobs entirely (upstream job payload only has clientInvoiceId), so job→client ties live in companion table `broker_job_clients` (job_id PK, broker_id, client_key = `manual-<id>` or upstream clientUserId). Written on broker POST /api/jobs after upstream success; merged back by the pre-wildcard GET /api/broker/jobs; /api/broker/clients derives activeJobsCount from it. If a broker job "isn't tied to a client", the link row is missing — never look upstream for it.
