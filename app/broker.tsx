@@ -351,14 +351,31 @@ export default function BrokerDashboardScreen() {
   const assignSelected = async (sendNow: boolean) => {
     if (!assignJob || selectedAssign.size === 0) return;
     haptic(Haptics.ImpactFeedbackStyle.Medium);
+    const count = selectedAssign.size;
+    let ok = 0;
     for (const driverId of Array.from(selectedAssign)) {
       try {
         await assignMutation.mutateAsync({ jobId: assignJob.id, driverId, sendNow });
+        ok++;
       } catch {
         // assignMutation.onError already alerts; keep going for the rest.
       }
     }
     setSelectedAssign(new Set());
+    if (ok > 0) {
+      // Close the sheet and tell the user where the held sends went.
+      setAssignJob(null);
+      const msg = sendNow
+        ? `Instructions sent to ${ok} truck${ok === 1 ? '' : 's'}.`
+        : `${ok} truck${ok === 1 ? '' : 's'} added to this job. Send the instructions from the Truck Confirmations card on your home screen, or from the Day Plan.`;
+      if (Platform.OS === 'web') {
+        if (typeof window !== 'undefined') window.alert(msg);
+      } else {
+        Alert.alert(sendNow ? 'Instructions Sent' : 'Trucks Added', msg);
+      }
+    } else if (count > 0) {
+      // all failed — assignMutation.onError already surfaced the reason
+    }
   };
 
   const removeAssignmentMutation = useMutation({

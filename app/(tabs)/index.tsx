@@ -71,7 +71,7 @@ interface DashboardData {
     jobs?: { id: string; material: string; projectName: string; contractorName?: string; trucksNeeded: number; applied?: number; assigned?: number; activeRunCount?: number; status: string; assignmentStatus?: string; assignedVehicles?: any[] }[];
   }[];
   recentActivity: { id: string; type: string; title: string; message: string; createdAt: string; isRead: boolean }[];
-  brokerConfirmations?: { date: string; confirmed: number; totalSent: number; declined: number; allConfirmed: boolean }[];
+  brokerConfirmations?: { date: string; confirmed: number; totalSent: number; declined: number; held?: number; heldJobIds?: string[]; allConfirmed: boolean }[];
 }
 
 export default function DashboardScreen() {
@@ -101,6 +101,26 @@ export default function DashboardScreen() {
 
   const [switchingRole, setSwitchingRole] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [sendingHeldDate, setSendingHeldDate] = useState<string | null>(null);
+
+  const sendHeldForDay = async (date: string, jobIds: string[]) => {
+    if (sendingHeldDate || jobIds.length === 0) return;
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSendingHeldDate(date);
+    try {
+      for (const id of jobIds) {
+        try {
+          await apiRequest('POST', `/api/broker/jobs/${id}/send-all`);
+        } catch (e) {
+          console.log('send-all failed for job', id, e);
+        }
+      }
+    } finally {
+      setSendingHeldDate(null);
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+    }
+  };
   const [activeElapsed, setActiveElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [deviceLat, setDeviceLat] = useState<number | null>(null);
@@ -473,7 +493,7 @@ export default function DashboardScreen() {
               <Text style={styles.mapSectionTitle}>TRUCK CONFIRMATIONS</Text>
             </View>
             {(() => {
-              const days = (dashboard?.brokerConfirmations || []).filter(d => d.totalSent > 0 || d.declined > 0);
+              const days = (dashboard?.brokerConfirmations || []).filter(d => d.totalSent > 0 || d.declined > 0 || (d.held || 0) > 0);
               if (days.length === 0) {
                 return <Text style={styles.confirmEmptyText}>No instructions sent out yet. Assign trucks in your Day Plan, then send instructions.</Text>;
               }
@@ -484,7 +504,24 @@ export default function DashboardScreen() {
                 if (dateStr === tomorrowKey) return 'tomorrow';
                 return new Date(`${dateStr}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
               };
-              return days.map(d => (
+              const heldRows = days.filter(d => (d.held || 0) > 0).map(d => (
+                <View key={`held-${d.date}`} style={styles.confirmRow}>
+                  <Ionicons name="paper-plane-outline" size={20} color={Colors.warning} />
+                  <Text style={[styles.confirmRowText, { flex: 1 }]}>
+                    You have instructions to send to {d.held} truck{d.held === 1 ? '' : 's'} for {dayLabel(d.date)}
+                  </Text>
+                  <Pressable
+                    disabled={sendingHeldDate === d.date}
+                    style={({ pressed }) => [styles.sendHeldBtn, (pressed || sendingHeldDate === d.date) && { opacity: 0.6 }]}
+                    onPress={() => sendHeldForDay(d.date, d.heldJobIds || [])}
+                  >
+                    {sendingHeldDate === d.date
+                      ? <ActivityIndicator size="small" color="#0E0F13" />
+                      : <Text style={styles.sendHeldBtnText}>SEND NOW</Text>}
+                  </Pressable>
+                </View>
+              ));
+              const sentRows = days.filter(d => d.totalSent > 0 || d.declined > 0).map(d => (
                 <Pressable
                   key={d.date}
                   style={styles.confirmRow}
@@ -517,6 +554,7 @@ export default function DashboardScreen() {
                   <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
                 </Pressable>
               ));
+              return <>{heldRows}{sentRows}</>;
             })()}
           </View>
         ) : (
@@ -1045,6 +1083,11 @@ const styles = StyleSheet.create({
   confirmEmptyText: { fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted, lineHeight: 18 },
   confirmRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   confirmRowText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
+  sendHeldBtn: {
+    backgroundColor: Colors.primary, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7,
+    minWidth: 86, alignItems: 'center',
+  },
+  sendHeldBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: '#0E0F13', letterSpacing: 0.5 },
   declinedPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   declinedPillText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.destructive, letterSpacing: 0.5 },
   mapStatusRow: {

@@ -4828,26 +4828,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt: auth.jwt });
           if (jr.ok) {
             const bJobs = await jr.json().catch(() => []);
-            const byDay = new Map<string, { confirmed: number; sent: number; declined: number; jobs: number }>();
+            const byDay = new Map<string, { confirmed: number; sent: number; declined: number; jobs: number; held: number; heldJobIds: string[] }>();
             for (const job of Array.isArray(bJobs) ? bJobs : []) {
               const jd = String(job.scheduledDate || job.scheduled_date || "").slice(0, 10);
               if (!jd) continue;
               const s = job.assignmentStats || {};
-              const cur = byDay.get(jd) || { confirmed: 0, sent: 0, declined: 0, jobs: 0 };
-              cur.confirmed += Number(s.confirmed) || 0;
-              cur.sent += Number(s.sent) || 0;
-              cur.declined += Number(s.declined) || 0;
+              const cur = byDay.get(jd) || { confirmed: 0, sent: 0, declined: 0, jobs: 0, held: 0, heldJobIds: [] };
+              cur.confirmed += Number(s.confirmed ?? s.confirmedCount) || 0;
+              cur.sent += Number(s.sent ?? s.sentCount) || 0;
+              cur.declined += Number(s.declined ?? s.declinedCount) || 0;
               cur.jobs += 1;
+              // Held = assigned but instructions not sent yet. The jobs LIST
+              // endpoint omits the assignments array, so use the stats.
+              const heldHere = Number(s.held ?? s.heldCount) || 0;
+              if (heldHere > 0) {
+                cur.held += heldHere;
+                cur.heldJobIds.push(String(job.id));
+              }
               byDay.set(jd, cur);
             }
             brokerConfirmations = upcomingDays.map((d: any) => {
-              const g = byDay.get(d.date) || { confirmed: 0, sent: 0, declined: 0, jobs: 0 };
+              const g = byDay.get(d.date) || { confirmed: 0, sent: 0, declined: 0, jobs: 0, held: 0, heldJobIds: [] };
               const totalOut = g.confirmed + g.sent;
               return {
                 date: d.date,
                 confirmed: g.confirmed,
                 totalSent: totalOut,
                 declined: g.declined,
+                held: g.held,
+                heldJobIds: g.heldJobIds,
                 allConfirmed: totalOut > 0 && g.confirmed >= totalOut,
               };
             });
