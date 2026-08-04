@@ -749,7 +749,25 @@ export default function BrokerDashboardScreen() {
             <Text style={styles.modalSubtitle} numberOfLines={1}>{assignJob?.material || ''}</Text>
             <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
               {roster.length === 0 ? (
-                <Text style={[styles.emptyText, { marginVertical: 24 }]}>No roster drivers. Invite drivers first.</Text>
+                <View style={{ alignItems: 'center', marginVertical: 24, gap: 14 }}>
+                  <Text style={styles.emptyText}>No roster drivers yet.</Text>
+                  <Pressable
+                    testID="assign-invite-drivers"
+                    style={({ pressed }) => [styles.postJobBtn, { alignSelf: 'stretch' }, pressed && { opacity: 0.8 }]}
+                    onPress={() => {
+                      haptic(Haptics.ImpactFeedbackStyle.Medium);
+                      setAssignJob(null);
+                      setTab('roster');
+                      setInviteVisible('roster');
+                    }}
+                  >
+                    <Ionicons name="person-add" size={16} color={Colors.primaryForeground} />
+                    <Text style={styles.postJobBtnText}>INVITE DRIVERS</Text>
+                  </Pressable>
+                  <Text style={styles.personEmail}>
+                    Invited drivers sign up on LoadLink, then appear here once they accept.
+                  </Text>
+                </View>
               ) : roster.map(d => {
                 const driverId = d.driverId || d.driver_id || d.id;
                 const already = assignedDriverIds.has(driverId);

@@ -1939,6 +1939,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Merged roster (pre-wildcard): upstream broker roster, plus auto-enrollment
+  // of the broker's OWN account drivers (users under this account and drivers
+  // assigned to its trucks). The website only allows assigning roster members
+  // ("That truck is not on your roster") and has no roster-add endpoint — the
+  // only entry path is /api/broker/roster/invite, which auto-links existing
+  // LoadLink accounts by email. So any own-account driver missing from the
+  // roster gets auto-invited here; they show as PENDING until they accept.
+  app.get("/api/broker/roster", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    try {
+      if (!auth.jwt || auth.jwt.startsWith("dev-local:")) return res.json([]);
+      const fetchRoster = async (): Promise<any[] | null> => {
+        const rr = await websiteFetch("/api/broker/roster", { method: "GET", jwt: auth.jwt });
+        if (!rr.ok) return null;
+        const data = await rr.json().catch(() => null);
+        return Array.isArray(data) ? data : null;
+      };
+      let roster = await fetchRoster();
+      if (roster === null) return res.status(502).json({ message: "Failed to load roster" });
+
+      const own = await pool.query(
+        `SELECT DISTINCT u.id, u.email, u.full_name FROM users u
+         WHERE u.id::text <> $1 AND u.email IS NOT NULL AND (
+           u.trucking_company_id::text = $1
+           OR u.id::text IN (
+             SELECT assigned_driver_id::text FROM trucks
+             WHERE trucking_company_id::text = $1 AND assigned_driver_id IS NOT NULL AND archived_at IS NULL
+           )
+         )`,
+        [String(auth.userId)]
+      );
+      const rosterIds = new Set(roster.map((r: any) => String(r.driverId || r.driver_id || "")).filter(Boolean));
+      const rosterEmails = new Set(
+        roster.map((r: any) => String(r.driverEmail || r.driver_email || r.email || "").toLowerCase()).filter(Boolean)
+      );
+      let invitedAny = false;
+      for (const u of own.rows) {
+        const email = String(u.email || "").toLowerCase();
+        if (!email || rosterIds.has(String(u.id)) || rosterEmails.has(email)) continue;
+        try {
+          const ir = await websiteFetch("/api/broker/roster/invite", {
+            method: "POST",
+            body: { email: u.email, name: u.full_name || u.email },
+            jwt: auth.jwt,
+          });
+          if (ir.ok) invitedAny = true;
+          else console.error(`[RosterAutoInvite] invite for ${u.id} failed: ${ir.status}`);
+        } catch (e: any) {
+          console.error("[RosterAutoInvite] error:", e.message);
+        }
+      }
+      if (invitedAny) roster = (await fetchRoster()) || roster;
+      return res.json(addDualKeys(roster));
+    } catch (e: any) {
+      console.error("GET /api/broker/roster error:", e.message);
+      return res.status(500).json({ message: "Failed to load roster" });
+    }
+  });
+
   // Roster availability for a given date: reads the shared driver_availability
   // table (drivers mark trucks unavailable in their calendar) so the broker's
   // assign sheet can flag who can't run that day.
