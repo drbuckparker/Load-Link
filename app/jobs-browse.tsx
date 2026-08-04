@@ -107,6 +107,7 @@ export default function JobsBrowseScreen() {
     params.tab === 'projects' ? 'projects' : (user?.role === 'broker' ? 'clients' : 'jobs')
   );
   const [clientSearch, setClientSearch] = useState('');
+  const [expandedClientKey, setExpandedClientKey] = useState<string | null>(null);
   const [showInviteClient, setShowInviteClient] = useState(false);
   const [inviteClientName, setInviteClientName] = useState('');
   const [inviteClientEmail, setInviteClientEmail] = useState('');
@@ -240,6 +241,27 @@ export default function JobsBrowseScreen() {
       `${c.name || c.client_name || c.clientName || ''} ${c.email || ''}`.toLowerCase().includes(q)
     );
   }, [brokerClients, clientSearch]);
+
+  // Broker jobs, used to list each client's jobs inline under their card.
+  const { data: _brokerJobs } = useQuery<any[]>({
+    queryKey: ['/api/broker/jobs'],
+    enabled: !!user && isBroker && activeTab === 'clients',
+  });
+  const brokerJobs = Array.isArray(_brokerJobs) ? _brokerJobs : [];
+
+  const jobsForClient = (c: any): any[] => {
+    const cUserId = c.clientUserId || c.client_user_id;
+    const cEmail = (c.email || '').trim().toLowerCase();
+    const cName = (c.name || c.clientName || c.client_name || '').trim().toLowerCase();
+    return brokerJobs.filter((j: any) => {
+      const jUserId = j.clientUserId || j.client_user_id;
+      if (jUserId && cUserId) return jUserId === cUserId;
+      const jEmail = (j.clientEmail || j.client_email || '').trim().toLowerCase();
+      if (jEmail && cEmail) return jEmail === cEmail;
+      const jName = (j.clientName || j.client_name || '').trim().toLowerCase();
+      return !!jName && !!cName && jName === cName;
+    });
+  };
 
   const inviteClientMutation = useMutation({
     mutationFn: async (data: { name: string; email?: string; contactName?: string; phone?: string; address?: string; notes?: string }) => {
@@ -1146,36 +1168,88 @@ export default function JobsBrowseScreen() {
               renderItem={({ item }: { item: any }) => {
                 const cName = item.name || item.client_name || item.clientName || item.email || 'Client';
                 const pending = item.status === 'pending';
+                const cKey = String(item.clientUserId || item.client_user_id || item.invitationId || item.invitation_id || item.id || item.email || cName);
+                const expanded = expandedClientKey === cKey;
+                const clientJobs = expanded ? jobsForClient(item) : [];
                 const activeJobs = Number(item.activeJobsCount ?? item.active_jobs_count ?? 0);
                 return (
-                  <Pressable
-                    style={styles.projectCard}
-                    onPress={() => router.push({ pathname: '/create-job', params: { clientName: cName, clientEmail: item.email || '' } } as any)}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                      <Ionicons name="business" size={20} color={Colors.primary} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.projectCardName} numberOfLines={1}>{cName}</Text>
-                        {!!(item.email || item.phone) && (
-                          <Text style={styles.projectJobNumber} numberOfLines={1}>
-                            {[item.email, item.phone].filter(Boolean).join(' · ')}
+                  <View style={styles.projectCard}>
+                    <Pressable
+                      testID={`client-row-${cKey}`}
+                      onPress={() => {
+                        if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setExpandedClientKey(expanded ? null : cKey);
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Ionicons name="business" size={20} color={Colors.primary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.projectCardName} numberOfLines={1}>{cName}</Text>
+                          {!!(item.email || item.phone) && (
+                            <Text style={styles.projectJobNumber} numberOfLines={1}>
+                              {[item.email, item.phone].filter(Boolean).join(' · ')}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={[styles.projectStatusBadge, { backgroundColor: pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
+                          <Text style={[styles.projectStatusText, { color: pending ? '#eab308' : '#22c55e' }]}>
+                            {pending ? 'PENDING' : 'ACTIVE'}
                           </Text>
-                        )}
+                        </View>
                       </View>
-                      <View style={[styles.projectStatusBadge, { backgroundColor: pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
-                        <Text style={[styles.projectStatusText, { color: pending ? '#eab308' : '#22c55e' }]}>
-                          {pending ? 'PENDING' : 'ACTIVE'}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
+                        <Ionicons name="briefcase" size={14} color={Colors.primary} />
+                        <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.primary }}>
+                          {activeJobs > 0 ? `${activeJobs} active job${activeJobs !== 1 ? 's' : ''}` : 'No active jobs'}
                         </Text>
+                        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
                       </View>
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                      <Ionicons name="briefcase" size={14} color={Colors.primary} />
-                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.primary }}>
-                        {activeJobs > 0 ? `${activeJobs} active job${activeJobs !== 1 ? 's' : ''}` : 'Tap to post a job'}
-                      </Text>
-                      <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
-                    </View>
-                  </Pressable>
+                    </Pressable>
+
+                    {expanded && (
+                      <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)', paddingTop: 10, gap: 8 }}>
+                        {clientJobs.length === 0 ? (
+                          <Text style={[styles.projectJobNumber, { textAlign: 'center', paddingVertical: 4 }]}>
+                            No jobs for this client yet
+                          </Text>
+                        ) : clientJobs.map((j: any) => {
+                          const jd = String(j.scheduledDate || j.scheduled_date || '').slice(0, 10);
+                          const jStatus = String(j.status || '').toUpperCase();
+                          return (
+                            <Pressable
+                              key={j.id}
+                              testID={`client-job-${j.id}`}
+                              style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }, pressed && { opacity: 0.7 }]}
+                              onPress={() => router.push(`/job/${j.id}`)}
+                            >
+                              <Ionicons name="cube-outline" size={16} color={Colors.primary} />
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.projectCardName} numberOfLines={1}>{j.material || 'Job'}</Text>
+                                <Text style={styles.projectJobNumber} numberOfLines={1}>
+                                  {[jd, jStatus].filter(Boolean).join(' · ')}
+                                </Text>
+                              </View>
+                              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
+                            </Pressable>
+                          );
+                        })}
+                        <Pressable
+                          testID={`client-add-job-${cKey}`}
+                          style={({ pressed }) => [{
+                            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                            backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 10, marginTop: 2,
+                          }, pressed && { opacity: 0.8 }]}
+                          onPress={() => {
+                            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                            router.push({ pathname: '/create-job', params: { clientName: cName, clientEmail: item.email || '' } } as any);
+                          }}
+                        >
+                          <Ionicons name="add-circle-outline" size={16} color={Colors.primaryForeground} />
+                          <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 13, color: Colors.primaryForeground }}>ADD JOB</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
                 );
               }}
               contentContainerStyle={styles.listContent}
