@@ -2154,11 +2154,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           roster = roster.map((r: any) => {
             const dId = String(r.driverId || r.driver_id || "");
             const u = userMap.get(dId);
-            const assigned = tr.rows.filter((t: any) => t.assigned_driver_id === dId);
-            const pool_ = assigned.length > 0
-              ? assigned
-              : tr.rows.filter((t: any) =>
-                  u && u.company_key === brokerKey && t.trucking_company_id === brokerKey && !t.assigned_driver_id);
+            // One driver per truck: only show trucks explicitly assigned to
+            // this driver. No company-wide fallback — it duplicated every
+            // unassigned truck under every driver. Assign a driver to a truck
+            // in My Vehicles to link them here.
+            const pool_ = tr.rows.filter((t: any) => t.assigned_driver_id === dId);
             return {
               ...r,
               companyName: pool_[0]?.owner_company || u?.company || "",
