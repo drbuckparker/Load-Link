@@ -107,7 +107,6 @@ export default function JobsBrowseScreen() {
     params.tab === 'projects' ? 'projects' : (user?.role === 'broker' ? 'clients' : 'jobs')
   );
   const [clientSearch, setClientSearch] = useState('');
-  const [expandedClientKey, setExpandedClientKey] = useState<string | null>(null);
   const [showInviteClient, setShowInviteClient] = useState(false);
   const [inviteClientName, setInviteClientName] = useState('');
   const [inviteClientEmail, setInviteClientEmail] = useState('');
@@ -118,6 +117,10 @@ export default function JobsBrowseScreen() {
   const [activeFilter, setActiveFilter] = useState<string>(params.filter || (params.date ? 'All' : 'Open'));
   const [dateFilter, setDateFilter] = useState<string | undefined>(params.date || undefined);
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(params.projectId || null);
+  // Full-screen client view (mirrors the project view): tap a client to see
+  // all of that client's jobs under the client's name. Holds the tapped
+  // client object itself so lookups can't resolve to the wrong client.
+  const [selectedClient, setSelectedClient] = useState<any | null>(null);
 
   useEffect(() => {
     if (params.filter) setActiveFilter(params.filter);
@@ -262,6 +265,14 @@ export default function JobsBrowseScreen() {
       return !!jName && !!cName && jName === cName;
     });
   };
+
+  const selectedClientJobs = useMemo<Job[]>(() => {
+    if (!selectedClient) return [];
+    const list = jobsForClient(selectedClient).map(mapDbJob);
+    const completed = list.filter(j => String(j.status).toLowerCase() === 'completed');
+    const active = list.filter(j => String(j.status).toLowerCase() !== 'completed');
+    return [...active, ...completed];
+  }, [selectedClient, brokerJobs]);
 
   const inviteClientMutation = useMutation({
     mutationFn: async (data: { name: string; email?: string; contactName?: string; phone?: string; address?: string; notes?: string }) => {
@@ -865,6 +876,11 @@ export default function JobsBrowseScreen() {
     <View style={[styles.container, { paddingTop: topPadding }]}>
       <View style={styles.header}>
         <Pressable onPress={() => {
+          if (selectedClient) {
+            setSelectedClient(null);
+            setActiveTab('clients');
+            return;
+          }
           if (selectedProjectFilter) {
             setSelectedProjectFilter(null);
             setActiveTab('projects');
@@ -879,14 +895,16 @@ export default function JobsBrowseScreen() {
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
         </Pressable>
         <Text style={styles.headerTitle}>
-          {selectedProjectFilter && selectedProjectData
+          {selectedClient
+            ? String(selectedClient.name || selectedClient.client_name || selectedClient.clientName || selectedClient.email || 'CLIENT').toUpperCase()
+            : selectedProjectFilter && selectedProjectData
             ? selectedProjectData.name.toUpperCase()
             : (isContractor || isBroker) ? 'MY JOBS' : (user?.role === 'trucking_company' ? 'FIND JOBS' : 'FIND LOADS')}
         </Text>
         <View style={{ width: 44 }} />
       </View>
 
-      {(isContractor || isBroker) && !selectedProjectFilter && (
+      {(isContractor || isBroker) && !selectedProjectFilter && !selectedClient && (
         <View style={styles.tabToggleRow}>
           {isBroker ? (
             <Pressable
@@ -930,6 +948,15 @@ export default function JobsBrowseScreen() {
           >
             <Ionicons name="create-outline" size={20} color={Colors.primary} />
           </Pressable>
+        </View>
+      )}
+
+      {selectedClient && (
+        <View style={styles.projectBanner}>
+          <Ionicons name="business" size={16} color={Colors.primary} />
+          <Text style={styles.projectBannerText} numberOfLines={1}>
+            Showing jobs for "{selectedClient.name || selectedClient.client_name || selectedClient.clientName || selectedClient.email || 'Client'}"
+          </Text>
         </View>
       )}
 
@@ -1122,7 +1149,28 @@ export default function JobsBrowseScreen() {
         </>
       )}
 
-      {activeTab === 'clients' && isBroker && (
+      {activeTab === 'clients' && isBroker && selectedClient && (
+        <FlatList
+          data={selectedClientJobs}
+          keyExtractor={(item: any) => String(item.id)}
+          renderItem={({ item }: any) => (isContractor ? renderContractorCard({ item }) : renderDriverCard({ item }))}
+          contentContainerStyle={styles.listContent}
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          showsVerticalScrollIndicator={false}
+          onRefresh={() => queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] })}
+          refreshing={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No jobs yet</Text>
+              <Text style={styles.emptySubtitle}>Tap + to add a job for this client</Text>
+            </View>
+          }
+          ListFooterComponent={<View style={{ height: 80 }} />}
+        />
+      )}
+
+      {activeTab === 'clients' && isBroker && !selectedClient && (
         <>
           <View style={styles.searchRow}>
             <View style={styles.searchBar}>
@@ -1169,8 +1217,6 @@ export default function JobsBrowseScreen() {
                 const cName = item.name || item.client_name || item.clientName || item.email || 'Client';
                 const pending = item.status === 'pending';
                 const cKey = String(item.clientUserId || item.client_user_id || item.invitationId || item.invitation_id || item.id || item.email || cName);
-                const expanded = expandedClientKey === cKey;
-                const clientJobs = expanded ? jobsForClient(item) : [];
                 const activeJobs = Number(item.activeJobsCount ?? item.active_jobs_count ?? 0);
                 return (
                   <View style={styles.projectCard}>
@@ -1178,7 +1224,8 @@ export default function JobsBrowseScreen() {
                       testID={`client-row-${cKey}`}
                       onPress={() => {
                         if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setExpandedClientKey(expanded ? null : cKey);
+                        setSelectedProjectFilter(null);
+                        setSelectedClient(item);
                       }}
                     >
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -1202,53 +1249,9 @@ export default function JobsBrowseScreen() {
                         <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color: Colors.primary }}>
                           {activeJobs > 0 ? `${activeJobs} active job${activeJobs !== 1 ? 's' : ''}` : 'No active jobs'}
                         </Text>
-                        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
+                        <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
                       </View>
                     </Pressable>
-
-                    {expanded && (
-                      <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)', paddingTop: 10, gap: 8 }}>
-                        {clientJobs.length === 0 ? (
-                          <Text style={[styles.projectJobNumber, { textAlign: 'center', paddingVertical: 4 }]}>
-                            No jobs for this client yet
-                          </Text>
-                        ) : clientJobs.map((j: any) => {
-                          const jd = String(j.scheduledDate || j.scheduled_date || '').slice(0, 10);
-                          const jStatus = String(j.status || '').toUpperCase();
-                          return (
-                            <Pressable
-                              key={j.id}
-                              testID={`client-job-${j.id}`}
-                              style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 }, pressed && { opacity: 0.7 }]}
-                              onPress={() => router.push(`/job/${j.id}`)}
-                            >
-                              <Ionicons name="cube-outline" size={16} color={Colors.primary} />
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.projectCardName} numberOfLines={1}>{j.material || 'Job'}</Text>
-                                <Text style={styles.projectJobNumber} numberOfLines={1}>
-                                  {[jd, jStatus].filter(Boolean).join(' · ')}
-                                </Text>
-                              </View>
-                              <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
-                            </Pressable>
-                          );
-                        })}
-                        <Pressable
-                          testID={`client-add-job-${cKey}`}
-                          style={({ pressed }) => [{
-                            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-                            backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 10, marginTop: 2,
-                          }, pressed && { opacity: 0.8 }]}
-                          onPress={() => {
-                            if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                            router.push({ pathname: '/create-job', params: { clientName: cName, clientEmail: item.email || '' } } as any);
-                          }}
-                        >
-                          <Ionicons name="add-circle-outline" size={16} color={Colors.primaryForeground} />
-                          <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 13, color: Colors.primaryForeground }}>ADD JOB</Text>
-                        </Pressable>
-                      </View>
-                    )}
                   </View>
                 );
               }}
@@ -1353,6 +1356,16 @@ export default function JobsBrowseScreen() {
           style={[styles.fab, { bottom: Platform.OS === 'web' ? 34 + 20 : insets.bottom + 20 }]}
           onPress={() => {
             if (activeTab === 'clients') {
+              if (selectedClient) {
+                router.push({
+                  pathname: '/create-job',
+                  params: {
+                    clientName: selectedClient.name || selectedClient.client_name || selectedClient.clientName || '',
+                    clientEmail: selectedClient.email || '',
+                  },
+                } as any);
+                return;
+              }
               setShowInviteClient(true);
             } else if (activeTab === 'projects') {
               setShowCreateProject(true);
