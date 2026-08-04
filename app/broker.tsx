@@ -493,7 +493,11 @@ export default function BrokerDashboardScreen() {
       a => (a.sentAt ?? a.sent_at) == null && a.status !== 'declined' && a.status !== 'withdrawn'
     );
     return (
-      <View style={styles.jobCard} testID={`broker-job-${item.id}`}>
+      <Pressable
+        style={({ pressed }) => [styles.jobCard, pressed && { opacity: 0.85 }]}
+        testID={`broker-job-${item.id}`}
+        onPress={() => { haptic(); router.push(`/job/${item.id}` as any); }}
+      >
         <View style={styles.jobHeader}>
           <Text style={styles.jobMaterial} numberOfLines={1}>{item.material || 'Job'}</Text>
           <View style={styles.statusBadge}>
@@ -594,7 +598,7 @@ export default function BrokerDashboardScreen() {
             </Pressable>
           )}
         </View>
-      </View>
+      </Pressable>
     );
   }
 
