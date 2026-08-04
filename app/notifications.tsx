@@ -77,8 +77,21 @@ export default function NotificationsScreen() {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (notif.type === 'load_completed' && notif.jobId) {
       router.push({ pathname: '/review', params: { jobId: notif.jobId } });
-    } else if (notif.jobId) {
+      return;
+    }
+    if (notif.jobId) {
       router.push({ pathname: '/job/[id]', params: { id: notif.jobId } });
+      return;
+    }
+    // Roster notifications carry no job — route them somewhere useful.
+    const text = `${notif.title} ${notif.message}`.toLowerCase();
+    if (text.includes('joined your roster') || text.includes('invitation accepted')) {
+      router.push({ pathname: '/broker', params: { tab: 'roster' } } as any);
+      return;
+    }
+    if (text.includes('roster') && text.includes('invit')) {
+      // Pending invite for you as a driver — accept it on My Jobs.
+      router.push('/(tabs)/my-jobs' as any);
     }
   }
 

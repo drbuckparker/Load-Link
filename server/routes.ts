@@ -4313,6 +4313,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
         [auth.userId]
       );
+      // The website writes assignment notifications without job_id, which
+      // leaves them un-tappable in the app. Resolve the job from the message
+      // ("assigned you a <material> job on <M/D/YYYY>") via this user's own
+      // assignments and backfill the row so it only costs us once.
+      for (const row of result.rows) {
+        if (row.job_id || !row.message) continue;
+        const m = String(row.message).match(/assigned you an? (.+?) job on (\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+        if (!m) continue;
+        try {
+          const [, material, mo, day, yr] = m;
+          const jr = await pool.query(
+            `SELECT j.id FROM jobs j
+              JOIN job_assignments a ON a.job_id = j.id AND a.driver_id::text = $1
+                AND a.status::text NOT IN ('declined','withdrawn','rejected')
+             WHERE LOWER(j.material) = LOWER($2)
+               AND j.scheduled_date::date = make_date($3::int, $4::int, $5::int)
+             ORDER BY j.created_at DESC LIMIT 1`,
+            [String(auth.userId), material.trim(), yr, mo, day]
+          );
+          if (jr.rows[0]?.id) {
+            row.job_id = jr.rows[0].id;
+            pool.query(`UPDATE notifications SET job_id = $1 WHERE id = $2`, [row.job_id, row.id]).catch(() => {});
+          }
+        } catch {}
+      }
       return res.json(result.rows.map(addDualKeys));
     } catch {
       return res.json([]);
