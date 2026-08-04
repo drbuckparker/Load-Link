@@ -16,7 +16,7 @@ async function getNotif() {
 import { useQuery } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor } from '@/lib/mock-data';
+import { Job, formatRate, formatJobType, formatTruckType, getStatusColor, getJobTypeColor, isBrokerRole } from '@/lib/mock-data';
 import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
 import RouteMapView from '@/components/RouteMapView';
 import { pointToRouteMiles, CLOCKOUT_GEOFENCE_MILES } from '@/lib/geo';
@@ -546,7 +546,9 @@ export default function JobDetailScreen() {
   const statusColor = getStatusColor(displayStatus);
   const jobTypeColor = getJobTypeColor(job.jobType);
   const isMyJob = job.driverId === user?.id || (myAssignment && myAssignment.status === 'approved');
-  const canAccept = (jobStatus === 'open' || jobStatus === 'pending' || jobStatus === 'accepted') && !hasApplied && !isContractor;
+  // Never offer ACCEPT JOB / COUNTER OFFER on a job you posted yourself —
+  // brokers/contractors put their own truck on via the assign flow instead.
+  const canAccept = (jobStatus === 'open' || jobStatus === 'pending' || jobStatus === 'accepted') && !hasApplied && !isContractor && !isMyPostedJob;
   // Clock-in is a driver/fleet action — never expose it while the user is in
   // contractor mode, even if they happen to also be the approved driver on
   // the job (self-apply scenario where the same company posted and applied).
@@ -3091,6 +3093,21 @@ export default function JobDetailScreen() {
               <Text style={styles.acceptBtnText}>ACCEPT JOB</Text>
             </Pressable>
           </View>
+        )}
+
+        {isMyPostedJob && isBrokerRole(user?.role || '') && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired' && (
+          <Pressable
+            style={({ pressed }) => [styles.acceptBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              const dateKey = job.scheduledDate ? String(job.scheduledDate).slice(0, 10) : undefined;
+              router.push({ pathname: '/broker', params: { assign: String(id), ...(dateKey ? { date: dateKey } : {}) } } as any);
+            }}
+            testID="assign-trucks-btn"
+          >
+            <Ionicons name="people" size={20} color={Colors.primaryForeground} />
+            <Text style={styles.acceptBtnText}>ASSIGN TRUCKS TO JOB</Text>
+          </Pressable>
         )}
 
         {canStart && !isRunning && jobStatus !== 'completed' && (
