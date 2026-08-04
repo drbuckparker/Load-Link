@@ -17,5 +17,10 @@ Brokers can put themselves down as a truck's assigned driver:
 - `/api/drivers/search` includes the requester's own account regardless of role (otherwise a broker typing their own name finds nobody and the vehicle save silently stores no driver).
 - Roster auto-invite includes the broker's own account ONLY when they are assigned_driver_id on one of their trucks; the resulting self-invite is auto-accepted via upstream `/api/invitations/pending` + `/:id/accept` with the same JWT — but only invitations whose inviter id POSITIVELY matches the broker (never accept on missing/unknown inviter fields).
 - Verified live: self-invite → auto-accept → status "accepted" → truck assignable, without touching other pending invitees.
+- The website gates only the LAST step: it refuses a driver-side confirm/decline when the driver IS the posting broker. The companion absorbs that one rejection itself (shared DB is the website's own store, so its write is authoritative).
+
+**Why:** Aug 2026 — brokers hauling their own loads is an intended flow; the upstream gate would otherwise strand every self-assignment at "awaiting confirmation" forever.
+
+**How to apply:** any companion fallback that substitutes for a refused upstream write must trigger only on that exact upstream rejection (not on "upstream failed") and only from the valid pre-transition state, treating repeats of the same action as idempotent.
 
 **One driver per truck (Aug 2026):** roster truck enrichment shows ONLY trucks with `assigned_driver_id = driver` — the company-wide unassigned-truck fallback was removed because it duplicated every truck under every driver in the assign sheet. Drivers link to trucks via My Vehicles' Assigned Driver field. Also: website `GET /api/vehicles` began returning 403 to companion syncs (~Aug 2026), so trucks are effectively companion-local; watch for clobbering if that endpoint comes back.

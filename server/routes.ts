@@ -2526,6 +2526,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
           jwt: auth.jwt,
         });
         const text = await up.text();
+        // Upstream role gate: the website rejects a driver-side confirm/decline
+        // when the confirming driver is ALSO the job's posting broker ("This
+        // assignment is not a broker assignment"). Brokers can legitimately
+        // send a job to themselves as the driver, so handle the self-assign
+        // case directly against the shared DB (the same store the website
+        // reads), mirroring what the upstream confirm/decline would do.
+        const isSelfAssignGate =
+          up.status === 400 && /not a broker assignment/i.test(text || "");
+        if (isSelfAssignGate) {
+          let selfAssigned = false;
+          try {
+            const row = await pool.query(
+              `SELECT ja.id FROM job_assignments ja
+                 JOIN jobs j ON j.id = ja.job_id
+                WHERE ja.id = $1
+                  AND ja.driver_id::text = $2
+                  AND j.contractor_id::text = $2
+                  AND ja.sent_at IS NOT NULL`,
+              [assignmentId, auth.userId]
+            );
+            selfAssigned = row.rows.length > 0;
+          } catch {
+            selfAssigned = false; // e.g. schema without sent_at — fall through to the upstream error
+          }
+          if (selfAssigned) {
+            // Only a pending assignment may transition (mirrors the upstream
+            // confirm/decline rule); a repeated tap on the same action is
+            // treated as idempotent success, anything else surfaces the
+            // upstream error unchanged.
+            const target = action === "confirm" ? "approved" : "rejected";
+            const upd = await pool.query(
+              action === "confirm"
+                ? `UPDATE job_assignments SET status = 'approved', approved_at = NOW()
+                     WHERE id = $1 AND status::text = 'pending'`
+                : `UPDATE job_assignments SET status = 'rejected'
+                     WHERE id = $1 AND status::text = 'pending'`,
+              [assignmentId]
+            );
+            let done = (upd.rowCount || 0) === 1;
+            if (!done) {
+              const cur = await pool.query(
+                `SELECT status::text AS status FROM job_assignments WHERE id = $1`,
+                [assignmentId]
+              );
+              done = cur.rows[0]?.status === target;
+            }
+            if (done) {
+              // No broker notification: the broker IS the driver here.
+              return res.json({ ok: true, selfAssigned: true });
+            }
+          }
+        }
         res.status(up.status);
         try { res.json(JSON.parse(text)); } catch { res.send(text); }
         if (up.ok) {

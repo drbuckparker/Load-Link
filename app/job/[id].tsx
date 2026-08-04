@@ -287,6 +287,8 @@ export default function JobDetailScreen() {
   const [jobStatus, setJobStatus] = useState<string>('');
   const [confirmingBroker, setConfirmingBroker] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [truckDownPickerVisible, setTruckDownPickerVisible] = useState(false);
+  const [truckDownSubmitting, setTruckDownSubmitting] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showResumeModal, setShowResumeModal] = useState(false);
   const [showPaperworkInfo, setShowPaperworkInfo] = useState(false);
@@ -555,6 +557,8 @@ export default function JobDetailScreen() {
   const canStart = isMyJob && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
   // Truck Down — available to the assigned driver anytime the job is live
   // (even before clocking in), never in contractor mode.
+  const canReportTruckDown = isMyJob && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
+  const truckDownStatus: string | null = myAssignment?.truck_down_status || myAssignment?.truckDownStatus || null;
 
   const clockInRestriction = (() => {
     if (!canStart || isRunning) return null;
@@ -1323,6 +1327,25 @@ export default function JobDetailScreen() {
       const msg = e.message || 'Failed to clock in';
       setClockInError(msg);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }
+
+  async function submitTruckDown(status: 'back_shortly' | 'out_for_day' | null) {
+    setTruckDownSubmitting(true);
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/truck-down`, { status });
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(status ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success);
+      }
+      if (status === 'out_for_day') setIsRunning(false);
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+    } catch (e: any) {
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setTruckDownSubmitting(false);
+      setTruckDownPickerVisible(false);
     }
   }
 
@@ -3216,7 +3239,78 @@ export default function JobDetailScreen() {
           )
         )}
 
+        {canReportTruckDown && (
+          truckDownStatus ? (
+            <View style={styles.truckDownBanner}>
+              <View style={styles.truckDownBannerRow}>
+                <Ionicons name="construct" size={18} color={Colors.warning} />
+                <Text style={styles.truckDownBannerText}>
+                  {truckDownStatus === 'out_for_day' ? 'TRUCK DOWN — OUT FOR THE DAY' : 'TRUCK DOWN — BACK SHORTLY'}
+                </Text>
+              </View>
+              <Text style={styles.truckDownBannerSub}>The contractor has been notified.</Text>
+              <Pressable
+                style={({ pressed }) => [styles.truckUpBtn, pressed && { opacity: 0.85 }]}
+                onPress={() => submitTruckDown(null)}
+                disabled={truckDownSubmitting}
+              >
+                {truckDownSubmitting ? (
+                  <ActivityIndicator size="small" color={Colors.success} />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
+                    <Text style={styles.truckUpBtnText}>TRUCK BACK UP</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              style={({ pressed }) => [styles.truckDownBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+              onPress={() => setTruckDownPickerVisible(true)}
+            >
+              <Ionicons name="construct-outline" size={20} color={Colors.warning} />
+              <Text style={styles.truckDownBtnText}>TRUCK DOWN</Text>
+            </Pressable>
+          )
+        )}
       </ScrollView>
+
+      <Modal visible={truckDownPickerVisible} transparent animationType="fade" onRequestClose={() => setTruckDownPickerVisible(false)}>
+        <Pressable style={styles.wtModalOverlay} onPress={() => { if (!truckDownSubmitting) setTruckDownPickerVisible(false); }}>
+          <View style={[styles.wtModalContent, { alignItems: 'center', paddingTop: 20 }]} onStartShouldSetResponder={() => true}>
+            <Pressable style={{ position: 'absolute', top: 12, right: 12, zIndex: 10 }} onPress={() => setTruckDownPickerVisible(false)} disabled={truckDownSubmitting}>
+              <Ionicons name="close" size={24} color="#999" />
+            </Pressable>
+            <Ionicons name="construct" size={48} color={Colors.warning} />
+            <Text style={[styles.wtModalTitle, { marginTop: 12 }]}>Truck Down</Text>
+            <Text style={[styles.wtModalSubtitle, { textAlign: 'center', marginBottom: 20 }]}>
+              Let the contractor know what's going on. They'll be notified right away.
+            </Text>
+            {truckDownSubmitting ? (
+              <ActivityIndicator size="large" color={Colors.warning} style={{ paddingVertical: 16 }} />
+            ) : (
+              <>
+                <Pressable
+                  style={({ pressed }) => [styles.truckDownOptionBtn, pressed && { opacity: 0.85 }]}
+                  onPress={() => submitTruckDown('back_shortly')}
+                >
+                  <Ionicons name="time-outline" size={20} color={Colors.text} />
+                  <Text style={styles.truckDownOptionText}>Back with you shortly</Text>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.truckDownOptionBtn, { borderColor: 'rgba(239,68,68,0.4)' }, pressed && { opacity: 0.85 }]}
+                  onPress={() => submitTruckDown('out_for_day')}
+                >
+                  <Ionicons name="moon-outline" size={20} color={Colors.destructive} />
+                  <Text style={[styles.truckDownOptionText, { color: Colors.destructive }]}>Out for the day</Text>
+                </Pressable>
+                <Text style={styles.truckDownOptionHint}>"Out for the day" also clocks you out of today's run.</Text>
+              </>
+            )}
+          </View>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={selectedDriver !== null}
@@ -3668,7 +3762,6 @@ export default function JobDetailScreen() {
             )}
 
             
-
             {vehiclesData && vehiclesData.length > 0 && (
               <Pressable
                 style={({ pressed }) => [

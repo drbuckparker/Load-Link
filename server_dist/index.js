@@ -12,7 +12,7 @@ import { createServer } from "node:http";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import crypto from "node:crypto";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import bcrypt from "bcrypt";
 
 // server/db.ts
 import { Pool } from "pg";
@@ -255,7 +255,20 @@ var jobs = pgTable("jobs", {
   original_rate: numeric("original_rate", { precision: 10, scale: 2 }),
   original_rate_type: text("original_rate_type"),
   requires_tarp: boolean("requires_tarp").default(false),
-  archived_at: timestamp("archived_at")
+  archived_at: timestamp("archived_at"),
+  // Companion-only "Haul Both Ways" fields (two-leg jobs). The website doesn't
+  // know these columns; sync's upsertRow only writes keys present in website
+  // JSON, so these values survive periodic down-syncs.
+  haul_both_ways: boolean("haul_both_ways").default(false),
+  return_material: text("return_material"),
+  return_amount: numeric("return_amount", { precision: 10, scale: 2 }),
+  return_amount_unit: text("return_amount_unit"),
+  return_origin_address: text("return_origin_address"),
+  return_origin_lat: numeric("return_origin_lat", { precision: 10, scale: 7 }),
+  return_origin_lng: numeric("return_origin_lng", { precision: 10, scale: 7 }),
+  return_destination_address: text("return_destination_address"),
+  return_destination_lat: numeric("return_destination_lat", { precision: 10, scale: 7 }),
+  return_destination_lng: numeric("return_destination_lng", { precision: 10, scale: 7 })
 });
 var jobRuns = pgTable("job_runs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -363,7 +376,9 @@ var jobAssignments = pgTable("job_assignments", {
   approved_at: timestamp("approved_at"),
   created_at: timestamp("created_at").defaultNow(),
   fleet_truck_id: varchar("fleet_truck_id"),
-  available_days: integer("available_days")
+  available_days: integer("available_days"),
+  truck_down_status: text("truck_down_status"),
+  truck_down_at: timestamp("truck_down_at")
 });
 var contractorProjects = pgTable("contractor_projects", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -563,9 +578,21 @@ async function upsertRow(tableName, data, idField = "id") {
   const keys = filteredEntries.map(([k]) => k);
   const values = filteredEntries.map(([, v]) => v);
   const placeholders = values.map((_, i) => `$${i + 1}`);
-  const updateClauses = keys.filter((k) => k !== idField).map((k) => `${k} = EXCLUDED.${k}`);
+  const readSticky = tableName === "notifications";
+  const projectSiteSticky = tableName === "contractor_projects";
+  const PROJECT_SITE_FIELDS = /* @__PURE__ */ new Set(["site_address", "site_lat", "site_lng"]);
+  const updateClauses = keys.filter((k) => k !== idField).map((k) => {
+    if (readSticky && k === "is_read") {
+      return `is_read = (COALESCE(${tableName}.is_read, false) OR COALESCE(EXCLUDED.is_read, false))`;
+    }
+    if (projectSiteSticky && PROJECT_SITE_FIELDS.has(k)) {
+      return `${k} = COALESCE(EXCLUDED.${k}, ${tableName}.${k})`;
+    }
+    return `${k} = EXCLUDED.${k}`;
+  });
   const archiveGuard = ARCHIVE_PROTECTED_TABLES.has(tableName) && columns.has("archived_at");
   const withdrawnGuard = tableName === "job_assignments" && columns.has("status");
+  const jobTerminalGuard = tableName === "jobs" && columns.has("status");
   if (updateClauses.length === 0) {
     const sql2 = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO NOTHING`;
     await pool.query(sql2, values);
@@ -580,6 +607,13 @@ async function upsertRow(tableName, data, idField = "id") {
     if (withdrawnGuard) {
       const prefix = whereClause ? " AND " : " WHERE ";
       whereClause += `${prefix}${tableName}.status::text != 'withdrawn'`;
+    }
+    if (jobTerminalGuard) {
+      const incomingStatus = String(normalized["status"] ?? "").toLowerCase();
+      if (incomingStatus !== "completed" && incomingStatus !== "cancelled") {
+        const prefix = whereClause ? " AND " : " WHERE ";
+        whereClause += `${prefix}${tableName}.status::text NOT IN ('completed', 'cancelled')`;
+      }
     }
     const sql2 = `INSERT INTO ${tableName} (${keys.join(", ")}) VALUES (${placeholders.join(", ")}) ON CONFLICT (${idField}) DO UPDATE SET ${updateClauses.join(", ")}${whereClause}`;
     await pool.query(sql2, values);
@@ -817,7 +851,8 @@ async function syncNotifications(auth) {
 async function syncUser(auth) {
   try {
     if (auth.user && auth.user.id) {
-      await upsertRow("users", auth.user);
+      const { role, password, is_admin, isAdmin, is_suspended, isSuspended, ...safeUser } = auth.user;
+      await upsertRow("users", safeUser);
     }
   } catch (e) {
     console.error("syncUser error:", e.message);
@@ -1042,6 +1077,320 @@ function startPeriodicSync(getActiveAuths, intervalMs = 12e4) {
   console.log(`[Sync] Periodic sync started (every ${intervalMs / 1e3}s)`);
 }
 
+// server/push-payload.ts
+function buildExpoPushMessage(opts) {
+  const sound = (opts.sound || "").trim() || "default";
+  const msg = {
+    to: opts.to,
+    sound,
+    title: opts.title,
+    body: opts.body,
+    data: opts.data || {},
+    channelId: opts.channelId || "default",
+    priority: "high",
+    // 'active' lights the screen and plays sound immediately (iOS 15+).
+    // 'timeSensitive' additionally breaks through Focus modes when the build
+    // has the time-sensitive entitlement; APNs downgrades it to 'active' when
+    // the entitlement is absent, so it is always safe to request.
+    interruptionLevel: opts.interruptionLevel || "active"
+  };
+  if (typeof opts.badge === "number" && Number.isFinite(opts.badge) && opts.badge >= 0) {
+    msg.badge = Math.floor(opts.badge);
+  }
+  return msg;
+}
+var PUSH_SOUNDS = {
+  NEW_JOB: "truckhorn.wav",
+  JOB_AWARDED: "cashregister.wav"
+};
+var PUSH_CHANNELS = {
+  NEW_JOB: "job-alerts",
+  JOB_AWARDED: "job-awarded"
+};
+function buildNewJobNearbyPush(opts) {
+  return buildExpoPushMessage({
+    to: opts.to,
+    title: opts.title,
+    body: opts.body,
+    data: { type: "new_job", jobId: opts.jobId },
+    sound: PUSH_SOUNDS.NEW_JOB,
+    channelId: PUSH_CHANNELS.NEW_JOB,
+    interruptionLevel: "timeSensitive",
+    badge: opts.badge
+  });
+}
+function buildJobAwardedPush(opts) {
+  return buildExpoPushMessage({
+    to: opts.to,
+    title: opts.title,
+    body: opts.body,
+    data: { type: "job_awarded", jobId: opts.jobId },
+    sound: PUSH_SOUNDS.JOB_AWARDED,
+    channelId: PUSH_CHANNELS.JOB_AWARDED,
+    interruptionLevel: "timeSensitive",
+    badge: opts.badge
+  });
+}
+
+// server/apns.ts
+import { importPKCS8, SignJWT } from "jose";
+import http2 from "node:http2";
+var APNS_HOST = "https://api.push.apple.com";
+var session = null;
+var sessionCloseTimer = null;
+function getSession() {
+  if (session && !session.closed && !session.destroyed) return session;
+  session = http2.connect(APNS_HOST);
+  session.on("error", () => {
+    try {
+      session?.destroy();
+    } catch {
+    }
+    session = null;
+  });
+  session.on("close", () => {
+    session = null;
+  });
+  return session;
+}
+function scheduleSessionClose() {
+  if (sessionCloseTimer) clearTimeout(sessionCloseTimer);
+  sessionCloseTimer = setTimeout(() => {
+    try {
+      session?.close();
+    } catch {
+    }
+    session = null;
+  }, 3e4);
+  sessionCloseTimer?.unref?.();
+}
+function apnsRequest(path2, headers, body) {
+  return new Promise((resolve2, reject) => {
+    let s;
+    try {
+      s = getSession();
+    } catch (e) {
+      return reject(e);
+    }
+    const req = s.request({ ":method": "POST", ":path": path2, ...headers });
+    const timeout = setTimeout(() => {
+      req.close(http2.constants.NGHTTP2_CANCEL);
+      reject(new Error("APNs request timeout"));
+    }, 1e4);
+    let status = 0;
+    let data = "";
+    req.on("response", (h) => {
+      status = Number(h[":status"] || 0);
+    });
+    req.setEncoding("utf8");
+    req.on("data", (c) => {
+      data += c;
+    });
+    req.on("end", () => {
+      clearTimeout(timeout);
+      scheduleSessionClose();
+      resolve2({ status, body: data });
+    });
+    req.on("error", (e) => {
+      clearTimeout(timeout);
+      reject(e);
+    });
+    req.end(body);
+  });
+}
+var TOPIC_CANDIDATES = [
+  process.env.APNS_BUNDLE_ID || "app.replit.loadlink",
+  "com.loadlink.app"
+].filter((v, i, a) => a.indexOf(v) === i);
+var workingTopic = null;
+var cachedJwt = null;
+function apnsConfigured() {
+  return Boolean(process.env.APNS_KEY_P8 && process.env.APNS_KEY_ID && process.env.APPLE_TEAM_ID);
+}
+async function getApnsJwt() {
+  const now = Math.floor(Date.now() / 1e3);
+  if (cachedJwt && cachedJwt.exp > now + 60) return cachedJwt.token;
+  let pem = (process.env.APNS_KEY_P8 || "").replace(/\\n/g, "\n").trim();
+  if (!pem.includes("-----BEGIN")) {
+    const b64 = pem.replace(/\s+/g, "");
+    pem = `-----BEGIN PRIVATE KEY-----
+${b64.replace(/(.{64})/g, "$1\n").trim()}
+-----END PRIVATE KEY-----`;
+  } else if (!pem.includes("\n")) {
+    const m = pem.match(/-----BEGIN PRIVATE KEY-----(.*?)-----END PRIVATE KEY-----/s);
+    if (m) {
+      const b64 = m[1].replace(/\s+/g, "");
+      pem = `-----BEGIN PRIVATE KEY-----
+${b64.replace(/(.{64})/g, "$1\n").trim()}
+-----END PRIVATE KEY-----`;
+    }
+  }
+  const key = await importPKCS8(pem, "ES256");
+  const token = await new SignJWT({}).setProtectedHeader({ alg: "ES256", kid: (process.env.APNS_KEY_ID || "").trim().toUpperCase() }).setIssuer((process.env.APPLE_TEAM_ID || "").trim().toUpperCase()).setIssuedAt(now).sign(key);
+  cachedJwt = { token, exp: now + 45 * 60 };
+  return token;
+}
+function toApnsPayload(msg) {
+  const aps = {
+    alert: { title: msg.title, body: msg.body },
+    sound: msg.sound,
+    "interruption-level": msg.interruptionLevel === "timeSensitive" ? "time-sensitive" : msg.interruptionLevel
+  };
+  if (typeof msg.badge === "number") aps.badge = msg.badge;
+  return { aps, ...msg.data };
+}
+async function sendApnsPush(deviceToken, msg) {
+  if (!apnsConfigured()) return { ok: false, reason: "NotConfigured" };
+  try {
+    const jwt = await getApnsJwt();
+    const payload = JSON.stringify(toApnsPayload(msg));
+    const topics = workingTopic ? [workingTopic, ...TOPIC_CANDIDATES.filter((t) => t !== workingTopic)] : TOPIC_CANDIDATES;
+    let last = { ok: false, reason: "NoTopicTried" };
+    for (const topic of topics) {
+      const res = await apnsRequest(`/3/device/${deviceToken}`, {
+        authorization: `bearer ${jwt}`,
+        "apns-topic": topic,
+        "apns-push-type": "alert",
+        "apns-priority": "10"
+      }, payload);
+      if (res.status >= 200 && res.status < 300) {
+        workingTopic = topic;
+        return { ok: true, status: res.status };
+      }
+      let reason = "";
+      try {
+        reason = JSON.parse(res.body)?.reason || "";
+      } catch {
+      }
+      last = { ok: false, status: res.status, reason };
+      const topicIssue = ["TopicDisallowed", "BadTopic", "DeviceTokenNotForTopic", "MissingTopic"].includes(reason);
+      if (!topicIssue) return last;
+    }
+    return last;
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+// server/visibility.ts
+var RECHECK_MS = 5 * 60 * 1e3;
+var cached = null;
+var cachedAt = 0;
+var inFlight = null;
+var NONE = {
+  jobsVisibility: false,
+  projectsVisibility: false,
+  publicPositionsRemaining: false,
+  inviteTable: null
+};
+async function detect(pool2) {
+  try {
+    const cols = await pool2.query(
+      `SELECT table_name, column_name FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND ((table_name = 'jobs' AND column_name IN ('visibility', 'public_positions_remaining'))
+           OR (table_name = 'contractor_projects' AND column_name = 'visibility'))`
+    );
+    const has = (t, c) => cols.rows.some((r) => r.table_name === t && r.column_name === c);
+    let inviteTable = null;
+    const tables = await pool2.query(
+      `SELECT c.table_name, array_agg(c.column_name) AS cols
+       FROM information_schema.columns c
+       WHERE c.table_schema = 'public'
+         AND c.table_name ILIKE '%project%invit%'
+       GROUP BY c.table_name`
+    );
+    for (const row of tables.rows) {
+      const cset = new Set(row.cols);
+      const name = String(row.table_name);
+      if (!/^[a-z_][a-z0-9_]{0,62}$/.test(name)) {
+        console.warn(`[Visibility] Ignoring invite table with unsafe name: ${JSON.stringify(name)}`);
+        continue;
+      }
+      if (cset.has("project_id") && cset.has("user_id") && cset.has("status")) {
+        inviteTable = `"${name}"`;
+        break;
+      }
+    }
+    return {
+      jobsVisibility: has("jobs", "visibility"),
+      projectsVisibility: has("contractor_projects", "visibility"),
+      publicPositionsRemaining: has("jobs", "public_positions_remaining"),
+      inviteTable
+    };
+  } catch {
+    return NONE;
+  }
+}
+async function getVisibilityFeatures(pool2) {
+  const now = Date.now();
+  if (cached && now - cachedAt < RECHECK_MS) return cached;
+  if (!inFlight) {
+    inFlight = detect(pool2).then((f) => {
+      cached = f;
+      cachedAt = Date.now();
+      return f;
+    }).finally(() => {
+      inFlight = null;
+    });
+  }
+  if (cached) return cached;
+  return inFlight;
+}
+function jobVisibilityPredicate(feats, userParamIdx, alias = "j") {
+  if (!feats.jobsVisibility) return "";
+  const a = alias;
+  const parts = [
+    `${a}.visibility IS NULL`,
+    `${a}.visibility::text <> 'private'`,
+    `${a}.contractor_id::text = $${userParamIdx}::text`,
+    `${a}.driver_id::text = $${userParamIdx}::text`,
+    // Broker "send-later" rule: on a job posted by a broker, a HELD assignment
+    // (sent_at IS NULL) must be completely invisible to the truck — it only
+    // grants visibility once the broker sends it. Non-broker jobs are
+    // unaffected (driver-created applications also have sent_at NULL).
+    `EXISTS (SELECT 1 FROM job_assignments _ja WHERE _ja.job_id = ${a}.id
+             AND _ja.driver_id::text = $${userParamIdx}::text
+             AND _ja.status::text NOT IN ('rejected','withdrawn','cancelled','expired')
+             AND (_ja.sent_at IS NOT NULL OR NOT EXISTS (
+               SELECT 1 FROM users _bu
+               WHERE _bu.id::text = ${a}.contractor_id::text AND _bu.role::text = 'broker')))`
+  ];
+  if (feats.publicPositionsRemaining) {
+    parts.push(`COALESCE(${a}.public_positions_remaining, 0) > 0`);
+  }
+  if (feats.inviteTable) {
+    parts.push(
+      `EXISTS (SELECT 1 FROM ${feats.inviteTable} _pi WHERE _pi.project_id = ${a}.project_id
+               AND _pi.user_id::text = $${userParamIdx}::text
+               AND _pi.status::text IN ('pending','accepted'))`
+    );
+  }
+  return ` AND (${parts.join(" OR ")})`;
+}
+async function canViewPrivateJob(pool2, feats, job, userId, alreadyParticipantOrAssigned) {
+  if (!feats.jobsVisibility) return true;
+  const vis = (job.visibility ?? "").toString();
+  if (vis !== "private") return true;
+  if (alreadyParticipantOrAssigned) return true;
+  if (String(job.contractor_id) === String(userId)) return true;
+  if (job.driver_id && String(job.driver_id) === String(userId)) return true;
+  if (feats.publicPositionsRemaining && Number(job.public_positions_remaining || 0) > 0) return true;
+  if (feats.inviteTable && job.project_id) {
+    try {
+      const r = await pool2.query(
+        `SELECT 1 FROM ${feats.inviteTable}
+         WHERE project_id = $1 AND user_id::text = $2::text
+           AND status::text IN ('pending','accepted') LIMIT 1`,
+        [job.project_id, userId]
+      );
+      if (r.rows.length > 0) return true;
+    } catch {
+    }
+  }
+  return false;
+}
+
 // server/routes.ts
 var WEBSITE_API_URL2 = process.env.WEBSITE_API_URL || process.env.COMPANION_API_URL || "https://loadlinklive.com";
 var WEBSITE_API_KEY2 = process.env.WEBSITE_API_KEY || process.env.COMPANION_API_KEY || "";
@@ -1050,22 +1399,252 @@ try {
   mkdirSync(DATA_DIR, { recursive: true });
 } catch {
 }
-var APPLE_BUNDLE_ID = process.env.APPLE_BUNDLE_ID || "com.loadlink.app";
-var appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
-async function sendPushNotification(userId, title, body, data) {
+async function deliverPush(tokens, msg, label) {
+  if (tokens.apnsToken && apnsConfigured()) {
+    const r = await sendApnsPush(tokens.apnsToken, msg);
+    if (r.ok) return;
+    console.error(`${label} APNs send failed (${r.status || ""} ${r.reason || ""}) \u2014 falling back to Expo`);
+  }
+  if (!tokens.expoToken) return;
   try {
-    const result = await pool.query(`SELECT expo_push_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
-    const token = result.rows[0]?.expo_push_token;
-    if (!token) return;
-    const message = { to: token, sound: "default", title, body, data: data || {} };
-    const pushRes = await fetch("https://exp.host/--/api/v2/push/send", {
+    const res = await fetch("https://exp.host/--/api/v2/push/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(message)
+      body: JSON.stringify({ ...msg, to: tokens.expoToken })
     });
-    if (!pushRes.ok) console.error("Push notification failed:", pushRes.status);
+    const tickets = await res.json().catch(() => null);
+    const t = Array.isArray(tickets?.data) ? tickets.data[0] : tickets?.data;
+    if (t?.status === "error") console.error(`${label} Expo push ticket error:`, JSON.stringify(t));
+  } catch (e) {
+    console.error(`${label} Expo push send error:`, e.message);
+  }
+}
+async function sendPushNotification(userId, title, body, data, sound = "default") {
+  try {
+    const result = await pool.query(`SELECT expo_push_token, apns_device_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
+    const row = result.rows[0];
+    if (!row || !row.expo_push_token && !row.apns_device_token) return;
+    const message = buildExpoPushMessage({ to: row.expo_push_token || "", title, body, data, sound });
+    await deliverPush({ expoToken: row.expo_push_token, apnsToken: row.apns_device_token }, message, "Push");
   } catch (e) {
     console.error("Push notification error:", e.message);
+  }
+}
+async function notifyDriverJobAwarded(driverId, jobId, jobMaterial) {
+  try {
+    const title = "You Got the Job!";
+    const body = `Your application${jobMaterial ? ` for the ${jobMaterial} job` : ""} was approved. Check the schedule for details.`;
+    try {
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+         VALUES ($1, $2, 'new_load', $3, $4, $5, false, NOW())`,
+        [crypto.randomUUID(), driverId, title, body, jobId]
+      );
+    } catch (e) {
+      console.error("Job-awarded notification insert error:", e.message);
+    }
+    const tokenRow = await pool.query(`SELECT expo_push_token, apns_device_token FROM users WHERE id::text = $1 LIMIT 1`, [driverId]);
+    const tokRow = tokenRow.rows[0];
+    if (!tokRow || !tokRow.expo_push_token && !tokRow.apns_device_token) return;
+    let badge;
+    try {
+      const c = await pool.query(
+        `SELECT COUNT(*)::int AS unread FROM notifications WHERE user_id::text = $1 AND is_read = false`,
+        [driverId]
+      );
+      badge = Number(c.rows[0]?.unread) || void 0;
+    } catch {
+    }
+    const message = buildJobAwardedPush({ to: tokRow.expo_push_token || "", title, body, jobId, badge });
+    await deliverPush({ expoToken: tokRow.expo_push_token, apnsToken: tokRow.apns_device_token }, message, "Job-awarded");
+  } catch (e) {
+    console.error("Job-awarded push error:", e.message);
+  }
+}
+async function notifyBrokerAssignmentResponse(assignmentId, driverId, action) {
+  const info = await pool.query(
+    `SELECT ja.job_id, j.contractor_id AS broker_id, j.material, j.scheduled_date,
+            bu.role::text AS poster_role, du.full_name AS driver_name
+       FROM job_assignments ja
+       JOIN jobs j ON j.id = ja.job_id
+       JOIN users bu ON bu.id::text = j.contractor_id::text
+       LEFT JOIN users du ON du.id::text = $2
+      WHERE ja.id = $1`,
+    [assignmentId, driverId]
+  );
+  const row = info.rows[0];
+  if (!row || String(row.poster_role) !== "broker") return;
+  const brokerId = String(row.broker_id);
+  const driverName = row.driver_name || "A driver";
+  const rawDate = row.scheduled_date instanceof Date ? row.scheduled_date.toISOString() : String(row.scheduled_date || "");
+  const dateKey = rawDate.slice(0, 10);
+  const dayLabel = dateKey ? (/* @__PURE__ */ new Date(`${dateKey}T12:00:00Z`)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }) : "";
+  let title;
+  let body;
+  if (action === "decline") {
+    title = "Truck declined \u2014 reassign needed";
+    body = `${driverName} declined the ${row.material || "job"}${dayLabel ? ` on ${dayLabel}` : ""}. The spot is open \u2014 assign another truck and send it out.`;
+  } else {
+    title = "Truck confirmed";
+    body = `${driverName} confirmed the ${row.material || "job"}${dayLabel ? ` for ${dayLabel}` : ""}.`;
+    let jwt = null;
+    for (const [, a] of tokenToJwt) {
+      if (a.userId === brokerId && a.jwt && !a.jwt.startsWith("dev-local:")) jwt = a.jwt;
+    }
+    if (jwt && dateKey) {
+      try {
+        const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt });
+        if (jr.ok) {
+          const jobs2 = await jr.json().catch(() => []);
+          let confirmed = 0;
+          let totalOut = 0;
+          for (const job of Array.isArray(jobs2) ? jobs2 : []) {
+            const jd = String(job.scheduledDate || job.scheduled_date || "").slice(0, 10);
+            if (jd !== dateKey) continue;
+            const s = job.assignmentStats || {};
+            confirmed += Number(s.confirmed) || 0;
+            totalOut += (Number(s.confirmed) || 0) + (Number(s.sent) || 0);
+          }
+          if (totalOut > 0) {
+            if (confirmed >= totalOut) {
+              title = "All trucks confirmed";
+              body = `All ${totalOut} truck${totalOut === 1 ? "" : "s"} confirmed${dayLabel ? ` for ${dayLabel}` : ""}.`;
+            } else {
+              body = `${driverName} confirmed. ${confirmed} of ${totalOut} trucks confirmed${dayLabel ? ` for ${dayLabel}` : ""}.`;
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Broker tally fetch error:", e.message);
+      }
+    }
+  }
+  try {
+    await pool.query(
+      `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+       VALUES ($1, $2, 'new_load', $3, $4, $5, false, NOW())`,
+      [crypto.randomUUID(), brokerId, title, body, row.job_id]
+    );
+  } catch (e) {
+    console.error("Broker confirm notification insert error:", e.message);
+  }
+  await sendPushNotification(brokerId, title, body, {
+    type: action === "decline" ? "broker_truck_declined" : "broker_truck_confirmed",
+    jobId: String(row.job_id),
+    date: dateKey
+  });
+}
+async function notifyNearbyDriversOfNewJob(job) {
+  try {
+    const jobLat = job?.origin_lat != null ? Number(job.origin_lat) : NaN;
+    const jobLng = job?.origin_lng != null ? Number(job.origin_lng) : NaN;
+    if (!Number.isFinite(jobLat) || !Number.isFinite(jobLng)) return;
+    const visFeats = await getVisibilityFeatures(pool);
+    if (visFeats.jobsVisibility && job?.id) {
+      const cols = visFeats.publicPositionsRemaining ? `visibility::text AS vis, COALESCE(public_positions_remaining, 0)::int AS ppr` : `visibility::text AS vis, 0 AS ppr`;
+      const vr = await pool.query(`SELECT ${cols} FROM jobs WHERE id = $1`, [String(job.id)]);
+      const row = vr.rows[0];
+      if (row && row.vis === "private" && Number(row.ppr) <= 0) {
+        console.log(`[JobWatcher] Job ${job.id} is private \u2014 skipping nearby-driver broadcast`);
+        return;
+      }
+    }
+    const drivers = await pool.query(
+      `SELECT id::text AS id, expo_push_token, apns_device_token,
+              COALESCE(search_radius_miles, 50) AS radius,
+              primary_location_lat, primary_location_lng,
+              secondary_location_lat, secondary_location_lng,
+              tertiary_location_lat, tertiary_location_lng,
+              last_known_lat, last_known_lng
+       FROM users
+       WHERE (role ILIKE '%driver%' OR role ILIKE '%trucking_company%' OR also_driver = true)
+         AND id::text <> $1`,
+      [String(job.contractor_id)]
+    );
+    if (drivers.rows.length === 0) return;
+    const R = 3958.7613;
+    const toRad = (v) => v * Math.PI / 180;
+    const milesBetween = (aLat, aLng, bLat, bLng) => {
+      const dLat = toRad(bLat - aLat);
+      const dLng = toRad(bLng - aLng);
+      const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+      return R * 2 * Math.asin(Math.sqrt(s));
+    };
+    const material = (job.material || "load").toString();
+    const origin = (job.origin_address || "a nearby location").toString();
+    const title = "New Job Alert";
+    const body = `A ${material} haul was posted near ${origin}. Tap to apply.`;
+    const recipients = [];
+    const rowValues = [];
+    for (const d of drivers.rows) {
+      const pairs = [
+        [d.primary_location_lat, d.primary_location_lng],
+        [d.secondary_location_lat, d.secondary_location_lng],
+        [d.tertiary_location_lat, d.tertiary_location_lng],
+        [d.last_known_lat, d.last_known_lng]
+      ];
+      let nearest = Infinity;
+      for (const [la, ln] of pairs) {
+        const dLat = la != null ? Number(la) : NaN;
+        const dLng = ln != null ? Number(ln) : NaN;
+        if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) continue;
+        if (dLat === 0 && dLng === 0) continue;
+        nearest = Math.min(nearest, milesBetween(dLat, dLng, jobLat, jobLng));
+      }
+      const radius = Number(d.radius) || 50;
+      if (nearest <= radius) {
+        recipients.push({ id: String(d.id), token: d.expo_push_token || null, apnsToken: d.apns_device_token || null });
+        rowValues.push(d.id);
+      }
+    }
+    if (rowValues.length === 0) return;
+    try {
+      const placeholders = [];
+      const params = [];
+      rowValues.forEach((driverId, i) => {
+        const base = i * 5;
+        placeholders.push(`($${base + 1}, $${base + 2}, 'new_load', $${base + 3}, $${base + 4}, $${base + 5}, false, NOW())`);
+        params.push(crypto.randomUUID(), driverId, title, body, String(job.id));
+      });
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at) VALUES ${placeholders.join(", ")}`,
+        params
+      );
+    } catch (e) {
+      console.error("New-job driver notification insert error:", e.message);
+    }
+    const pushRecipients = recipients.filter((r) => r.token || r.apnsToken);
+    if (pushRecipients.length === 0) return;
+    const unreadByUser = /* @__PURE__ */ new Map();
+    try {
+      const counts = await pool.query(
+        `SELECT user_id::text AS user_id, COUNT(*)::int AS unread
+         FROM notifications
+         WHERE is_read = false AND user_id::text = ANY($1)
+         GROUP BY user_id`,
+        [pushRecipients.map((r) => r.id)]
+      );
+      for (const row of counts.rows) unreadByUser.set(row.user_id, Number(row.unread));
+    } catch (e) {
+      console.error("New-job unread count error:", e.message);
+    }
+    const BATCH = 20;
+    for (let i = 0; i < pushRecipients.length; i += BATCH) {
+      await Promise.all(
+        pushRecipients.slice(i, i + BATCH).map((r) => {
+          const msg = buildNewJobNearbyPush({
+            to: r.token || "",
+            title,
+            body,
+            jobId: String(job.id),
+            badge: unreadByUser.get(r.id)
+          });
+          return deliverPush({ expoToken: r.token, apnsToken: r.apnsToken }, msg, "New-job");
+        })
+      );
+    }
+  } catch (e) {
+    console.error("notifyNearbyDriversOfNewJob error:", e.message);
   }
 }
 function loadJsonMap(filename) {
@@ -1076,6 +1655,184 @@ function loadJsonMap(filename) {
   } catch {
     return /* @__PURE__ */ new Map();
   }
+}
+var NOTIFIED_JOBS_FILE = "notified_jobs.json";
+var _jobWatcherState = (() => {
+  try {
+    const parsed = JSON.parse(readFileSync(join(DATA_DIR, NOTIFIED_JOBS_FILE), "utf-8"));
+    if (Array.isArray(parsed)) return { watermark: null, ids: parsed };
+    return { watermark: parsed.watermark ?? null, ids: parsed.ids ?? [] };
+  } catch {
+    return { watermark: null, ids: [] };
+  }
+})();
+var notifiedJobIds = new Set(_jobWatcherState.ids);
+var jobWatcherWatermark = _jobWatcherState.watermark;
+function saveJobWatcherState() {
+  if (notifiedJobIds.size > 500) {
+    const ids = [...notifiedJobIds];
+    notifiedJobIds.clear();
+    for (const id of ids.slice(ids.length - 500)) notifiedJobIds.add(id);
+  }
+  try {
+    writeFileSync(
+      join(DATA_DIR, NOTIFIED_JOBS_FILE),
+      JSON.stringify({ watermark: jobWatcherWatermark, ids: [...notifiedJobIds] }),
+      "utf-8"
+    );
+  } catch {
+  }
+}
+function markJobNotified(id) {
+  notifiedJobIds.add(id);
+  saveJobWatcherState();
+}
+async function claimJobNotification(id) {
+  try {
+    const r = await pool.query(
+      `INSERT INTO companion_notified_jobs (job_id) VALUES ($1) ON CONFLICT (job_id) DO NOTHING RETURNING job_id`,
+      [id]
+    );
+    return r.rowCount === 1;
+  } catch (e) {
+    console.error("[JobWatcher] claim error:", e.message);
+    return !notifiedJobIds.has(id);
+  }
+}
+var JOB_WATCHER_MAX_CATCHUP_HOURS = 12;
+async function pollForNewWebsiteJobs(seedOnly = false) {
+  try {
+    const since = jobWatcherWatermark ? `GREATEST($1::timestamptz, NOW() - INTERVAL '${JOB_WATCHER_MAX_CATCHUP_HOURS} hours')` : `NOW() - INTERVAL '15 minutes'`;
+    const params = jobWatcherWatermark ? [jobWatcherWatermark] : [];
+    const recent = await pool.query(
+      `SELECT id, contractor_id, material, origin_lat, origin_lng, origin_address, created_at
+       FROM jobs
+       WHERE created_at > ${since}
+         AND status = 'open'
+         AND archived_at IS NULL
+         AND id NOT LIKE 'demo-%'
+       ORDER BY created_at ASC`,
+      params
+    );
+    for (const job of recent.rows) {
+      const id = String(job.id);
+      const created = new Date(job.created_at).toISOString();
+      if (!jobWatcherWatermark || created > jobWatcherWatermark) jobWatcherWatermark = created;
+      if (notifiedJobIds.has(id) || hiddenJobIds2.has(id)) continue;
+      notifiedJobIds.add(id);
+      if (!seedOnly) {
+        if (!await claimJobNotification(id)) continue;
+        console.log(`[JobWatcher] New job ${id} detected \u2014 notifying nearby drivers`);
+        notifyNearbyDriversOfNewJob(job).catch(() => {
+        });
+      }
+    }
+    saveJobWatcherState();
+  } catch (e) {
+    console.error("[JobWatcher] poll error:", e.message);
+  }
+}
+function startNewJobWatcher() {
+  const firstEverRun = jobWatcherWatermark === null;
+  pool.query(`DELETE FROM companion_notified_jobs WHERE notified_at < NOW() - INTERVAL '7 days'`).catch(() => {
+  });
+  pollForNewWebsiteJobs(firstEverRun).finally(() => {
+    setInterval(() => pollForNewWebsiteJobs(false), 6e4);
+  });
+}
+async function processDueBrokerScheduledSends() {
+  let due = [];
+  try {
+    const r = await pool.query(
+      `UPDATE broker_scheduled_sends SET status = 'processing'
+       WHERE id IN (
+         SELECT id FROM broker_scheduled_sends
+         WHERE status = 'pending' AND send_at <= NOW()
+         ORDER BY send_at ASC LIMIT 20
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING id, broker_id, date, tz_offset_min, attempts`
+    );
+    due = r.rows;
+  } catch {
+    return;
+  }
+  for (const row of due) {
+    const dateKey = row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10);
+    const tzOffsetMin = Number(row.tz_offset_min) || 0;
+    const jobDayKey = (raw) => {
+      if (!raw) return "";
+      if (!raw.includes("T")) return raw.slice(0, 10);
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return raw.slice(0, 10);
+      return new Date(d.getTime() - tzOffsetMin * 6e4).toISOString().slice(0, 10);
+    };
+    let jwt = null;
+    for (const [, auth] of tokenToJwt) {
+      if (auth.userId === row.broker_id && auth.jwt && !auth.jwt.startsWith("dev-local:")) jwt = auth.jwt;
+    }
+    if (!jwt) {
+      await pool.query(
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time' WHERE id = $1`,
+        [row.id]
+      ).catch(() => {
+      });
+      continue;
+    }
+    try {
+      const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt });
+      if (!jr.ok) throw new Error(`jobs fetch ${jr.status}`);
+      const jobs2 = await jr.json().catch(() => []);
+      let sentJobs = 0;
+      const failedJobs = [];
+      for (const job of Array.isArray(jobs2) ? jobs2 : []) {
+        const jobDate = jobDayKey(String(job.scheduledDate || job.scheduled_date || ""));
+        if (jobDate !== dateKey) continue;
+        const held = (job.assignmentStats?.held || 0) > 0 || Array.isArray(job.assignments) && job.assignments.some(
+          (a) => (a.sentAt ?? a.sent_at) == null && a.status !== "declined" && a.status !== "withdrawn"
+        );
+        if (!held) continue;
+        const sr = await websiteFetch(`/api/broker/jobs/${job.id}/send-all`, { method: "POST", body: {}, jwt });
+        if (sr.ok) sentJobs++;
+        else {
+          failedJobs.push(String(job.id));
+          console.error(`[BrokerSend] send-all failed for job ${job.id}: ${sr.status}`);
+        }
+      }
+      if (failedJobs.length > 0 && Number(row.attempts) < 5) {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'pending', sent_jobs = $2,
+             attempts = attempts + 1, error = $3 WHERE id = $1`,
+          [row.id, sentJobs, `Retrying ${failedJobs.length} job(s): ${failedJobs.join(",").slice(0, 400)}`]
+        );
+      } else if (failedJobs.length > 0) {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'failed', sent_jobs = $2,
+             error = $3 WHERE id = $1`,
+          [row.id, sentJobs, `Gave up after retries; failed job(s): ${failedJobs.join(",").slice(0, 400)}`]
+        );
+      } else {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'sent', sent_jobs = $2, error = NULL WHERE id = $1`,
+          [row.id, sentJobs]
+        );
+      }
+      console.log(`[BrokerSend] schedule ${row.id}: sent instructions on ${sentJobs} job(s) for ${dateKey}${failedJobs.length ? `, ${failedJobs.length} failed (will retry)` : ""}`);
+    } catch (e) {
+      console.error("[BrokerSend] error:", e.message);
+      await pool.query(
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1`,
+        [row.id, String(e.message || e).slice(0, 500)]
+      ).catch(() => {
+      });
+    }
+  }
+}
+function startBrokerScheduledSendWorker() {
+  setInterval(() => {
+    processDueBrokerScheduledSends().catch(() => {
+    });
+  }, 6e4);
 }
 function saveJsonMap(filename, map) {
   try {
@@ -1090,6 +1847,16 @@ function saveJsonMap(filename, map) {
   }
 }
 var tokenToJwt = loadJsonMap("sessions.json");
+function allowedRolesForUser(baseRole) {
+  if (!baseRole) return [];
+  const compound = {
+    driver_contractor: ["driver", "contractor"],
+    driver_trucking_company: ["driver", "trucking_company"],
+    trucking_company_contractor: ["trucking_company", "contractor"],
+    driver_trucking_company_contractor: ["driver", "trucking_company", "contractor"]
+  };
+  return compound[baseRole] ?? [baseRole];
+}
 var hiddenJobIds2 = /* @__PURE__ */ new Set([
   "964f3e5b-6fa2-4aa2-9f2f-57a98bf5835d",
   "415b98c6-6102-4170-93b1-65601200e267",
@@ -1147,6 +1914,26 @@ function addDualKeys(obj) {
   }
   return result;
 }
+function userPayload(user, originalRole) {
+  const { password, ...safe } = user || {};
+  return addDualKeys({ ...safe, accountRole: originalRole || user?.role });
+}
+var USER_HYDRATE_EXCLUDE = /* @__PURE__ */ new Set(["password", "role"]);
+async function hydrateUserFromDb(user) {
+  if (!user?.id) return user;
+  try {
+    const { rows } = await pool.query(`SELECT * FROM users WHERE id = $1`, [user.id]);
+    if (rows.length > 0) {
+      for (const [k, v] of Object.entries(rows[0])) {
+        if (USER_HYDRATE_EXCLUDE.has(k)) continue;
+        if (v !== null && v !== void 0) user[k] = v;
+      }
+    }
+  } catch (e) {
+    console.log("hydrateUserFromDb error:", e?.message);
+  }
+  return user;
+}
 function getWebsiteAuth(req) {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
@@ -1187,6 +1974,131 @@ function formatDuration(totalSeconds) {
   if (hours > 0) return `${hours} hr`;
   return `${minutes} min`;
 }
+function billedMinutesFrom(actualMinutes) {
+  if (actualMinutes <= 60) return 60;
+  const overFirst = actualMinutes - 60;
+  const fullSegments = Math.floor(overFirst / 15);
+  const remainder = overFirst % 15;
+  const billedSegments = remainder >= 5 ? fullSegments + 1 : fullSegments;
+  return 60 + billedSegments * 15;
+}
+function haversineMilesFn(lat1, lng1, lat2, lng2) {
+  const toRad = (v) => v * Math.PI / 180;
+  const R = 3958.7613;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function segmentDistanceMilesFn(pLat, pLng, aLat, aLng, bLat, bLng) {
+  const meanLatRad = (aLat + bLat) / 2 * Math.PI / 180;
+  const milesPerDegLat = 69;
+  const milesPerDegLng = 69 * Math.cos(meanLatRad);
+  const ax = aLng * milesPerDegLng, ay = aLat * milesPerDegLat;
+  const bx = bLng * milesPerDegLng, by = bLat * milesPerDegLat;
+  const px = pLng * milesPerDegLng, py = pLat * milesPerDegLat;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+}
+function closestPointOnSegment(pLat, pLng, aLat, aLng, bLat, bLng) {
+  const meanLatRad = (aLat + bLat) / 2 * Math.PI / 180;
+  const mpdLat = 69;
+  const mpdLng = 69 * Math.cos(meanLatRad);
+  const ax = aLng * mpdLng, ay = aLat * mpdLat;
+  const bx = bLng * mpdLng, by = bLat * mpdLat;
+  const px = pLng * mpdLng, py = pLat * mpdLat;
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return { lat: aLat, lng: aLng };
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  return { lat: (ay + t * dy) / mpdLat, lng: (ax + t * dx) / mpdLng };
+}
+var roadMilesCache = /* @__PURE__ */ new Map();
+var ROAD_CACHE_MAX = 2e3;
+async function getRoadMiles(fromLat, fromLng, toLat, toLng) {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return null;
+  const key = `${fromLat.toFixed(4)},${fromLng.toFixed(4)}|${toLat.toFixed(4)},${toLng.toFixed(4)}`;
+  if (roadMilesCache.has(key)) return roadMilesCache.get(key) ?? null;
+  try {
+    const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
+    url.searchParams.set("origin", `${fromLat},${fromLng}`);
+    url.searchParams.set("destination", `${toLat},${toLng}`);
+    url.searchParams.set("key", apiKey);
+    const response = await fetch(url.toString());
+    const data = await response.json();
+    let miles = null;
+    if (data.routes && data.routes.length > 0 && data.routes[0].legs?.[0]?.distance?.value != null) {
+      miles = data.routes[0].legs[0].distance.value / 1609.34;
+    } else if (data.status === "ZERO_RESULTS") {
+      miles = null;
+    } else {
+      return null;
+    }
+    if (roadMilesCache.size >= ROAD_CACHE_MAX) {
+      const firstKey = roadMilesCache.keys().next().value;
+      if (firstKey !== void 0) roadMilesCache.delete(firstKey);
+    }
+    roadMilesCache.set(key, miles);
+    return miles;
+  } catch (e) {
+    return null;
+  }
+}
+async function roadMilesToJobArea(pLat, pLng, oLat, oLng, dLat, dLng) {
+  const targets = [];
+  if (oLat != null && oLng != null) targets.push({ lat: oLat, lng: oLng });
+  if (dLat != null && dLng != null) targets.push({ lat: dLat, lng: dLng });
+  if (oLat != null && oLng != null && dLat != null && dLng != null) {
+    const mid = closestPointOnSegment(pLat, pLng, oLat, oLng, dLat, dLng);
+    if (haversineMilesFn(mid.lat, mid.lng, oLat, oLng) > 0.5 && haversineMilesFn(mid.lat, mid.lng, dLat, dLng) > 0.5) {
+      targets.push(mid);
+    }
+  }
+  if (targets.length === 0) return null;
+  const results = await Promise.all(targets.map((t) => getRoadMiles(pLat, pLng, t.lat, t.lng)));
+  const valid = results.filter((m) => m != null);
+  if (valid.length === 0) return null;
+  return Math.min(...valid);
+}
+var COMPANION_ONLY_JOB_KEYS = /* @__PURE__ */ new Set([
+  "haulBothWays",
+  "haul_both_ways",
+  "returnMaterial",
+  "return_material",
+  "returnAmount",
+  "return_amount",
+  "returnAmountUnit",
+  "return_amount_unit",
+  "returnOriginAddress",
+  "return_origin_address",
+  "returnOriginLat",
+  "return_origin_lat",
+  "returnOriginLng",
+  "return_origin_lng",
+  "returnDestinationAddress",
+  "return_destination_address",
+  "returnDestinationLat",
+  "return_destination_lat",
+  "returnDestinationLng",
+  "return_destination_lng"
+]);
+function airMilesToLeg(pLat, pLng, oLat, oLng, dLat, dLng) {
+  if (oLat != null && oLng != null && dLat != null && dLng != null) {
+    return segmentDistanceMilesFn(pLat, pLng, oLat, oLng, dLat, dLng);
+  }
+  if (oLat != null && oLng != null) return haversineMilesFn(pLat, pLng, oLat, oLng);
+  if (dLat != null && dLng != null) return haversineMilesFn(pLat, pLng, dLat, dLng);
+  return null;
+}
 async function registerRoutes(app2) {
   function requireAuth(req, res, next) {
     const auth = getWebsiteAuth(req);
@@ -1198,139 +2110,133 @@ async function registerRoutes(app2) {
     }
     return res.status(401).json({ message: "Not authenticated" });
   }
-  app2.post("/api/auth/social-login", async (req, res) => {
-    try {
-      const { provider, token, email: clientEmail } = req.body;
-      if (!provider || !token) {
-        return res.status(400).json({ message: "Provider and token are required" });
-      }
-      let verifiedEmail = null;
-      if (provider === "google") {
-        try {
-          const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
-          if (googleRes.ok) {
-            const info = await googleRes.json();
-            if (info.email_verified === "true" || info.email_verified === true) {
-              verifiedEmail = info.email;
-            }
-          }
-          if (!verifiedEmail) {
-            const userinfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            if (userinfoRes.ok) {
-              const info = await userinfoRes.json();
-              if (info.email_verified) {
-                verifiedEmail = info.email;
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Google token verification failed:", e.message);
-        }
-      } else if (provider === "apple") {
-        try {
-          const { payload } = await jwtVerify(token, appleJwks, {
-            issuer: "https://appleid.apple.com",
-            audience: APPLE_BUNDLE_ID
-          });
-          if (payload.email && (payload.email_verified === true || payload.email_verified === "true")) {
-            verifiedEmail = payload.email;
-          }
-        } catch (e) {
-          console.error("Apple token verification failed:", e.message);
-        }
-      }
-      if (!verifiedEmail) {
-        return res.status(401).json({ message: "Could not verify your identity. Please try again." });
-      }
-      const websiteRes = await websiteFetch("/api/companion/auth/login", {
-        method: "POST",
-        body: { email: verifiedEmail }
-      });
-      const data = await websiteRes.json();
-      if (!websiteRes.ok) {
-        if (websiteRes.status === 404 || data.message && data.message.toLowerCase().includes("not found")) {
-          return res.status(404).json({
-            message: "No LoadLink account found with this email. Please sign up first on loadlinklive.com",
-            email: verifiedEmail
-          });
-        }
-        return res.status(websiteRes.status).json({
-          message: data.message || data.error || "Authentication failed"
-        });
-      }
-      const jwt = data.token;
-      const user = data.user;
-      if (!jwt || !user) {
-        return res.status(500).json({ message: "Invalid response from auth service" });
-      }
-      const localToken = crypto.randomBytes(32).toString("hex");
-      const authEntry = { jwt, userId: user.id, user };
-      tokenToJwt.set(localToken, authEntry);
-      saveJsonMap("sessions.json", tokenToJwt);
-      const enrichedUser = addDualKeys(user);
-      res.json({ token: localToken, user: enrichedUser });
-      fullSync(authEntry).catch(() => {
-      });
-      return;
-    } catch (err) {
-      console.error("Social login error:", err.message);
-      return res.status(500).json({ message: "Authentication service unavailable" });
-    }
-  });
+  const loginFailures = /* @__PURE__ */ new Map();
+  const LOGIN_FAILURE_LIMIT = 10;
+  const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1e3;
+  function loginThrottleKey(req, email) {
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+    return `${String(email).toLowerCase()}|${ip}`;
+  }
   app2.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = req.body;
       if (!email) {
         return res.status(400).json({ message: "Email is required" });
       }
-      for (const [existingToken, session] of tokenToJwt.entries()) {
-        if (session.user?.email?.toLowerCase() === email.toLowerCase()) {
-          const localToken2 = crypto.randomBytes(32).toString("hex");
-          tokenToJwt.set(localToken2, session);
-          saveJsonMap("sessions.json", tokenToJwt);
-          recordUserActivity(session.userId);
-          res.json({ token: localToken2, user: addDualKeys(session.user) });
-          websiteFetch("/api/companion/auth/login", {
-            method: "POST",
-            body: { email }
-          }).then(async (r) => {
-            if (r.ok) {
-              const d = await r.json();
-              if (d.token && d.user) {
-                const updated = { jwt: d.token, userId: d.user.id, user: d.user };
-                tokenToJwt.set(localToken2, updated);
-                saveJsonMap("sessions.json", tokenToJwt);
-                fullSync(updated).catch(() => {
-                });
-              }
-            }
-          }).catch(() => {
-          });
-          return;
+      if (!password) {
+        return res.status(400).json({ message: "Password is required" });
+      }
+      const throttleKey = loginThrottleKey(req, email);
+      const now = Date.now();
+      const fail = loginFailures.get(throttleKey);
+      if (fail && now - fail.windowStart < LOGIN_FAILURE_WINDOW_MS && fail.count >= LOGIN_FAILURE_LIMIT) {
+        return res.status(429).json({ message: "Too many login attempts. Please try again later." });
+      }
+      res.on("finish", () => {
+        if (res.statusCode === 401) {
+          const cur = loginFailures.get(throttleKey);
+          if (!cur || now - cur.windowStart >= LOGIN_FAILURE_WINDOW_MS) {
+            loginFailures.set(throttleKey, { count: 1, windowStart: now });
+          } else {
+            cur.count += 1;
+          }
+          if (loginFailures.size > 5e3) loginFailures.clear();
+        } else if (res.statusCode < 400) {
+          loginFailures.delete(throttleKey);
+        }
+      });
+      if (process.env.NODE_ENV !== "production") {
+        try {
+          const localRes = await pool.query(
+            `SELECT * FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+            [email]
+          );
+          const dbUser = localRes.rows[0];
+          if (dbUser?.password && await bcrypt.compare(password, dbUser.password)) {
+            const { password: _pw, ...safeDbUser } = dbUser;
+            const localToken2 = crypto.randomBytes(32).toString("hex");
+            const authEntry2 = {
+              jwt: `dev-local:${dbUser.id}`,
+              userId: dbUser.id,
+              user: safeDbUser,
+              originalRole: dbUser.role
+            };
+            tokenToJwt.set(localToken2, authEntry2);
+            saveJsonMap("sessions.json", tokenToJwt);
+            return res.json({ token: localToken2, user: userPayload(safeDbUser, authEntry2.originalRole) });
+          }
+        } catch (devErr) {
+          console.error("Dev local login failed, falling back to website:", devErr.message);
         }
       }
       const websiteRes = await websiteFetch("/api/companion/auth/login", {
         method: "POST",
-        body: { email }
+        body: { email, password }
       });
-      const data = await websiteRes.json();
+      let data = await websiteRes.json();
       if (!websiteRes.ok) {
-        return res.status(websiteRes.status).json({
-          message: data.message || data.error || "Invalid credentials"
-        });
+        let recovered = false;
+        const upstreamMsg = String(data?.message || data?.error || "");
+        const isCredentialRefusal401 = websiteRes.status === 401 && (/sign in with replit/i.test(upstreamMsg) || /invalid credentials/i.test(upstreamMsg));
+        if (isCredentialRefusal401) try {
+          const localRes = await pool.query(
+            `SELECT * FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+            [email]
+          );
+          const dbUser = localRes.rows[0];
+          if (dbUser?.password && await bcrypt.compare(password, dbUser.password)) {
+            const retryRes = await websiteFetch("/api/companion/auth/login", {
+              method: "POST",
+              body: { email }
+            });
+            if (retryRes.ok) {
+              data = await retryRes.json();
+              recovered = true;
+              console.log(`[Login] Local password verification fallback used for ${email}`);
+            } else if (dbUser.login_provider === "replit_auth" && !dbUser.is_suspended) {
+              const { password: _pw2, ...safeDbUser } = dbUser;
+              const localToken2 = crypto.randomBytes(32).toString("hex");
+              const authEntry2 = {
+                jwt: `dev-local:${dbUser.id}`,
+                userId: dbUser.id,
+                user: safeDbUser,
+                originalRole: dbUser.role
+              };
+              tokenToJwt.set(localToken2, authEntry2);
+              saveJsonMap("sessions.json", tokenToJwt);
+              console.log(`[Login] Companion-local session minted for ${email} (website refused email-only login)`);
+              return res.json({ token: localToken2, user: userPayload(safeDbUser, authEntry2.originalRole) });
+            }
+          }
+        } catch (fbErr) {
+          console.error("[Login] Local password fallback failed:", fbErr.message);
+        }
+        if (!recovered) {
+          return res.status(websiteRes.status).json({
+            message: data.message || data.error || "Invalid credentials"
+          });
+        }
       }
       const jwt = data.token;
       const user = data.user;
       if (!jwt || !user) {
         return res.status(500).json({ message: "Invalid response from auth service" });
       }
+      await hydrateUserFromDb(user);
+      try {
+        const roleRes = await pool.query(`SELECT role FROM users WHERE id = $1`, [user.id]);
+        const dbRole = roleRes.rows[0]?.role;
+        if (dbRole && dbRole !== user.role) {
+          console.log(`[Login] Using DB role '${dbRole}' over website-reported '${user.role}' for ${email}`);
+          user.role = dbRole;
+        }
+      } catch {
+      }
       const localToken = crypto.randomBytes(32).toString("hex");
-      const authEntry = { jwt, userId: user.id, user };
+      const authEntry = { jwt, userId: user.id, user, originalRole: user.role };
       tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
-      const enrichedUser = addDualKeys(user);
+      const enrichedUser = userPayload(user, authEntry.originalRole);
       res.json({ token: localToken, user: enrichedUser });
       fullSync(authEntry).catch(() => {
       });
@@ -1354,9 +2260,10 @@ async function registerRoutes(app2) {
       const user = data.user;
       if (jwt && user) {
         const localToken = crypto.randomBytes(32).toString("hex");
-        tokenToJwt.set(localToken, { jwt, userId: user.id, user });
+        const authEntry = { jwt, userId: user.id, user, originalRole: user.role };
+        tokenToJwt.set(localToken, authEntry);
         saveJsonMap("sessions.json", tokenToJwt);
-        return res.json({ token: localToken, user: addDualKeys(user) });
+        return res.json({ token: localToken, user: userPayload(user, authEntry.originalRole) });
       }
       return res.json(addDualKeys(data));
     } catch (err) {
@@ -1375,7 +2282,127 @@ async function registerRoutes(app2) {
   app2.get("/api/auth/me", requireAuth, async (req, res) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    return res.json({ user: addDualKeys(auth.user) });
+    await hydrateUserFromDb(auth.user);
+    return res.json({ user: userPayload(auth.user, auth.originalRole) });
+  });
+  app2.delete("/api/account", requireAuth, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    if (!auth) return res.status(401).json({ message: "Not authenticated" });
+    const userId = auth.userId;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const ownedJobs = `SELECT id FROM jobs WHERE contractor_id = $1`;
+      const relevantRuns = `SELECT id FROM job_runs WHERE driver_id = $1 OR job_id IN (${ownedJobs})`;
+      await client.query(
+        `DELETE FROM weight_tickets WHERE driver_id = $1 OR job_id IN (${ownedJobs}) OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM driver_location_updates WHERE driver_id = $1 OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM still_working_checks WHERE driver_id = $1 OR job_id IN (${ownedJobs}) OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_photos WHERE driver_id = $1 OR job_id IN (${ownedJobs}) OR job_run_id IN (${relevantRuns})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM scheduled_notifications WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_bids WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_stops WHERE added_by_user_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_messages WHERE sender_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM reviews WHERE reviewer_id = $1 OR reviewee_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM conversation_actions WHERE user_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM monthly_invoices WHERE contractor_id = $1 OR driver_id = $1`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_runs WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM job_assignments WHERE driver_id = $1 OR job_id IN (${ownedJobs})`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM truck_availability WHERE trucking_company_id = $1 OR truck_id IN (SELECT id FROM trucks WHERE trucking_company_id = $1)`,
+        [userId]
+      );
+      await client.query(
+        `DELETE FROM driver_invitations WHERE contractor_id = $1 OR driver_id = $1 OR trucking_company_id = $1 OR assigned_truck_id IN (SELECT id FROM trucks WHERE trucking_company_id = $1)`,
+        [userId]
+      );
+      await client.query(`DELETE FROM trucks WHERE trucking_company_id = $1`, [userId]);
+      await client.query(`UPDATE trucks SET assigned_driver_id = NULL WHERE assigned_driver_id = $1`, [userId]);
+      await client.query(`DELETE FROM driver_vehicles WHERE driver_id = $1`, [userId]);
+      await client.query(`UPDATE driver_vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = $1`, [userId]);
+      await client.query(`DELETE FROM jobs WHERE contractor_id = $1`, [userId]);
+      await client.query(`UPDATE jobs SET driver_id = NULL WHERE driver_id = $1`, [userId]);
+      await client.query(
+        `DELETE FROM document_shares WHERE contractor_id = $1 OR document_id IN (SELECT id FROM driver_documents WHERE driver_id = $1)`,
+        [userId]
+      );
+      await client.query(`DELETE FROM driver_documents WHERE driver_id = $1`, [userId]);
+      await client.query(`DELETE FROM contractor_materials WHERE contractor_id = $1`, [userId]);
+      await client.query(`DELETE FROM contractor_projects WHERE contractor_id = $1`, [userId]);
+      await client.query(`DELETE FROM contractor_favorites WHERE contractor_id = $1`, [userId]);
+      await client.query(`DELETE FROM driver_availability WHERE driver_id = $1`, [userId]);
+      await client.query(`DELETE FROM driver_favorites WHERE driver_id = $1 OR favoriter_id = $1`, [userId]);
+      await client.query(`DELETE FROM company_favorites WHERE driver_id = $1 OR company_id = $1`, [userId]);
+      await client.query(`DELETE FROM foreman_requests WHERE foreman_id = $1 OR target_company_id = $1`, [userId]);
+      await client.query(`DELETE FROM notifications WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM push_subscriptions WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM password_reset_tokens WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM sync_metadata WHERE user_id = $1`, [userId]);
+      await client.query(`DELETE FROM sync_queue WHERE user_id = $1`, [userId]);
+      await client.query(`UPDATE users SET trucking_company_id = NULL WHERE trucking_company_id = $1`, [userId]);
+      const del = await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      if (del.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ message: "Account not found" });
+      }
+      await client.query("COMMIT");
+      let sessionsChanged = false;
+      for (const [token, session2] of tokenToJwt.entries()) {
+        if (session2.userId === userId) {
+          tokenToJwt.delete(token);
+          sessionsChanged = true;
+        }
+      }
+      if (sessionsChanged) saveJsonMap("sessions.json", tokenToJwt);
+      return res.json({ ok: true });
+    } catch (err) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+      }
+      console.error("Account deletion error:", err.message);
+      return res.status(500).json({ message: "Failed to delete account. Please try again." });
+    } finally {
+      client.release();
+    }
   });
   app2.post("/api/auth/forgot-password", async (req, res) => {
     try {
@@ -1413,12 +2440,21 @@ async function registerRoutes(app2) {
   app2.post("/api/push/register", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
-      const { token, expoPushToken, expo_push_token } = req.body;
+      const { token, expoPushToken, expo_push_token, deviceToken, device_token } = req.body;
       const pushToken = token || expoPushToken || expo_push_token;
       if (pushToken) {
         await pool.query(`UPDATE users SET expo_push_token = $1 WHERE id = $2`, [pushToken, auth.userId]);
       }
-    } catch {
+      const apnsToken = deviceToken || device_token;
+      const updateId = req.body.updateId || req.body.update_id || null;
+      if (apnsToken && typeof apnsToken === "string" && /^[0-9a-fA-F]{32,200}$/.test(apnsToken)) {
+        await pool.query(`UPDATE users SET apns_device_token = $1 WHERE id = $2`, [apnsToken, auth.userId]);
+        console.log(`[PushRegister] user=${auth.userId} apnsToken=SAVED len=${apnsToken.length} update=${updateId}`);
+      } else {
+        console.log(`[PushRegister] user=${auth.userId} apnsToken=${apnsToken ? `REJECTED(len=${String(apnsToken).length})` : "MISSING"} update=${updateId} tokenError=${req.body.deviceTokenError || "none"}`);
+      }
+    } catch (e) {
+      console.log(`[PushRegister] error: ${e}`);
     }
     return res.json({ ok: true });
   });
@@ -1433,6 +2469,12 @@ async function registerRoutes(app2) {
       let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.archived_at IS NULL`;
       const params = [];
       let paramIdx = 1;
+      const visFeats = await getVisibilityFeatures(pool);
+      if (visFeats.jobsVisibility) {
+        query += jobVisibilityPredicate(visFeats, paramIdx);
+        params.push(auth.userId);
+        paramIdx++;
+      }
       if (hiddenJobIds2.size > 0) {
         query += ` AND j.id NOT IN (${[...hiddenJobIds2].map((_, i) => `$${paramIdx + i}`).join(",")})`;
         params.push(...hiddenJobIds2);
@@ -1483,30 +2525,40 @@ async function registerRoutes(app2) {
         params.push(`%${search}%`);
         paramIdx++;
       }
+      const truckType = req.query.truck_type;
+      if (truckType) {
+        query += ` AND j.truck_type::text = $${paramIdx}`;
+        params.push(truckType);
+        paramIdx++;
+      }
       query += ` AND NOT (
-        j.contractor_id::text != $${paramIdx}
-        AND j.status::text IN ('open', 'accepted', 'pending')
+        j.status::text IN ('open', 'accepted', 'pending')
         AND (
           (SELECT COUNT(*) FROM job_assignments ja
             WHERE ja.job_id = j.id AND ja.status::text = 'approved')
           >= COALESCE(j.trucks_needed, 1)
-          OR EXISTS (
-            SELECT 1 FROM job_assignments ja
-            WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
-              AND ja.status::text = 'approved'
-          )
           OR (
-            (SELECT COUNT(*) FROM job_assignments ja
-              WHERE ja.job_id = j.id AND ja.status::text IN ('pending', 'approved'))
-            >= CASE
-                WHEN COALESCE(j.trucks_needed, 1) <= 1 THEN 5
-                WHEN COALESCE(j.trucks_needed, 1) = 2 THEN 8
-                ELSE 3 * COALESCE(j.trucks_needed, 1)
-              END
-            AND NOT EXISTS (
-              SELECT 1 FROM job_assignments ja
-              WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
-                AND ja.status::text IN ('pending', 'approved')
+            j.contractor_id::text != $${paramIdx}
+            AND (
+              EXISTS (
+                SELECT 1 FROM job_assignments ja
+                WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
+                  AND ja.status::text = 'approved'
+              )
+              OR (
+                (SELECT COUNT(*) FROM job_assignments ja
+                  WHERE ja.job_id = j.id AND ja.status::text IN ('pending', 'approved'))
+                >= CASE
+                    WHEN COALESCE(j.trucks_needed, 1) <= 1 THEN 5
+                    WHEN COALESCE(j.trucks_needed, 1) = 2 THEN 8
+                    ELSE 3 * COALESCE(j.trucks_needed, 1)
+                  END
+                AND NOT EXISTS (
+                  SELECT 1 FROM job_assignments ja
+                  WHERE ja.job_id = j.id AND ja.driver_id = $${paramIdx}
+                    AND ja.status::text IN ('pending', 'approved')
+                )
+              )
             )
           )
         )
@@ -1515,7 +2567,36 @@ async function registerRoutes(app2) {
       paramIdx++;
       query += ` ORDER BY j.scheduled_date ASC NULLS LAST, j.created_at DESC`;
       const result = await pool.query(query, params);
-      return res.json(result.rows.map(addDualKeys));
+      const rows = result.rows.map(addDualKeys);
+      try {
+        const pend = await pool.query(
+          `SELECT ja.id, ja.job_id, ja.sent_at
+           FROM job_assignments ja
+           JOIN jobs bj ON bj.id = ja.job_id
+           JOIN users bu ON bu.id::text = bj.contractor_id::text AND bu.role::text = 'broker'
+           WHERE ja.driver_id::text = $1
+             AND ja.status::text = 'pending'
+             AND ja.sent_at IS NOT NULL`,
+          [auth.userId]
+        );
+        if (pend.rows.length > 0) {
+          const byJob = new Map(pend.rows.map((r) => [String(r.job_id), r]));
+          for (const row of rows) {
+            const m = byJob.get(String(row.id));
+            if (m) {
+              row.needsConfirmation = true;
+              row.needs_confirmation = true;
+              row.assignmentId = m.id;
+              row.assignment_id = m.id;
+              row.assignmentSentAt = m.sent_at;
+              row.assignment_sent_at = m.sent_at;
+            }
+          }
+        }
+      } catch (e) {
+        console.error("GET /api/jobs broker-confirm annotate error:", e.message);
+      }
+      return res.json(rows);
     } catch (e) {
       console.error("GET /api/jobs local error:", e.message);
       return res.json([]);
@@ -1585,48 +2666,142 @@ async function registerRoutes(app2) {
   });
   app2.get("/api/jobs/:id", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.id = $1`,
+        `SELECT j.*, cp.name as project_name, u.company as contractor_name,
+                u.company as contractor_company,
+                u.full_name as contractor_full_name,
+                u.phone as contractor_phone,
+                u.email as contractor_email,
+                d.full_name as driver_name,
+                COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company
+         FROM jobs j
+         LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+         LEFT JOIN users u ON j.contractor_id::text = u.id::text
+         LEFT JOIN users d ON j.driver_id::text = d.id::text
+         LEFT JOIN users dtc ON d.trucking_company_id::text = dtc.id::text
+         WHERE j.id = $1`,
         [req.params.id]
       );
       if (result.rows.length > 0) {
         const job = result.rows[0];
-        const assignResult = await pool.query(
-          `SELECT ja.*, t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
-                  t.truck_number as vehicle_truck_number, t.license_plate as vehicle_license_plate,
-                  t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp
-           FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id WHERE ja.job_id = $1`,
-          [req.params.id]
+        const isParticipant = String(job.contractor_id) === auth.userId || String(job.driver_id) === auth.userId;
+        let hasAssignment = false;
+        if (!isParticipant) {
+          const aCheck = await pool.query(
+            `SELECT 1 FROM job_assignments ja WHERE ja.job_id = $1 AND ja.driver_id = $2
+             AND ja.status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired')
+             AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
+               SELECT 1 FROM users _bu WHERE _bu.id::text = $3 AND _bu.role::text = 'broker'))
+             LIMIT 1`,
+            [req.params.id, auth.userId, String(job.contractor_id)]
+          );
+          hasAssignment = aCheck.rows.length > 0;
+        }
+        const canSeeDetails = isParticipant || hasAssignment;
+        const visFeats = await getVisibilityFeatures(pool);
+        const allowedPrivate = await canViewPrivateJob(
+          pool,
+          visFeats,
+          job,
+          auth.userId,
+          canSeeDetails
         );
-        const runsResult = await pool.query(`SELECT * FROM job_runs WHERE job_id = $1 ORDER BY created_at DESC`, [req.params.id]);
-        const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
-        job.assignments = assignResult.rows.map((row) => {
-          const a = addDualKeys(row);
-          if (row.vehicle_id) {
-            a.vehicle = {
-              id: row.vehicle_id,
-              make: row.vehicle_make,
-              model: row.vehicle_model,
-              year: row.vehicle_year,
-              truck_number: row.vehicle_truck_number,
-              truckNumber: row.vehicle_truck_number,
-              license_plate: row.vehicle_license_plate,
-              licensePlate: row.vehicle_license_plate,
-              truck_type: row.vehicle_truck_type,
-              truckType: row.vehicle_truck_type,
-              capacity: row.vehicle_capacity,
-              max_capacity_tons: row.vehicle_capacity,
-              has_tarp: row.vehicle_has_tarp,
-              hasTarp: row.vehicle_has_tarp
-            };
+        if (!allowedPrivate) {
+          return res.status(403).json({ message: "This project is private." });
+        }
+        if (canSeeDetails) {
+          const assignResult = await pool.query(
+            `SELECT ja.*, t.make as vehicle_make, t.model as vehicle_model, t.year as vehicle_year,
+                    t.truck_number as vehicle_truck_number, t.license_plate as vehicle_license_plate,
+                    t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp,
+                    du.full_name as driver_full_name,
+                    COALESCE(NULLIF(dutc.company, ''), NULLIF(du.company, '')) as driver_company
+             FROM job_assignments ja
+             LEFT JOIN trucks t ON ja.vehicle_id = t.id
+             LEFT JOIN users du ON ja.driver_id::text = du.id::text
+             LEFT JOIN users dutc ON du.trucking_company_id::text = dutc.id::text
+             WHERE ja.job_id = $1
+             ORDER BY (ja.status::text = 'approved') DESC, ja.approved_at DESC NULLS LAST, ja.created_at DESC`,
+            [req.params.id]
+          );
+          const runsResult = await pool.query(`SELECT * FROM job_runs WHERE job_id = $1 ORDER BY created_at DESC`, [req.params.id]);
+          const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
+          job.assignments = assignResult.rows.map((row) => {
+            const a = addDualKeys(row);
+            if (row.vehicle_id) {
+              a.vehicle = {
+                id: row.vehicle_id,
+                make: row.vehicle_make,
+                model: row.vehicle_model,
+                year: row.vehicle_year,
+                truck_number: row.vehicle_truck_number,
+                truckNumber: row.vehicle_truck_number,
+                license_plate: row.vehicle_license_plate,
+                licensePlate: row.vehicle_license_plate,
+                truck_type: row.vehicle_truck_type,
+                truckType: row.vehicle_truck_type,
+                capacity: row.vehicle_capacity,
+                max_capacity_tons: row.vehicle_capacity,
+                has_tarp: row.vehicle_has_tarp,
+                hasTarp: row.vehicle_has_tarp
+              };
+            }
+            return a;
+          });
+          job.jobRuns = runsResult.rows.map(addDualKeys);
+          job.job_runs = job.jobRuns;
+          job.runs = job.jobRuns;
+          job.weightTickets = weightResult.rows.map(addDualKeys);
+          job.weight_tickets = job.weightTickets;
+          if (!job.driver_name || !job.driver_company) {
+            const activeAssigns = assignResult.rows.filter(
+              (r) => !["rejected", "withdrawn", "cancelled", "expired"].includes(String(r.status))
+            );
+            const primary = activeAssigns.find((r) => String(r.status) === "approved") || activeAssigns[0] || null;
+            if (primary) {
+              if (!job.driver_name) job.driver_name = primary.driver_full_name || null;
+              if (!job.driver_company) job.driver_company = primary.driver_company || null;
+            }
           }
-          return a;
-        });
-        job.jobRuns = runsResult.rows.map(addDualKeys);
-        job.job_runs = job.jobRuns;
-        job.runs = job.jobRuns;
-        job.weightTickets = weightResult.rows.map(addDualKeys);
-        job.weight_tickets = job.weightTickets;
+        } else {
+          job.assignments = [];
+          job.jobRuns = [];
+          job.job_runs = [];
+          job.runs = [];
+          job.weightTickets = [];
+          job.weight_tickets = [];
+          delete job.contractor_full_name;
+          delete job.contractor_phone;
+          delete job.contractor_email;
+        }
+        try {
+          const brokerCheck = await pool.query(
+            `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'broker' LIMIT 1`,
+            [String(job.contractor_id)]
+          );
+          if (brokerCheck.rows.length > 0) {
+            if (String(job.contractor_id) !== auth.userId && Array.isArray(job.assignments)) {
+              job.assignments = job.assignments.filter((a) => a.sent_at || a.sentAt);
+            }
+            const mine = await pool.query(
+              `SELECT id, sent_at FROM job_assignments
+               WHERE job_id = $1 AND driver_id::text = $2
+                 AND status::text = 'pending' AND sent_at IS NOT NULL LIMIT 1`,
+              [req.params.id, auth.userId]
+            );
+            if (mine.rows.length > 0) {
+              job.needsConfirmation = true;
+              job.needs_confirmation = true;
+              job.assignmentId = mine.rows[0].id;
+              job.assignment_id = mine.rows[0].id;
+              job.assignmentSentAt = mine.rows[0].sent_at;
+              job.assignment_sent_at = mine.rows[0].sent_at;
+            }
+          }
+        } catch (e) {
+          console.error("GET /api/jobs/:id broker annotate error:", e.message);
+        }
         return res.json(addDualKeys(job));
       }
       return res.status(404).json({ message: "Job not found" });
@@ -1638,6 +2813,43 @@ async function registerRoutes(app2) {
   app2.post("/api/jobs", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
+      const posterRole = String(auth.originalRole || auth.user?.role || "");
+      if (posterRole === "broker") {
+        if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+          return res.status(400).json({ message: "Broker job posting requires a live website account." });
+        }
+        const r = await websiteFetch("/api/jobs", { method: "POST", body: req.body, jwt: auth.jwt });
+        const text2 = await r.text();
+        let data;
+        try {
+          data = JSON.parse(text2);
+        } catch {
+          data = { message: text2 };
+        }
+        if (r.ok && data?.id && (req.body.clientName || req.body.clientEmail)) {
+          try {
+            const cName = String(req.body.clientName || "").trim();
+            const cEmail = String(req.body.clientEmail || "").trim().toLowerCase();
+            let clientKey = "";
+            const m = await pool.query(
+              `SELECT id FROM broker_manual_clients WHERE broker_id = $1
+                 AND (($2 <> '' AND lower(name) = lower($2)) OR ($3 <> '' AND lower(email) = $3))
+               LIMIT 1`,
+              [auth.userId, cName, cEmail]
+            );
+            if (m.rows[0]) clientKey = `manual-${m.rows[0].id}`;
+            await pool.query(
+              `INSERT INTO broker_job_clients (job_id, broker_id, client_key, client_name, client_email)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (job_id) DO UPDATE SET client_key = $3, client_name = $4, client_email = $5`,
+              [String(data.id), auth.userId, clientKey, cName, cEmail]
+            );
+          } catch (e) {
+            console.error("[JobClientLink] save failed:", e.message);
+          }
+        }
+        return res.status(r.status).json(addDualKeys(data));
+      }
       const id = crypto.randomUUID();
       const body = { ...req.body, id, contractor_id: auth.userId, status: "open", created_at: (/* @__PURE__ */ new Date()).toISOString() };
       const columns = [
@@ -1673,7 +2885,17 @@ async function registerRoutes(app2) {
         "total_tons_needed",
         "total_amount_unit",
         "pickup_time",
-        "estimated_trips"
+        "estimated_trips",
+        "haul_both_ways",
+        "return_material",
+        "return_amount",
+        "return_amount_unit",
+        "return_origin_address",
+        "return_origin_lat",
+        "return_origin_lng",
+        "return_destination_address",
+        "return_destination_lat",
+        "return_destination_lng"
       ];
       const snakeBody = {};
       for (const [k, v] of Object.entries(body)) {
@@ -1691,22 +2913,626 @@ async function registerRoutes(app2) {
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [id]);
       const job = result.rows[0] || { id, ...snakeBody };
       const pushBody = { ...req.body, id };
+      for (const k of Object.keys(pushBody)) {
+        if (COMPANION_ONLY_JOB_KEYS.has(k)) delete pushBody[k];
+      }
       console.log(`POST /api/jobs pushing to website with projectId=${pushBody.projectId || pushBody.project_id || "none"}, id=${id}`);
       pushToWebsite("/api/jobs", auth, { method: "POST", body: pushBody }).catch(() => {
       });
+      const notifyId = String(job.id || id);
+      markJobNotified(notifyId);
+      try {
+        if (await claimJobNotification(notifyId)) {
+          await notifyNearbyDriversOfNewJob(job);
+        }
+      } catch (e) {
+        console.error("POST /api/jobs notify error:", e.message);
+      }
       return res.status(201).json(addDualKeys(job));
     } catch (e) {
       console.error("POST /api/jobs error:", e.message);
       return res.status(500).json({ message: "Failed to create job" });
     }
   });
+  async function proxyToWebsite(req, res) {
+    const auth = getWebsiteAuth(req);
+    if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+      return res.status(400).json({ message: "This feature requires a live website account." });
+    }
+    try {
+      const r = await websiteFetch(req.originalUrl, {
+        method: req.method,
+        body: req.method === "GET" || req.method === "HEAD" ? void 0 : req.body ?? {},
+        jwt: auth.jwt
+      });
+      const text2 = await r.text();
+      let data;
+      try {
+        data = JSON.parse(text2);
+      } catch {
+        data = { message: text2 };
+      }
+      return res.status(r.status).json(addDualKeys(data));
+    } catch (e) {
+      console.error(`[WebsiteProxy] ${req.method} ${req.originalUrl} error:`, e.message);
+      return res.status(502).json({ message: "Website request failed" });
+    }
+  }
+  async function requireBrokerRole(req, res, next) {
+    try {
+      const auth = getWebsiteAuth(req);
+      const r = await pool.query(
+        `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'broker' LIMIT 1`,
+        [auth.userId]
+      );
+      if (!r.rows[0]) return res.status(403).json({ message: "Broker access required" });
+      next();
+    } catch (e) {
+      console.error("requireBrokerRole error:", e.message);
+      return res.status(500).json({ message: "Authorization check failed" });
+    }
+  }
+  app2.get("/api/broker/clients", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    try {
+      let upstream = [];
+      if (auth.jwt && !auth.jwt.startsWith("dev-local:")) {
+        const cr = await websiteFetch("/api/broker/clients", { method: "GET", jwt: auth.jwt });
+        if (cr.ok) {
+          const data = await cr.json().catch(() => []);
+          if (Array.isArray(data)) upstream = data;
+        }
+      }
+      const local = await pool.query(
+        `SELECT * FROM broker_manual_clients WHERE broker_id = $1 ORDER BY created_at DESC`,
+        [auth.userId]
+      );
+      const countMap = /* @__PURE__ */ new Map();
+      try {
+        const counts = await pool.query(
+          `SELECT l.client_key, COUNT(*)::int AS n
+             FROM broker_job_clients l
+             JOIN jobs j ON j.id::text = l.job_id
+            WHERE l.broker_id = $1 AND l.client_key <> ''
+              AND j.archived_at IS NULL
+              AND j.status::text NOT IN ('cancelled', 'completed')
+            GROUP BY l.client_key`,
+          [auth.userId]
+        );
+        for (const row of counts.rows) countMap.set(String(row.client_key), Number(row.n));
+      } catch (e) {
+        console.error("[BrokerClients] job counts failed:", e.message);
+      }
+      const manual = local.rows.map((r) => {
+        const key = `manual-${r.id}`;
+        const n = countMap.get(key) || 0;
+        return {
+          clientUserId: key,
+          client_user_id: key,
+          name: r.name,
+          email: r.email || "",
+          phone: r.phone || "",
+          contactName: r.contact_name || "",
+          contact_name: r.contact_name || "",
+          address: r.address || "",
+          notes: r.notes || "",
+          status: "active",
+          isManual: true,
+          is_manual: true,
+          activeJobs: n,
+          activeJobsCount: n,
+          active_jobs_count: n
+        };
+      });
+      const upstreamWithCounts = upstream.map((c) => {
+        const key = String(c.clientUserId || c.client_user_id || "");
+        const n = countMap.get(key);
+        return n === void 0 ? c : { ...c, activeJobsCount: n, active_jobs_count: n };
+      });
+      return res.json([...manual, ...upstreamWithCounts]);
+    } catch (e) {
+      console.error("GET /api/broker/clients error:", e.message);
+      return res.status(500).json({ message: "Failed to load clients" });
+    }
+  });
+  app2.get("/api/broker/jobs", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    try {
+      if (!auth.jwt || auth.jwt.startsWith("dev-local:")) return res.json([]);
+      const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+      const jr = await websiteFetch(`/api/broker/jobs${qs}`, { method: "GET", jwt: auth.jwt });
+      if (!jr.ok) {
+        const text2 = await jr.text();
+        let data;
+        try {
+          data = JSON.parse(text2);
+        } catch {
+          data = { message: text2 };
+        }
+        return res.status(jr.status).json(data);
+      }
+      const jobs2 = await jr.json().catch(() => []);
+      if (!Array.isArray(jobs2)) return res.json(addDualKeys(jobs2));
+      const links = await pool.query(
+        `SELECT job_id, client_key, client_name, client_email FROM broker_job_clients WHERE broker_id = $1`,
+        [auth.userId]
+      );
+      const linkMap = new Map(links.rows.map((l) => [String(l.job_id), l]));
+      const merged = jobs2.map((j) => {
+        const l = linkMap.get(String(j.id));
+        if (!l) return j;
+        return {
+          ...j,
+          clientName: l.client_name || j.clientName,
+          clientEmail: l.client_email || j.clientEmail,
+          clientUserId: l.client_key || j.clientUserId
+        };
+      });
+      return res.json(addDualKeys(merged));
+    } catch (e) {
+      console.error("GET /api/broker/jobs error:", e.message);
+      return res.status(500).json({ message: "Failed to load jobs" });
+    }
+  });
+  app2.get("/api/broker/roster", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    try {
+      if (!auth.jwt || auth.jwt.startsWith("dev-local:")) return res.json([]);
+      const fetchRoster = async () => {
+        const rr = await websiteFetch("/api/broker/roster", { method: "GET", jwt: auth.jwt });
+        if (!rr.ok) return null;
+        const data = await rr.json().catch(() => null);
+        return Array.isArray(data) ? data : null;
+      };
+      let roster = await fetchRoster();
+      if (roster === null) return res.status(502).json({ message: "Failed to load roster" });
+      const own = await pool.query(
+        `SELECT DISTINCT u.id, u.email, u.full_name FROM users u
+         WHERE u.email IS NOT NULL AND (
+           (u.id::text <> $1 AND u.trucking_company_id::text = $1)
+           OR u.id::text IN (
+             SELECT assigned_driver_id::text FROM trucks
+             WHERE trucking_company_id::text = $1 AND assigned_driver_id IS NOT NULL AND archived_at IS NULL
+           )
+         )`,
+        [String(auth.userId)]
+      );
+      const rosterIds = new Set(roster.map((r) => String(r.driverId || r.driver_id || "")).filter(Boolean));
+      const rosterEmails = new Set(
+        roster.map((r) => String(r.driverEmail || r.driver_email || r.email || "").toLowerCase()).filter(Boolean)
+      );
+      let invitedAny = false;
+      let invitedSelf = false;
+      for (const u of own.rows) {
+        const email = String(u.email || "").toLowerCase();
+        if (!email || rosterIds.has(String(u.id)) || rosterEmails.has(email)) continue;
+        try {
+          const ir = await websiteFetch("/api/broker/roster/invite", {
+            method: "POST",
+            body: { email: u.email, name: u.full_name || u.email },
+            jwt: auth.jwt
+          });
+          if (ir.ok) {
+            invitedAny = true;
+            if (String(u.id) === String(auth.userId)) invitedSelf = true;
+          } else console.error(`[RosterAutoInvite] invite for ${u.id} failed: ${ir.status}`);
+        } catch (e) {
+          console.error("[RosterAutoInvite] error:", e.message);
+        }
+      }
+      const selfPending = roster.some(
+        (r) => String(r.driverId || r.driver_id || "") === String(auth.userId) && String(r.status || "").toLowerCase() === "pending"
+      );
+      if (invitedSelf || selfPending) {
+        try {
+          const pr = await websiteFetch("/api/invitations/pending", { method: "GET", jwt: auth.jwt });
+          const pending = pr.ok ? await pr.json().catch(() => []) : [];
+          for (const inv of Array.isArray(pending) ? pending : []) {
+            const inviter = String(inv.brokerId || inv.broker_id || inv.inviterId || inv.inviter_id || inv.invitedBy || inv.invited_by || "");
+            if (inviter !== String(auth.userId)) continue;
+            try {
+              const ar = await websiteFetch(`/api/invitations/${inv.id}/accept`, { method: "POST", jwt: auth.jwt });
+              if (ar.ok) invitedAny = true;
+              else console.error(`[RosterAutoInvite] self-accept ${inv.id} failed: ${ar.status}`);
+            } catch (e) {
+              console.error("[RosterAutoInvite] self-accept error:", e.message);
+            }
+          }
+        } catch (e) {
+          console.error("[RosterAutoInvite] self-accept fetch error:", e.message);
+        }
+      }
+      if (invitedAny) roster = await fetchRoster() || roster;
+      try {
+        const driverIds = roster.map((r) => String(r.driverId || r.driver_id || "")).filter(Boolean);
+        if (driverIds.length > 0) {
+          const du = await pool.query(
+            `SELECT id::text AS id, full_name, company, COALESCE(trucking_company_id::text, id::text) AS company_key
+               FROM users WHERE id::text = ANY($1)`,
+            [driverIds]
+          );
+          const userMap = new Map(du.rows.map((u) => [u.id, u]));
+          const brokerKey = String(auth.userId);
+          const tr = await pool.query(
+            `SELECT t.id, t.truck_number, t.year, t.make, t.model, t.truck_type, t.capacity,
+                    t.license_plate, t.assigned_driver_id::text AS assigned_driver_id,
+                    t.trucking_company_id::text AS trucking_company_id,
+                    o.company AS owner_company, o.full_name AS owner_name
+               FROM trucks t
+               LEFT JOIN users o ON o.id::text = t.trucking_company_id::text
+              WHERE t.archived_at IS NULL AND t.is_active = true
+                AND (t.assigned_driver_id::text = ANY($1) OR t.trucking_company_id::text = $2)`,
+            [driverIds, brokerKey]
+          );
+          roster = roster.map((r) => {
+            const dId = String(r.driverId || r.driver_id || "");
+            const u = userMap.get(dId);
+            const assigned = tr.rows.filter((t) => t.assigned_driver_id === dId);
+            const pool_ = assigned.length > 0 ? assigned : tr.rows.filter((t) => u && u.company_key === brokerKey && t.trucking_company_id === brokerKey && !t.assigned_driver_id);
+            return {
+              ...r,
+              companyName: pool_[0]?.owner_company || u?.company || "",
+              trucks: pool_.map((t) => ({
+                id: t.id,
+                truckNumber: t.truck_number,
+                year: t.year,
+                make: t.make,
+                model: t.model,
+                truckType: t.truck_type,
+                capacity: t.capacity,
+                licensePlate: t.license_plate
+              }))
+            };
+          });
+        }
+      } catch (e) {
+        console.error("[Roster] truck enrichment failed:", e.message);
+      }
+      return res.json(addDualKeys(roster));
+    } catch (e) {
+      console.error("GET /api/broker/roster error:", e.message);
+      return res.status(500).json({ message: "Failed to load roster" });
+    }
+  });
+  app2.get("/api/broker/roster-availability", requireAuth, requireBrokerRole, async (req, res) => {
+    const date = String(req.query.date || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ message: "date=YYYY-MM-DD required" });
+    }
+    try {
+      const auth = getWebsiteAuth(req);
+      let driverIds = [];
+      if (auth.jwt && !auth.jwt.startsWith("dev-local:")) {
+        const rr = await websiteFetch("/api/broker/roster", { method: "GET", jwt: auth.jwt });
+        if (rr.ok) {
+          const rosterData = await rr.json().catch(() => []);
+          if (Array.isArray(rosterData)) {
+            driverIds = rosterData.map((d) => String(d.driverId || d.driver_id || d.id || "")).filter(Boolean).slice(0, 200);
+          }
+        }
+      }
+      if (driverIds.length === 0) return res.json({});
+      const result = await pool.query(
+        `SELECT driver_id, is_available, notes
+         FROM driver_availability
+         WHERE date = $1 AND driver_id = ANY($2)`,
+        [date, driverIds]
+      );
+      const map = {};
+      for (const r of result.rows) {
+        if (r.is_available === false) {
+          map[String(r.driver_id)] = { unavailable: true, notes: r.notes || null };
+        } else if (!map[String(r.driver_id)]) {
+          map[String(r.driver_id)] = { unavailable: false, notes: null };
+        }
+      }
+      return res.json(map);
+    } catch (e) {
+      console.error("GET /api/broker/roster-availability error:", e.message);
+      return res.status(500).json({ message: "Failed to load availability" });
+    }
+  });
+  app2.get("/api/broker/scheduled-sends", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const date = String(req.query.date || "").slice(0, 10);
+    try {
+      const params = [auth.userId];
+      let where = `broker_id = $1 AND status = 'pending'`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        where += ` AND date = $2`;
+        params.push(date);
+      }
+      const r = await pool.query(
+        `SELECT id, date, send_at, status, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
+        params
+      );
+      return res.json(r.rows.map((row) => ({
+        id: row.id,
+        date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
+        sendAt: row.send_at,
+        status: row.status
+      })));
+    } catch (e) {
+      console.error("GET /api/broker/scheduled-sends error:", e.message);
+      return res.status(500).json({ message: "Failed to load scheduled sends" });
+    }
+  });
+  app2.post("/api/broker/scheduled-sends", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    if (auth.jwt && auth.jwt.startsWith("dev-local:")) {
+      return res.status(400).json({ message: "Scheduled sends require a LoadLink login" });
+    }
+    const date = String(req.body?.date || "").slice(0, 10);
+    const sendAt = new Date(String(req.body?.sendAt || ""));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: "date must be YYYY-MM-DD" });
+    if (isNaN(sendAt.getTime())) return res.status(400).json({ message: "sendAt must be a valid timestamp" });
+    if (sendAt.getTime() < Date.now() - 6e4) return res.status(400).json({ message: "sendAt is in the past" });
+    try {
+      await pool.query(
+        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status = 'pending'`,
+        [auth.userId, date]
+      );
+      const tzOffsetMin = Number(req.body?.tzOffsetMin ?? req.header("X-TZ-Offset") ?? 0) || 0;
+      const r = await pool.query(
+        `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min) VALUES ($1, $2, $3, $4)
+         RETURNING id, date, send_at, status`,
+        [auth.userId, date, sendAt.toISOString(), tzOffsetMin]
+      );
+      const row = r.rows[0];
+      return res.status(201).json({
+        id: row.id,
+        date,
+        sendAt: row.send_at,
+        status: row.status
+      });
+    } catch (e) {
+      console.error("POST /api/broker/scheduled-sends error:", e.message);
+      return res.status(500).json({ message: "Failed to schedule send" });
+    }
+  });
+  app2.delete("/api/broker/scheduled-sends/:id", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    try {
+      const r = await pool.query(
+        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status = 'pending' RETURNING id`,
+        [req.params.id, auth.userId]
+      );
+      if (r.rowCount === 0) return res.status(404).json({ message: "Scheduled send not found" });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("DELETE /api/broker/scheduled-sends error:", e.message);
+      return res.status(500).json({ message: "Failed to cancel scheduled send" });
+    }
+  });
+  app2.post("/api/broker/clients", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "").trim();
+    const phone = String(req.body?.phone || "").trim();
+    const contactName = String(req.body?.contactName || req.body?.contact_name || "").trim();
+    const address = String(req.body?.address || "").trim();
+    const notes = String(req.body?.notes || "").trim();
+    if (!name) return res.status(400).json({ message: "Client name is required" });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: "Invalid email address" });
+    }
+    try {
+      const dupe = await pool.query(
+        `SELECT id FROM broker_manual_clients WHERE broker_id = $1 AND lower(name) = lower($2)`,
+        [auth.userId, name]
+      );
+      if (dupe.rows[0]) return res.status(409).json({ message: "You already have a client with that name" });
+      const result = await pool.query(
+        `INSERT INTO broker_manual_clients (broker_id, name, email, phone, contact_name, address, notes) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [auth.userId, name, email || null, phone || null, contactName || null, address || null, notes || null]
+      );
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e) {
+      console.error("POST /api/broker/clients error:", e.message);
+      return res.status(500).json({ message: "Failed to add client" });
+    }
+  });
+  async function verifyBrokerClient(auth, clientUserId) {
+    if (clientUserId.startsWith("manual-")) {
+      const own = await pool.query(
+        `SELECT id FROM broker_manual_clients WHERE id::text = $1 AND broker_id = $2`,
+        [clientUserId.slice(7), auth.userId]
+      ).catch(() => ({ rows: [] }));
+      return own.rows[0] ? null : { status: 403, message: "Not one of your clients" };
+    }
+    if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+      return { status: 400, message: "This feature requires a live website account." };
+    }
+    const cr = await websiteFetch("/api/broker/clients", { method: "GET", jwt: auth.jwt });
+    if (!cr.ok) return { status: cr.status, message: "Could not verify client list" };
+    const clients = await cr.json().catch(() => []);
+    const isMyClient = Array.isArray(clients) && clients.some(
+      (c) => String(c.clientUserId || c.client_user_id || "") === clientUserId
+    );
+    return isMyClient ? null : { status: 403, message: "Not one of your clients" };
+  }
+  app2.get("/api/broker/client-projects", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const clientUserId = String(req.query.clientUserId || "").trim();
+    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
+    try {
+      const err = await verifyBrokerClient(auth, clientUserId);
+      if (err) return res.status(err.status).json({ message: err.message });
+      const brokerProjects = await pool.query(
+        `SELECT * FROM broker_client_projects WHERE broker_id = $1 AND client_user_id = $2 AND deleted_at IS NULL ORDER BY created_at DESC`,
+        [auth.userId, clientUserId]
+      );
+      let clientOwn = [];
+      if (!clientUserId.startsWith("manual-")) {
+        const result = await pool.query(
+          `SELECT * FROM contractor_projects WHERE contractor_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC`,
+          [clientUserId]
+        );
+        clientOwn = result.rows;
+      }
+      return res.json([
+        ...brokerProjects.rows.map((r) => ({ ...r, is_broker_project: true, isBrokerProject: true })),
+        ...clientOwn.map((r) => ({ ...r, is_broker_project: false, isBrokerProject: false }))
+      ].map(addDualKeys));
+    } catch (e) {
+      console.error("GET /api/broker/client-projects error:", e.message);
+      return res.status(500).json({ message: "Failed to load client projects" });
+    }
+  });
+  app2.post("/api/broker/client-projects", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const clientUserId = String(req.body?.clientUserId || req.body?.client_user_id || "").trim();
+    const name = String(req.body?.name || "").trim();
+    const jobNumber = String(req.body?.jobNumber || req.body?.job_number || "").trim();
+    const siteAddress = String(req.body?.siteAddress || req.body?.site_address || "").trim();
+    const notes = String(req.body?.notes || "").trim();
+    const siteLat = req.body?.siteLat ?? req.body?.site_lat;
+    const siteLng = req.body?.siteLng ?? req.body?.site_lng;
+    const lat = siteLat != null && siteLat !== "" && isFinite(Number(siteLat)) ? Number(siteLat) : null;
+    const lng = siteLng != null && siteLng !== "" && isFinite(Number(siteLng)) ? Number(siteLng) : null;
+    if (!clientUserId) return res.status(400).json({ message: "clientUserId is required" });
+    if (!name) return res.status(400).json({ message: "Project name is required" });
+    try {
+      const err = await verifyBrokerClient(auth, clientUserId);
+      if (err) return res.status(err.status).json({ message: err.message });
+      const dupe = await pool.query(
+        `SELECT id FROM broker_client_projects WHERE broker_id = $1 AND client_user_id = $2 AND lower(name) = lower($3) AND deleted_at IS NULL`,
+        [auth.userId, clientUserId, name]
+      );
+      if (dupe.rows[0]) return res.status(409).json({ message: "This client already has a project with that name" });
+      const result = await pool.query(
+        `INSERT INTO broker_client_projects (broker_id, client_user_id, name, job_number, site_address, site_lat, site_lng, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [auth.userId, clientUserId, name, jobNumber || null, siteAddress || null, lat, lng, notes || null]
+      );
+      return res.status(201).json(addDualKeys(result.rows[0]));
+    } catch (e) {
+      console.error("POST /api/broker/client-projects error:", e.message);
+      return res.status(500).json({ message: "Failed to create project" });
+    }
+  });
+  app2.put("/api/broker/client-projects/:id", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    try {
+      const own = await pool.query(
+        `SELECT * FROM broker_client_projects WHERE id::text = $1 AND broker_id = $2 AND deleted_at IS NULL`,
+        [String(req.params.id), auth.userId]
+      );
+      if (!own.rows[0]) return res.status(404).json({ message: "Project not found" });
+      const b = req.body || {};
+      const name = b.name != null ? String(b.name).trim() : null;
+      if (b.name != null && !name) return res.status(400).json({ message: "Project name cannot be empty" });
+      const siteLatRaw = b.siteLat ?? b.site_lat;
+      const siteLngRaw = b.siteLng ?? b.site_lng;
+      const result = await pool.query(
+        `UPDATE broker_client_projects SET
+           name = COALESCE($3, name),
+           job_number = COALESCE($4, job_number),
+           site_address = COALESCE($5, site_address),
+           site_lat = COALESCE($6, site_lat),
+           site_lng = COALESCE($7, site_lng),
+           notes = COALESCE($8, notes)
+         WHERE id::text = $1 AND broker_id = $2 RETURNING *`,
+        [
+          String(req.params.id),
+          auth.userId,
+          name,
+          b.jobNumber != null || b.job_number != null ? String(b.jobNumber ?? b.job_number).trim() : null,
+          b.siteAddress != null || b.site_address != null ? String(b.siteAddress ?? b.site_address).trim() : null,
+          siteLatRaw != null && siteLatRaw !== "" && isFinite(Number(siteLatRaw)) ? Number(siteLatRaw) : null,
+          siteLngRaw != null && siteLngRaw !== "" && isFinite(Number(siteLngRaw)) ? Number(siteLngRaw) : null,
+          b.notes != null ? String(b.notes).trim() : null
+        ]
+      );
+      return res.json(addDualKeys(result.rows[0]));
+    } catch (e) {
+      console.error("PUT /api/broker/client-projects/:id error:", e.message);
+      return res.status(500).json({ message: "Failed to update project" });
+    }
+  });
+  app2.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
+  const handleAssignmentResponse = (action) => async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const assignmentId = String(req.params.id);
+    try {
+      const up = await websiteFetch(`/api/assignments/${assignmentId}/${action}`, {
+        method: "POST",
+        body: req.body ?? {},
+        jwt: auth.jwt
+      });
+      const text2 = await up.text();
+      const isSelfAssignGate = up.status === 400 && /not a broker assignment/i.test(text2 || "");
+      if (isSelfAssignGate) {
+        let selfAssigned = false;
+        try {
+          const row = await pool.query(
+            `SELECT ja.id FROM job_assignments ja
+                 JOIN jobs j ON j.id = ja.job_id
+                WHERE ja.id = $1
+                  AND ja.driver_id::text = $2
+                  AND j.contractor_id::text = $2
+                  AND ja.sent_at IS NOT NULL`,
+            [assignmentId, auth.userId]
+          );
+          selfAssigned = row.rows.length > 0;
+        } catch {
+          selfAssigned = false;
+        }
+        if (selfAssigned) {
+          const target = action === "confirm" ? "approved" : "rejected";
+          const upd = await pool.query(
+            action === "confirm" ? `UPDATE job_assignments SET status = 'approved', approved_at = NOW()
+                     WHERE id = $1 AND status::text = 'pending'` : `UPDATE job_assignments SET status = 'rejected'
+                     WHERE id = $1 AND status::text = 'pending'`,
+            [assignmentId]
+          );
+          let done = (upd.rowCount || 0) === 1;
+          if (!done) {
+            const cur = await pool.query(
+              `SELECT status::text AS status FROM job_assignments WHERE id = $1`,
+              [assignmentId]
+            );
+            done = cur.rows[0]?.status === target;
+          }
+          if (done) {
+            return res.json({ ok: true, selfAssigned: true });
+          }
+        }
+      }
+      res.status(up.status);
+      try {
+        res.json(JSON.parse(text2));
+      } catch {
+        res.send(text2);
+      }
+      if (up.ok) {
+        notifyBrokerAssignmentResponse(assignmentId, auth.userId, action).catch(
+          (e) => console.error("Broker confirm-notify error:", e.message)
+        );
+      }
+    } catch (e) {
+      console.error(`POST /api/assignments/:id/${action} error:`, e.message);
+      if (!res.headersSent) res.status(502).json({ message: "Failed to reach website" });
+    }
+  };
+  app2.post("/api/assignments/:id/confirm", requireAuth, handleAssignmentResponse("confirm"));
+  app2.post("/api/assignments/:id/decline", requireAuth, handleAssignmentResponse("decline"));
+  app2.get("/api/invitations/pending", requireAuth, proxyToWebsite);
+  app2.post("/api/invitations/:id/accept", requireAuth, proxyToWebsite);
   app2.put("/api/jobs/:id", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
       const beforeRow = await pool.query(`SELECT scheduled_date, material, contractor_id FROM jobs WHERE id = $1`, [req.params.id]);
+      if (!beforeRow.rows[0]) return res.status(404).json({ message: "Job not found" });
+      if (String(beforeRow.rows[0].contractor_id) !== String(auth.userId)) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
       const prevDate = beforeRow.rows[0]?.scheduled_date ? String(beforeRow.rows[0].scheduled_date).slice(0, 10) : null;
       const jobMaterial = beforeRow.rows[0]?.material || "";
       const jobContractorId = beforeRow.rows[0]?.contractor_id;
+      if (!beforeRow.rows[0] || String(jobContractorId) !== auth.userId) {
+        return res.status(403).json({ message: "You do not have permission to update this job" });
+      }
       const updates = [];
       const values = [];
       let idx = 1;
@@ -1751,14 +3577,27 @@ async function registerRoutes(app2) {
           const notifBody = `${contractorName} moved the ${jobMaterial || "job"} to ${formatted}. Re-confirm to keep your assignment.`;
           for (const a of approvedAssignments.rows) {
             if (a.driver_id) {
-              sendPushNotification(String(a.driver_id), notifTitle, notifBody, { jobId: req.params.id, type: "job_date_changed" });
+              await sendPushNotification(String(a.driver_id), notifTitle, notifBody, { jobId: req.params.id, type: "job_date_changed" }).catch(() => {
+              });
             }
           }
         }
       }
       const result = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
-      if (dateChanged) {
-        pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: req.body }).catch(() => {
+      if (updates.length > 0) {
+        const updatedRow = result.rows[0] || {};
+        const pushBody = {};
+        for (const k of Object.keys(req.body)) {
+          if (req.body[k] === void 0) continue;
+          if (COMPANION_ONLY_JOB_KEYS.has(k)) continue;
+          const col = camelToSnake2(k);
+          let v = Object.prototype.hasOwnProperty.call(updatedRow, col) ? updatedRow[col] : req.body[k];
+          if (v instanceof Date) {
+            v = col === "scheduled_date" ? v.toISOString().slice(0, 10) : v.toISOString();
+          }
+          pushBody[snakeToCamel(k)] = v;
+        }
+        pushToWebsite(`/api/jobs/${req.params.id}`, auth, { method: "PUT", body: pushBody }).catch(() => {
         });
       }
       return res.json(addDualKeys(result.rows[0] || { id: req.params.id }));
@@ -1828,6 +3667,27 @@ async function registerRoutes(app2) {
           });
         }
       }
+      const callerIsFleet = isAutoApprove ? await isFleetAccount(auth.userId) : false;
+      if (isAutoApprove) {
+        const pendingRows = await pool.query(
+          `SELECT vehicle_id FROM job_assignments WHERE job_id = $1 AND driver_id = $2 AND status::text = 'pending' AND vehicle_id IS NOT NULL`,
+          [req.params.id, auth.userId]
+        );
+        const vidsToApprove = [
+          ...Array.isArray(vehicleIds) ? vehicleIds : [],
+          ...pendingRows.rows.map((r) => r.vehicle_id)
+        ];
+        const conflicts = await findApprovedTruckConflicts(vidsToApprove, String(req.params.id));
+        if (conflicts.length > 0) {
+          return res.status(409).json({ message: bookingConflictMessage(conflicts), conflicts });
+        }
+        if (!callerIsFleet) {
+          const driverConflicts = await findApprovedDriverConflicts([auth.userId], String(req.params.id));
+          if (driverConflicts.length > 0) {
+            return res.status(409).json({ message: driverConflictMessage(driverConflicts, true), conflicts: driverConflicts });
+          }
+        }
+      }
       await pool.query(`UPDATE jobs SET status = 'pending', updated_at = NOW() WHERE id = $1`, [req.params.id]);
       if (vehicleIds && Array.isArray(vehicleIds) && vehicleIds.length > 0) {
         for (const vehicleId of vehicleIds) {
@@ -1850,12 +3710,18 @@ async function registerRoutes(app2) {
       }
       let autoApproved = false;
       if (isAutoApprove) {
-        await pool.query(
+        const autoApproveUpdate = await pool.query(
           `UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE job_id = $1 AND driver_id = $2 AND status::text = 'pending'`,
           [req.params.id, auth.userId]
         );
         await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+        await withdrawConflictingPendingApplications(String(req.params.id), Array.isArray(vehicleIds) ? vehicleIds : [], callerIsFleet ? [] : [auth.userId], auth);
         autoApproved = true;
+        if ((autoApproveUpdate.rowCount || 0) > 0) {
+          const jobRowForAward = await pool.query(`SELECT material FROM jobs WHERE id = $1`, [req.params.id]);
+          await notifyDriverJobAwarded(String(auth.userId), String(req.params.id), jobRowForAward.rows[0]?.material).catch(() => {
+          });
+        }
       }
       pushToWebsite(`/api/jobs/${req.params.id}/accept`, auth, { method: "POST", body: req.body }).catch(() => {
       });
@@ -1867,7 +3733,17 @@ async function registerRoutes(app2) {
         const truckCount = vehicleIds && Array.isArray(vehicleIds) ? vehicleIds.length : 1;
         const notifTitle = "New Truck Application";
         const notifBody = `${applicantName} applied ${truckCount} truck${truckCount > 1 ? "s" : ""} to your ${jobForNotif?.material || ""} job`;
-        sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: "job_application" });
+        try {
+          await pool.query(
+            `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+             VALUES ($1, $2, 'new_load', $3, $4, $5, false, NOW())`,
+            [crypto.randomUUID(), contractorId, notifTitle, notifBody, req.params.id]
+          );
+        } catch (e) {
+          console.error("Job-application notification insert error:", e.message);
+        }
+        await sendPushNotification(contractorId, notifTitle, notifBody, { jobId: req.params.id, type: "job_application" }).catch(() => {
+        });
       }
       return res.json({ ...addDualKeys(jobForNotif || { id: req.params.id, status: "pending" }), autoApproved });
     } catch (e) {
@@ -1881,11 +3757,12 @@ async function registerRoutes(app2) {
       const jobResult = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
       const job = jobResult.rows[0];
       const assignResult = await pool.query(
-        `SELECT ja.*, j.scheduled_date, j.estimated_days, j.material as job_material FROM job_assignments ja
+        `SELECT ja.*, j.scheduled_date, j.estimated_days, j.material as job_material,
+                j.includes_weekends, j.includes_saturday, j.includes_sunday FROM job_assignments ja
          JOIN jobs j ON ja.job_id = j.id
          WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
          AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')
-         AND ja.status::text NOT IN ('withdrawn', 'rejected', 'cancelled', 'expired')`,
+         AND ja.status::text = 'approved'`,
         [req.params.id]
       );
       const vehiclesResult = await pool.query(
@@ -1903,16 +3780,13 @@ async function registerRoutes(app2) {
       })();
       const requiresTarp = job?.requires_tarp || false;
       const requiredType = job?.truck_type || null;
-      const jobStart = job?.scheduled_date ? new Date(job.scheduled_date) : null;
-      const jobDays = Math.ceil(Number(job?.estimated_days) || 1);
-      const jobDateKeys = [];
-      if (jobStart) {
-        for (let i = 0; i < jobDays; i++) {
-          const d = new Date(jobStart);
-          d.setDate(d.getDate() + i);
-          jobDateKeys.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`);
-        }
-      }
+      const jobDateKeys = job?.scheduled_date ? getJobDateRange(
+        job.scheduled_date,
+        Number(job.estimated_days) || 1,
+        !!job.includes_weekends,
+        job.includes_saturday !== false,
+        job.includes_sunday !== false
+      ) : [];
       const vehicleConflicts = {};
       for (const v of vehiclesResult.rows) {
         const vId = v.id;
@@ -1950,12 +3824,14 @@ async function registerRoutes(app2) {
         }
         for (const a of assignResult.rows) {
           if (a.vehicle_id !== vId) continue;
-          const aStart = new Date(a.scheduled_date);
-          const aDays = Math.ceil(Number(a.estimated_days) || 1);
-          for (let i = 0; i < aDays; i++) {
-            const d = new Date(aStart);
-            d.setDate(d.getDate() + i);
-            const dKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+          const aDates = getJobDateRange(
+            a.scheduled_date,
+            Number(a.estimated_days) || 1,
+            !!a.includes_weekends,
+            a.includes_saturday !== false,
+            a.includes_sunday !== false
+          );
+          for (const dKey of aDates) {
             if (jobDateKeys.includes(dKey)) {
               conflictDates.push(dKey);
               if (a.job_material && !conflictJobs.includes(a.job_material)) conflictJobs.push(a.job_material);
@@ -2018,6 +3894,18 @@ async function registerRoutes(app2) {
   });
   app2.delete("/api/jobs/:id/assignments/:assignmentId", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const aRow = await pool.query(
+        `SELECT ja.driver_id, j.contractor_id FROM job_assignments ja
+         JOIN jobs j ON ja.job_id = j.id
+         WHERE ja.id = $1 AND ja.job_id = $2`,
+        [req.params.assignmentId, req.params.id]
+      );
+      if (aRow.rows.length === 0) return res.status(404).json({ message: "Assignment not found" });
+      const { driver_id, contractor_id } = aRow.rows[0];
+      if (String(contractor_id) !== auth.userId && String(driver_id) !== auth.userId) {
+        return res.status(403).json({ message: "You do not have permission to modify this assignment" });
+      }
       await pool.query(`UPDATE job_assignments SET status = 'withdrawn' WHERE id = $1`, [req.params.assignmentId]);
       const remaining = await pool.query(`SELECT COUNT(*) FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`, [req.params.id]);
       const remainingCount = parseInt(remaining.rows[0]?.count || "0");
@@ -2031,7 +3919,17 @@ async function registerRoutes(app2) {
   });
   app2.post("/api/cleanup-duplicate-assignments", requireAuth, async (req, res) => {
     try {
-      await pool.query(`DELETE FROM job_assignments WHERE id NOT IN (SELECT MIN(id) FROM job_assignments GROUP BY job_id, driver_id)`);
+      const auth = getWebsiteAuth(req);
+      await pool.query(
+        `DELETE FROM job_assignments
+         WHERE driver_id = $1
+           AND id NOT IN (
+             SELECT MIN(id) FROM job_assignments
+             WHERE driver_id = $1
+             GROUP BY job_id, driver_id
+           )`,
+        [auth.userId]
+      );
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -2040,6 +3938,21 @@ async function registerRoutes(app2) {
   app2.get("/api/jobs/:id/assignments", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.id]);
+      if (jobRow.rows.length === 0) return res.status(404).json({ message: "Job not found" });
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isContractor = String(contractor_id) === auth.userId;
+      const isDriver = String(driver_id) === auth.userId;
+      if (!isContractor && !isDriver) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.id, auth.userId]
+        );
+        if (aCheck.rows.length === 0) {
+          return res.status(403).json({ message: "You do not have access to this job's assignments" });
+        }
+      }
       try {
         await syncJobAssignments(auth);
       } catch {
@@ -2089,10 +4002,36 @@ async function registerRoutes(app2) {
       if (!jobCheck.rows[0] || jobCheck.rows[0].contractor_id !== auth.userId) {
         return res.status(403).json({ message: "Not authorized" });
       }
-      await pool.query(`UPDATE job_assignments SET status = 'approved', approved_at = NOW() WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
+      const vRow = await pool.query(`SELECT vehicle_id, driver_id FROM job_assignments WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
+      const approveVid = vRow.rows[0]?.vehicle_id;
+      const approveDid = vRow.rows[0]?.driver_id;
+      const approvedIsFleet = await isFleetAccount(approveDid);
+      if (approveVid) {
+        const conflicts = await findApprovedTruckConflicts([approveVid], String(req.params.id));
+        if (conflicts.length > 0) {
+          return res.status(409).json({ message: bookingConflictMessage(conflicts), conflicts });
+        }
+      }
+      if (approveDid && !approvedIsFleet) {
+        const driverConflicts = await findApprovedDriverConflicts([approveDid], String(req.params.id));
+        if (driverConflicts.length > 0) {
+          return res.status(409).json({ message: driverConflictMessage(driverConflicts, false), conflicts: driverConflicts });
+        }
+      }
+      const approveUpdate = await pool.query(
+        `UPDATE job_assignments SET status = 'approved', approved_at = NOW()
+         WHERE id = $1 AND job_id = $2 AND status::text <> 'approved'`,
+        [req.params.assignmentId, req.params.id]
+      );
       await pool.query(`UPDATE jobs SET status = 'accepted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+      await withdrawConflictingPendingApplications(String(req.params.id), [approveVid], approvedIsFleet ? [] : [approveDid], auth);
       pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/approve`, auth, { method: "POST" }).catch(() => {
       });
+      if (approveDid && (approveUpdate.rowCount || 0) > 0) {
+        const jobRow = await pool.query(`SELECT material FROM jobs WHERE id = $1`, [req.params.id]);
+        await notifyDriverJobAwarded(String(approveDid), String(req.params.id), jobRow.rows[0]?.material).catch(() => {
+        });
+      }
       return res.json({ ok: true });
     } catch (e) {
       console.error("Approve assignment error:", e.message);
@@ -2165,8 +4104,25 @@ async function registerRoutes(app2) {
   app2.put("/api/assignments/:assignmentId/vehicle", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
+      const aRow = await pool.query(
+        `SELECT ja.driver_id, ja.job_id, j.contractor_id FROM job_assignments ja
+         JOIN jobs j ON ja.job_id = j.id
+         WHERE ja.id = $1`,
+        [req.params.assignmentId]
+      );
+      if (aRow.rows.length === 0) return res.status(404).json({ message: "Assignment not found" });
+      const { driver_id, contractor_id, job_id: assignmentJobId } = aRow.rows[0];
+      if (String(contractor_id) !== auth.userId && String(driver_id) !== auth.userId) {
+        return res.status(403).json({ message: "You do not have permission to modify this assignment" });
+      }
       const { vehicleId, vehicle_id } = req.body;
       const vid = vehicleId || vehicle_id;
+      if (vid) {
+        const conflicts = await findApprovedTruckConflicts([vid], assignmentJobId);
+        if (conflicts.length > 0) {
+          return res.status(409).json({ message: bookingConflictMessage(conflicts), conflicts });
+        }
+      }
       await pool.query(`UPDATE job_assignments SET vehicle_id = $1 WHERE id = $2`, [vid, req.params.assignmentId]);
       pushToWebsite(`/api/job-assignments/${req.params.assignmentId}/vehicle`, auth, { method: "PUT", body: req.body }).catch(() => {
       });
@@ -2203,8 +4159,26 @@ async function registerRoutes(app2) {
           activeRunId: other.id
         });
       }
+      const jobOwnership = await pool.query(
+        `SELECT driver_id, contractor_id FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      const jobOwner = jobOwnership.rows[0];
+      const isDirectDriver = jobOwner && String(jobOwner.driver_id) === auth.userId;
+      const isJobContractor = jobOwner && String(jobOwner.contractor_id) === auth.userId;
+      if (!isDirectDriver && !isJobContractor) {
+        const assignCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.id, auth.userId]
+        );
+        if (assignCheck.rows.length === 0) {
+          return res.status(403).json({ code: "NOT_ASSIGNED", message: "You are not assigned to this job" });
+        }
+      }
       const jobRes = await pool.query(
-        `SELECT id, scheduled_date, pickup_time, origin_lat, origin_lng, destination_lat, destination_lng
+        `SELECT id, scheduled_date, pickup_time, origin_lat, origin_lng, destination_lat, destination_lng,
+                haul_both_ways, return_origin_lat, return_origin_lng, return_destination_lat, return_destination_lng
          FROM jobs WHERE id = $1`,
         [req.params.id]
       );
@@ -2219,62 +4193,38 @@ async function registerRoutes(app2) {
       if (job.scheduled_date) {
         const dateStr = String(job.scheduled_date).substring(0, 10);
         const [y, m, d] = dateStr.split("-").map(Number);
-        let scheduledStart;
-        if (job.pickup_time) {
-          const [hh, mm] = String(job.pickup_time).split(":").map(Number);
-          scheduledStart = new Date(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0, 0);
-        } else {
-          scheduledStart = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
-        }
-        const earliest = new Date(scheduledStart.getTime() - 30 * 60 * 1e3);
-        if (startedAt < earliest) {
-          const diffMin = Math.ceil((earliest.getTime() - startedAt.getTime()) / 6e4);
-          const startStr = scheduledStart.toLocaleString("en-US", {
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit"
-          });
-          return res.status(400).json({
-            code: "TOO_EARLY",
-            message: `Clock-in opens 30 min before the scheduled start (${startStr}). Try again in ${diffMin} min.`,
-            earliestAt: earliest.toISOString(),
-            scheduledStartAt: scheduledStart.toISOString()
-          });
+        if (y && m && d) {
+          const scheduledDayUTC = Date.UTC(y, m - 1, d);
+          const earliestAllowed = scheduledDayUTC - 24 * 60 * 60 * 1e3;
+          if (startedAt.getTime() < earliestAllowed) {
+            const startStr = new Date(scheduledDayUTC).toLocaleDateString("en-US", {
+              timeZone: "UTC",
+              weekday: "short",
+              month: "short",
+              day: "numeric"
+            });
+            return res.status(400).json({
+              code: "NOT_STARTED",
+              message: `This job starts ${startStr}. You can clock in any time on the job day.`,
+              scheduledStartAt: new Date(scheduledDayUTC).toISOString()
+            });
+          }
         }
       }
       const startLat = req.body?.lat ?? req.body?.start_lat ?? null;
       const startLng = req.body?.lng ?? req.body?.start_lng ?? null;
       const GEOFENCE_MILES = 15;
-      const haversineMiles = (lat1, lng1, lat2, lng2) => {
-        const toRad = (v) => v * Math.PI / 180;
-        const R = 3958.7613;
-        const dLat2 = toRad(lat2 - lat1);
-        const dLng2 = toRad(lng2 - lng1);
-        const a = Math.sin(dLat2 / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng2 / 2) ** 2;
-        return 2 * R * Math.asin(Math.sqrt(a));
-      };
-      const distanceToSegmentMiles = (pLat, pLng, aLat, aLng, bLat, bLng) => {
-        const meanLatRad = (aLat + bLat) / 2 * Math.PI / 180;
-        const milesPerDegLat = 69;
-        const milesPerDegLng = 69 * Math.cos(meanLatRad);
-        const ax = aLng * milesPerDegLng, ay = aLat * milesPerDegLat;
-        const bx = bLng * milesPerDegLng, by = bLat * milesPerDegLat;
-        const px = pLng * milesPerDegLng, py = pLat * milesPerDegLat;
-        const dx = bx - ax, dy = by - ay;
-        const lenSq = dx * dx + dy * dy;
-        if (lenSq === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
-        let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-        if (t < 0) t = 0;
-        else if (t > 1) t = 1;
-        const cx = ax + t * dx, cy = ay + t * dy;
-        return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
-      };
       const oLat = job.origin_lat ? Number(job.origin_lat) : null;
       const oLng = job.origin_lng ? Number(job.origin_lng) : null;
       const dLat = job.destination_lat ? Number(job.destination_lat) : null;
       const dLng = job.destination_lng ? Number(job.destination_lng) : null;
-      const hasJobCoords = oLat != null && oLng != null || dLat != null && dLng != null;
+      const bothWays = job.haul_both_ways === true;
+      const roLat = bothWays && job.return_origin_lat ? Number(job.return_origin_lat) : null;
+      const roLng = bothWays && job.return_origin_lng ? Number(job.return_origin_lng) : null;
+      const rdLat = bothWays && job.return_destination_lat ? Number(job.return_destination_lat) : null;
+      const rdLng = bothWays && job.return_destination_lng ? Number(job.return_destination_lng) : null;
+      const hasReturnCoords = roLat != null && roLng != null || rdLat != null && rdLng != null;
+      const hasJobCoords = oLat != null && oLng != null || dLat != null && dLng != null || hasReturnCoords;
       if (hasJobCoords) {
         if (startLat == null || startLng == null) {
           return res.status(400).json({
@@ -2284,25 +4234,42 @@ async function registerRoutes(app2) {
         }
         const driverLat = Number(startLat);
         const driverLng = Number(startLng);
-        if (isNaN(driverLat) || isNaN(driverLng)) {
-          return res.status(400).json({ code: "LOCATION_REQUIRED", message: "Invalid location data." });
-        }
-        let closest;
-        if (oLat != null && oLng != null && dLat != null && dLng != null) {
-          closest = distanceToSegmentMiles(driverLat, driverLng, oLat, oLng, dLat, dLng);
-        } else if (oLat != null && oLng != null) {
-          closest = haversineMiles(driverLat, driverLng, oLat, oLng);
-        } else {
-          closest = haversineMiles(driverLat, driverLng, dLat, dLng);
-        }
-        if (closest > GEOFENCE_MILES) {
-          const target = oLat != null && oLng != null && dLat != null && dLng != null ? "job route" : "job site";
-          return res.status(403).json({
-            code: "OUT_OF_GEOFENCE",
-            message: `You're ${closest.toFixed(1)} miles from the ${target}. Clock-in is allowed within ${GEOFENCE_MILES} miles of pickup, dropoff, or anywhere along the route.`,
-            distanceMiles: Math.round(closest * 10) / 10,
-            geofenceMiles: GEOFENCE_MILES
+        if (isNaN(driverLat) || isNaN(driverLng) || driverLat === 0 && driverLng === 0) {
+          return res.status(400).json({
+            code: "LOCATION_REQUIRED",
+            message: "Location is required to clock in. Enable location and try again."
           });
+        }
+        const legAir = [
+          airMilesToLeg(driverLat, driverLng, oLat, oLng, dLat, dLng),
+          hasReturnCoords ? airMilesToLeg(driverLat, driverLng, roLat, roLng, rdLat, rdLng) : null
+        ].filter((m) => m != null);
+        const airMiles = Math.min(...legAir);
+        if (airMiles > 1) {
+          const target = oLat != null && oLng != null && dLat != null && dLng != null ? "job route" : "job site";
+          const legRoad = await Promise.all([
+            roadMilesToJobArea(driverLat, driverLng, oLat, oLng, dLat, dLng),
+            hasReturnCoords ? roadMilesToJobArea(driverLat, driverLng, roLat, roLng, rdLat, rdLng) : Promise.resolve(null)
+          ]);
+          const validRoad = legRoad.filter((m) => m != null);
+          const roadMiles = validRoad.length > 0 ? Math.min(...validRoad) : null;
+          if (roadMiles != null) {
+            if (roadMiles > GEOFENCE_MILES) {
+              return res.status(403).json({
+                code: "OUT_OF_GEOFENCE",
+                message: `You're ${roadMiles.toFixed(1)} road miles from the ${target}. Clock-in is allowed within ${GEOFENCE_MILES} road miles of pickup, dropoff, or anywhere along the route.`,
+                distanceMiles: Math.round(roadMiles * 10) / 10,
+                geofenceMiles: GEOFENCE_MILES
+              });
+            }
+          } else if (airMiles > GEOFENCE_MILES) {
+            return res.status(403).json({
+              code: "OUT_OF_GEOFENCE",
+              message: `You're ${airMiles.toFixed(1)} miles from the ${target}. Clock-in is allowed within ${GEOFENCE_MILES} road miles of pickup, dropoff, or anywhere along the route.`,
+              distanceMiles: Math.round(airMiles * 10) / 10,
+              geofenceMiles: GEOFENCE_MILES
+            });
+          }
         }
       }
       const runId = crypto.randomUUID();
@@ -2332,11 +4299,44 @@ async function registerRoutes(app2) {
   app2.post("/api/job-runs/:runId/clock-out", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
-      const runRow = await pool.query(`SELECT job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
-      const jobIdForEnd = runRow.rows[0]?.job_id;
-      await pool.query(`UPDATE job_runs SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE id = $1`, [req.params.runId]);
+      const runRow = await pool.query(`SELECT job_id, driver_id, started_at FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.status(404).json({ message: "Run not found" });
+      const { job_id: jobIdForEnd, driver_id: runDriverId, started_at: runStartedAt } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [jobIdForEnd]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to clock out this run" });
+        }
+      }
+      const body = req.body || {};
+      const now = /* @__PURE__ */ new Date();
+      const customTime = body.custom_time || body.customTime || null;
+      let endedAt = customTime ? new Date(customTime) : now;
+      if (isNaN(endedAt.getTime())) endedAt = now;
+      let actualMin = null;
+      let billedMin = null;
+      if (runStartedAt) {
+        actualMin = Math.max(0, Math.round((endedAt.getTime() - new Date(runStartedAt).getTime()) / 6e4));
+        billedMin = billedMinutesFrom(actualMin);
+      }
+      const loads = body.loads_hauled != null ? Number(body.loads_hauled) : body.loadsHauled != null ? Number(body.loadsHauled) : null;
+      const endLat = body.lat != null ? Number(body.lat) : body.end_lat != null ? Number(body.end_lat) : null;
+      const endLng = body.lng != null ? Number(body.lng) : body.end_lng != null ? Number(body.end_lng) : null;
+      await pool.query(
+        `UPDATE job_runs SET
+           status = 'completed',
+           ended_at = $2,
+           actual_duration_minutes = COALESCE($3::int, actual_duration_minutes),
+           billed_duration_minutes = COALESCE($4::int, billed_duration_minutes),
+           loads_hauled = COALESCE($5::int, loads_hauled),
+           end_lat = COALESCE($6::numeric, end_lat),
+           end_lng = COALESCE($7::numeric, end_lng),
+           updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.runId, endedAt, actualMin, billedMin, loads, endLat, endLng]
+      );
       if (jobIdForEnd) {
-        pushToWebsite(`/api/jobs/${jobIdForEnd}/end`, auth, { method: "POST", body: { ...req.body || {}, runId: req.params.runId } }).catch(() => {
+        pushToWebsite(`/api/jobs/${jobIdForEnd}/end`, auth, { method: "POST", body: { ...body || {}, runId: req.params.runId } }).catch(() => {
         });
       }
       const result = await pool.query(`SELECT * FROM job_runs WHERE id = $1`, [req.params.runId]);
@@ -2346,12 +4346,120 @@ async function registerRoutes(app2) {
       return res.status(500).json({ message: "Failed to clock out" });
     }
   });
+  app2.post("/api/jobs/:id/truck-down", requireAuth, async (req, res) => {
+    try {
+      const auth = getWebsiteAuth(req);
+      const jobId = req.params.id;
+      const rawStatus = req.body?.status;
+      const clearing = rawStatus == null || rawStatus === "up" || rawStatus === "";
+      const VALID = /* @__PURE__ */ new Set(["back_shortly", "out_for_day"]);
+      if (!clearing && !VALID.has(rawStatus)) {
+        return res.status(400).json({ message: "Invalid truck-down status" });
+      }
+      const newStatus = clearing ? null : rawStatus;
+      const assignRes = await pool.query(
+        `SELECT id FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+         AND status::text IN ('approved','accepted')
+         ORDER BY created_at DESC LIMIT 1`,
+        [jobId, auth.userId]
+      );
+      if (assignRes.rows.length === 0) {
+        return res.status(403).json({ message: "You are not assigned to this job" });
+      }
+      const assignmentId = assignRes.rows[0].id;
+      await pool.query(
+        `UPDATE job_assignments
+         SET truck_down_status = $1::text,
+             truck_down_at = CASE WHEN $1::text IS NULL THEN NULL ELSE NOW() END
+         WHERE id = $2`,
+        [newStatus, assignmentId]
+      );
+      if (newStatus === "out_for_day") {
+        const activeRun = await pool.query(
+          `SELECT id FROM job_runs WHERE job_id = $1 AND driver_id = $2 AND status::text = 'active'
+           AND started_at::date = CURRENT_DATE
+           ORDER BY created_at DESC LIMIT 1`,
+          [jobId, auth.userId]
+        );
+        if (activeRun.rows.length > 0) {
+          const runId = activeRun.rows[0].id;
+          await pool.query(
+            `UPDATE job_runs SET status = 'completed', ended_at = NOW(), updated_at = NOW() WHERE id = $1`,
+            [runId]
+          );
+          pushToWebsite(`/api/jobs/${jobId}/end`, auth, { method: "POST", body: { runId } }).catch(() => {
+          });
+        }
+      }
+      const driverRow = await pool.query(`SELECT full_name FROM users WHERE id = $1`, [auth.userId]);
+      const driverName = driverRow.rows[0]?.full_name || "The driver";
+      let messageBody;
+      let notifTitle;
+      if (newStatus === "back_shortly") {
+        messageBody = `\u{1F527} Truck Down \u2014 ${driverName} will be back with you shortly.`;
+        notifTitle = "Truck Down";
+      } else if (newStatus === "out_for_day") {
+        messageBody = `\u{1F527} Truck Down \u2014 ${driverName} is out for the day.`;
+        notifTitle = "Truck Down";
+      } else {
+        messageBody = `\u2705 ${driverName}'s truck is back up and running.`;
+        notifTitle = "Truck Back Up";
+      }
+      const msgId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO job_messages (id, job_id, sender_id, body, read, created_at) VALUES ($1, $2, $3, $4, false, NOW())`,
+        [msgId, jobId, auth.userId, messageBody]
+      );
+      pushToWebsite(`/api/jobs/${jobId}/messages`, auth, { method: "POST", body: { body: messageBody } }).catch(() => {
+      });
+      const jobRow = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [jobId]);
+      const contractorId = jobRow.rows[0]?.contractor_id;
+      if (contractorId && String(contractorId) !== auth.userId) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+           VALUES ($1, $2, 'general', $3, $4, $5, false, NOW())`,
+          [crypto.randomUUID(), contractorId, notifTitle, messageBody, jobId]
+        );
+      }
+      return res.json(addDualKeys({
+        id: assignmentId,
+        truck_down_status: newStatus,
+        truck_down_at: newStatus ? (/* @__PURE__ */ new Date()).toISOString() : null
+      }));
+    } catch (e) {
+      console.error("Truck-down error:", e.message);
+      return res.status(500).json({ message: "Failed to update truck status" });
+    }
+  });
   app2.patch("/api/job-runs/:runId", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const runRow = await pool.query(`SELECT driver_id, job_id, started_at, ended_at FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.status(404).json({ message: "Run not found" });
+      const { driver_id: runDriverId, job_id: runJobId, started_at: existingStart, ended_at: existingEnd } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [runJobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to update this run" });
+        }
+      }
+      const body = { ...req.body };
+      if ("started_at" in body || "ended_at" in body || "startedAt" in body || "endedAt" in body) {
+        const s = body.started_at ?? body.startedAt ?? existingStart;
+        const e = body.ended_at ?? body.endedAt ?? existingEnd;
+        if (s && e) {
+          const sd = new Date(s), ed = new Date(e);
+          if (!isNaN(sd.getTime()) && !isNaN(ed.getTime()) && ed.getTime() > sd.getTime()) {
+            const actual = Math.max(0, Math.round((ed.getTime() - sd.getTime()) / 6e4));
+            body.actual_duration_minutes = actual;
+            body.billed_duration_minutes = billedMinutesFrom(actual);
+          }
+        }
+      }
       const updates = [];
       const values = [];
       let idx = 1;
-      for (const [k, v] of Object.entries(req.body)) {
+      for (const [k, v] of Object.entries(body)) {
         if (v !== void 0) {
           updates.push(`${camelToSnake2(k)} = $${idx}`);
           values.push(v);
@@ -2371,6 +4479,16 @@ async function registerRoutes(app2) {
   });
   app2.delete("/api/job-runs/:runId", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const runRow = await pool.query(`SELECT driver_id, job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.json({ ok: true });
+      const { driver_id: runDriverId, job_id: runJobId } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [runJobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to delete this run" });
+        }
+      }
       await pool.query(`DELETE FROM job_runs WHERE id = $1`, [req.params.runId]);
       return res.json({ ok: true });
     } catch {
@@ -2381,12 +4499,19 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const id = crypto.randomUUID();
-      const runResult = await pool.query(`SELECT job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
-      const jobId = runResult.rows[0]?.job_id || null;
+      const runResult = await pool.query(`SELECT job_id, driver_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runResult.rows.length === 0) return res.status(404).json({ message: "Run not found" });
+      const { job_id: jobId, driver_id: runDriverId } = runResult.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [jobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to add tickets to this run" });
+        }
+      }
       await pool.query(
         `INSERT INTO weight_tickets (id, job_run_id, job_id, driver_id, weight_value, notes, image_data, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-        [id, req.params.runId, jobId, auth.userId, req.body.weightValue || req.body.weight_value, req.body.notes, req.body.imageData || req.body.image_data]
+        [id, req.params.runId, jobId, auth.userId, req.body.weightValue || req.body.weight_value, req.body.notes, req.body.imageData || req.body.image_data || req.body.image_base64 || req.body.imageBase64]
       );
       const result = await pool.query(`SELECT * FROM weight_tickets WHERE id = $1`, [id]);
       return res.status(201).json(addDualKeys(result.rows[0]));
@@ -2397,6 +4522,19 @@ async function registerRoutes(app2) {
   });
   app2.get("/api/jobs/:jobId/weight-tickets", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length === 0) return res.json([]);
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isParticipant = String(contractor_id) === auth.userId || String(driver_id) === auth.userId;
+      if (!isParticipant) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.jobId, auth.userId]
+        );
+        if (aCheck.rows.length === 0) return res.status(403).json({ message: "You do not have access to these weight tickets" });
+      }
       const result = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1 ORDER BY created_at`, [req.params.jobId]);
       return res.json(result.rows.map(addDualKeys));
     } catch {
@@ -2405,6 +4543,16 @@ async function registerRoutes(app2) {
   });
   app2.get("/api/job-runs/:runId/weight-tickets", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const runRow = await pool.query(`SELECT driver_id, job_id FROM job_runs WHERE id = $1`, [req.params.runId]);
+      if (runRow.rows.length === 0) return res.json([]);
+      const { driver_id: runDriverId, job_id: runJobId } = runRow.rows[0];
+      if (String(runDriverId) !== auth.userId) {
+        const contractorCheck = await pool.query(`SELECT contractor_id FROM jobs WHERE id = $1`, [runJobId]);
+        if (!contractorCheck.rows[0] || String(contractorCheck.rows[0].contractor_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have access to these weight tickets" });
+        }
+      }
       const result = await pool.query(`SELECT * FROM weight_tickets WHERE job_run_id = $1 ORDER BY created_at`, [req.params.runId]);
       return res.json(result.rows.map(addDualKeys));
     } catch {
@@ -2445,6 +4593,14 @@ async function registerRoutes(app2) {
   });
   app2.post("/api/conversations/:jobId/delete", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length > 0) {
+        const { contractor_id, driver_id } = jobRow.rows[0];
+        if (String(contractor_id) !== auth.userId && String(driver_id) !== auth.userId) {
+          return res.status(403).json({ message: "You do not have permission to delete this conversation" });
+        }
+      }
       await pool.query(`DELETE FROM job_messages WHERE job_id = $1`, [req.params.jobId]);
     } catch {
     }
@@ -2467,6 +4623,21 @@ async function registerRoutes(app2) {
   });
   app2.get("/api/messages/:jobId", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length === 0) return res.json([]);
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isParticipant = String(contractor_id) === auth.userId || String(driver_id) === auth.userId;
+      if (!isParticipant) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.jobId, auth.userId]
+        );
+        if (aCheck.rows.length === 0) {
+          return res.status(403).json({ message: "You do not have access to this conversation" });
+        }
+      }
       const result = await pool.query(
         `SELECT jm.*, u.full_name as sender_name FROM job_messages jm
          LEFT JOIN users u ON jm.sender_id = u.id
@@ -2481,6 +4652,20 @@ async function registerRoutes(app2) {
   app2.post("/api/messages/:jobId", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
+      const jobRow = await pool.query(`SELECT contractor_id, driver_id FROM jobs WHERE id = $1`, [req.params.jobId]);
+      if (jobRow.rows.length === 0) return res.status(404).json({ message: "Job not found" });
+      const { contractor_id, driver_id } = jobRow.rows[0];
+      const isParticipant = String(contractor_id) === auth.userId || String(driver_id) === auth.userId;
+      if (!isParticipant) {
+        const aCheck = await pool.query(
+          `SELECT 1 FROM job_assignments WHERE job_id = $1 AND driver_id = $2
+           AND status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired') LIMIT 1`,
+          [req.params.jobId, auth.userId]
+        );
+        if (aCheck.rows.length === 0) {
+          return res.status(403).json({ message: "You are not a participant in this conversation" });
+        }
+      }
       const id = crypto.randomUUID();
       const body = req.body.body || req.body.message || req.body.content || "";
       await pool.query(
@@ -2499,17 +4684,65 @@ async function registerRoutes(app2) {
   app2.get("/api/profile", requireAuth, async (req, res) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    return res.json(addDualKeys(auth.user));
+    await hydrateUserFromDb(auth.user);
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
   app2.put("/api/profile", requireAuth, async (req, res) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
-    Object.assign(auth.user, req.body);
+    const PROFILE_ALLOWLIST = /* @__PURE__ */ new Set([
+      "fullName",
+      "full_name",
+      "phone",
+      "profileImageUrl",
+      "profile_image_url",
+      "bio",
+      "primaryLocation",
+      "primary_location",
+      "secondaryLocation",
+      "secondary_location",
+      "truckType",
+      "truck_type",
+      "truckCapacity",
+      "truck_capacity",
+      "cdlClass",
+      "cdl_class",
+      "insuranceInfo",
+      "insurance_info",
+      "company",
+      "website",
+      "address",
+      "city",
+      "state",
+      "zipCode",
+      "zip_code",
+      "alsoDriver",
+      "also_driver",
+      "notificationPreferences",
+      "notification_preferences",
+      "expoPushToken",
+      "expo_push_token",
+      "confirmationSoundEnabled",
+      "confirmation_sound_enabled"
+    ]);
+    const safeBody = {};
+    for (const [k, v] of Object.entries(req.body || {})) {
+      if (PROFILE_ALLOWLIST.has(k)) {
+        safeBody[k] = v;
+      }
+    }
+    if ("also_driver" in safeBody || "alsoDriver" in safeBody) {
+      const accountRole = String(auth.originalRole || auth.user?.role || "");
+      if (!accountRole.includes("trucking_company")) {
+        return res.status(403).json({ message: "Only trucking company accounts can enable 'I also drive'." });
+      }
+    }
+    Object.assign(auth.user, safeBody);
     try {
       const updates = [];
       const values = [];
       let idx = 1;
-      for (const [k, v] of Object.entries(req.body)) {
+      for (const [k, v] of Object.entries(safeBody)) {
         if (v !== void 0) {
           updates.push(`${camelToSnake2(k)} = $${idx}`);
           values.push(v);
@@ -2529,7 +4762,7 @@ async function registerRoutes(app2) {
       tokenToJwt.set(localToken, auth);
       saveJsonMap("sessions.json", tokenToJwt);
     }
-    return res.json(addDualKeys(auth.user));
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
   app2.put("/api/profile/status", requireAuth, async (req, res) => {
     const auth = getWebsiteAuth(req);
@@ -2542,17 +4775,44 @@ async function registerRoutes(app2) {
       await pool.query(`UPDATE users SET is_connected = $1, updated_at = NOW() WHERE id = $2`, [newStatus, auth.userId]);
     } catch {
     }
-    return res.json(addDualKeys(auth.user));
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
   app2.put("/api/profile/role", requireAuth, async (req, res) => {
     const auth = getWebsiteAuth(req);
     if (!auth) return res.status(401).json({ message: "Not authenticated" });
     const { role } = req.body;
-    if (role) {
-      auth.user.role = role;
+    if (!role) {
+      return res.status(400).json({ message: "Role is required" });
+    }
+    const baseRole = auth.originalRole || auth.user.role;
+    const entitlementRoles = allowedRolesForUser(String(baseRole));
+    const SELF_SERVE_COMPANY_ROLES = ["trucking_company", "contractor", "trucking_company_contractor", "broker"];
+    const permitted = new Set(entitlementRoles);
+    if (SELF_SERVE_COMPANY_ROLES.includes(String(baseRole))) {
+      SELF_SERVE_COMPANY_ROLES.forEach((r) => permitted.add(r));
+    }
+    if (!permitted.has(String(role))) {
+      return res.status(403).json({ message: "You are not authorized to switch to this role." });
+    }
+    auth.user.role = role;
+    const isCompoundViewSwitch = entitlementRoles.length > 1 && entitlementRoles.includes(String(role));
+    if (!String(auth.jwt).startsWith("dev-local:") && !isCompoundViewSwitch) {
       try {
         await pool.query(`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`, [role, auth.userId]);
+        auth.originalRole = role;
       } catch {
+      }
+      try {
+        const ur = await websiteFetch(`/api/users/${auth.userId}`, {
+          method: "PUT",
+          body: { role },
+          jwt: auth.jwt
+        });
+        if (!ur.ok) {
+          console.error(`[RoleSync] Failed to push role '${role}' to website for ${auth.userId}: ${ur.status}`);
+        }
+      } catch (e) {
+        console.error(`[RoleSync] Error pushing role to website:`, e.message);
       }
     }
     const localToken = req.headers.authorization?.slice(7) || "";
@@ -2560,18 +4820,34 @@ async function registerRoutes(app2) {
       tokenToJwt.set(localToken, auth);
       saveJsonMap("sessions.json", tokenToJwt);
     }
-    return res.json(addDualKeys(auth.user));
+    return res.json(userPayload(auth.user, auth.originalRole));
   });
   app2.get("/api/drivers/search", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
       const search = req.query.q || req.query.search || "";
-      let query = `SELECT id, full_name, email, phone, truck_type, rating, total_jobs, profile_image_url, is_connected FROM users WHERE (role LIKE '%driver%' OR also_driver = true)`;
-      const params = [];
+      let query = `
+        SELECT
+          u.id, u.full_name, u.truck_type, u.rating, u.total_jobs,
+          u.profile_image_url, u.is_connected,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM jobs j
+            WHERE (j.contractor_id = $1 OR j.driver_id = $1)
+              AND (j.contractor_id = u.id OR j.driver_id = u.id)
+          ) THEN u.email ELSE NULL END AS email,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM jobs j
+            WHERE (j.contractor_id = $1 OR j.driver_id = $1)
+              AND (j.contractor_id = u.id OR j.driver_id = u.id)
+          ) THEN u.phone ELSE NULL END AS phone
+        FROM users u
+        WHERE (u.role LIKE '%driver%' OR u.also_driver = true OR u.id = $1)`;
+      const params = [auth.userId];
       if (search) {
-        query += ` AND (full_name ILIKE $1 OR email ILIKE $1)`;
+        query += ` AND (u.full_name ILIKE $2)`;
         params.push(`%${search}%`);
       }
-      query += ` ORDER BY rating DESC LIMIT 50`;
+      query += ` ORDER BY u.rating DESC LIMIT 50`;
       const result = await pool.query(query, params);
       return res.json(result.rows.map(addDualKeys));
     } catch {
@@ -2616,6 +4892,12 @@ async function registerRoutes(app2) {
   });
   app2.put("/api/vehicles/:id", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       const fieldMap = {
         truck_type: "truck_type",
         truckType: "truck_type",
@@ -2670,12 +4952,19 @@ async function registerRoutes(app2) {
   });
   app2.delete("/api/vehicles/:id", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       deletedVehicleIds.add(req.params.id);
       await pool.query(`UPDATE trucks SET archived_at = NOW(), is_active = false WHERE id = $1`, [req.params.id]);
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
     } catch (e) {
       console.error("Archive vehicle error:", e.message);
+      return res.status(500).json({ message: "Failed to archive vehicle" });
     }
     return res.json({ ok: true });
   });
@@ -2716,6 +5005,12 @@ async function registerRoutes(app2) {
   });
   app2.post("/api/vehicles/:id/unarchive", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       deletedVehicleIds.delete(req.params.id);
       await pool.query(`UPDATE trucks SET archived_at = NULL, is_active = true WHERE id = $1`, [req.params.id]);
       return res.json({ ok: true });
@@ -2726,6 +5021,12 @@ async function registerRoutes(app2) {
   });
   app2.get("/api/vehicles/:vehicleId/jobs", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
+      const owned = await pool.query(
+        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        [req.params.vehicleId, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       const result = await pool.query(
         `SELECT j.* FROM jobs j JOIN job_assignments ja ON j.id = ja.job_id WHERE ja.vehicle_id = $1 ORDER BY j.scheduled_date DESC`,
         [req.params.vehicleId]
@@ -2825,6 +5126,163 @@ async function registerRoutes(app2) {
     }
     return res.json({ ok: true });
   });
+  const HIDDEN_INVITES_FILE = "hidden_invitations.json";
+  const hiddenInvitesByUser = (() => {
+    try {
+      const parsed = JSON.parse(readFileSync(join(DATA_DIR, HIDDEN_INVITES_FILE), "utf-8"));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  })();
+  function hideInvitationForUser(userId, inviteId) {
+    const list = hiddenInvitesByUser[userId] || (hiddenInvitesByUser[userId] = []);
+    if (!list.includes(inviteId)) list.push(inviteId);
+    if (list.length > 500) hiddenInvitesByUser[userId] = list.slice(list.length - 500);
+    try {
+      writeFileSync(join(DATA_DIR, HIDDEN_INVITES_FILE), JSON.stringify(hiddenInvitesByUser), "utf-8");
+    } catch {
+    }
+  }
+  app2.post("/api/driver-invitations", requireAuth, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    let role = (auth.user?.role || "").toLowerCase();
+    try {
+      const dbRole = await pool.query(`SELECT role FROM users WHERE id = $1`, [auth.userId]);
+      const r = (dbRole.rows[0]?.role || "").toLowerCase();
+      if (r) role = r.includes(role) || !role ? r : `${r}_${role}`;
+    } catch {
+    }
+    const canInvite = role.includes("contractor") || role.includes("trucking_company");
+    if (!canInvite) {
+      return res.status(403).json({ message: "Only contractors and trucking companies can send invitations." });
+    }
+    const email = (req.body?.email || req.body?.driverEmail || "").trim().toLowerCase();
+    const type = (req.body?.type || req.body?.invitationType || "driver").trim();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({ message: "A valid email address is required." });
+    }
+    if (type !== "driver" && type !== "foreman") {
+      return res.status(400).json({ message: "Invitation type must be 'driver' or 'foreman'." });
+    }
+    if (type === "driver" && !role.includes("trucking_company")) {
+      return res.status(403).json({ message: "Only trucking companies can invite drivers." });
+    }
+    if (type === "foreman" && !role.includes("contractor")) {
+      return res.status(403).json({ message: "Only contractors can invite foremen." });
+    }
+    const firstName = (req.body?.firstName || req.body?.driverFirstName || "").trim();
+    const lastName = (req.body?.lastName || req.body?.driverLastName || "").trim();
+    const phone = (req.body?.phone || req.body?.driverPhone || "").trim();
+    const message = (req.body?.message || "").trim();
+    const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+    const payload = {
+      email,
+      driverEmail: email,
+      driver_email: email,
+      invitationType: type,
+      invitation_type: type,
+      type
+    };
+    if (firstName) {
+      payload.driverFirstName = firstName;
+      payload.driver_first_name = firstName;
+    }
+    if (lastName) {
+      payload.driverLastName = lastName;
+      payload.driver_last_name = lastName;
+    }
+    if (fullName) {
+      payload.driverName = fullName;
+      payload.driver_name = fullName;
+    }
+    if (phone) {
+      payload.driverPhone = phone;
+      payload.driver_phone = phone;
+    }
+    if (message) {
+      payload.message = message;
+    }
+    try {
+      const websiteRes = await websiteFetch("/api/invitations", {
+        method: "POST",
+        body: payload,
+        jwt: auth.jwt
+      });
+      const text2 = await websiteRes.text();
+      let data = {};
+      try {
+        data = JSON.parse(text2);
+      } catch {
+      }
+      if (!websiteRes.ok) {
+        if (websiteRes.status === 401) {
+          return res.status(401).json({ message: "Your session expired. Please try again." });
+        }
+        const msg = data?.message || data?.error || "Could not send the invitation. Please try again.";
+        return res.status(400).json({ message: msg });
+      }
+      return res.json(addDualKeys(data?.invitation || data || { ok: true }));
+    } catch (e) {
+      console.error("Invitation send error:", e.message);
+      return res.status(502).json({ message: "Could not reach the LoadLink service to send the invitation." });
+    }
+  });
+  app2.get("/api/driver-invitations", requireAuth, async (req, res) => {
+    try {
+      const auth = getWebsiteAuth(req);
+      const role = (auth.user?.role || "").toLowerCase();
+      if (!(role.includes("contractor") || role.includes("trucking_company"))) {
+        return res.json([]);
+      }
+      if (auth.jwt) {
+        try {
+          const websiteRes = await websiteFetch("/api/invitations", { jwt: auth.jwt });
+          if (websiteRes.ok) {
+            const data = await websiteRes.json();
+            const list = Array.isArray(data) ? data : data?.invitations || [];
+            const seen = /* @__PURE__ */ new Set();
+            const hidden = new Set(hiddenInvitesByUser[String(auth.userId)] || []);
+            const unique = list.filter((inv) => {
+              const id = String(inv?.id ?? "");
+              if (!id || seen.has(id) || hidden.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+            return res.json(unique.map(addDualKeys));
+          }
+          if (websiteRes.status === 401) {
+            return res.status(401).json({ message: "Your session expired. Please try again." });
+          }
+        } catch (e) {
+          console.error("Website invitation list error:", e.message);
+        }
+      }
+      const result = await pool.query(
+        `SELECT * FROM driver_invitations
+         WHERE contractor_id = $1 OR trucking_company_id = $1
+         ORDER BY created_at DESC LIMIT 100`,
+        [auth.userId]
+      );
+      const hiddenLocal = new Set(hiddenInvitesByUser[String(auth.userId)] || []);
+      return res.json(result.rows.filter((r) => !hiddenLocal.has(String(r.id))).map(addDualKeys));
+    } catch (e) {
+      console.error("Invitation list error:", e.message);
+      return res.json([]);
+    }
+  });
+  app2.delete("/api/driver-invitations/:id", requireAuth, async (req, res) => {
+    try {
+      const auth = getWebsiteAuth(req);
+      const inviteId = String(req.params.id || "").trim();
+      if (!inviteId) return res.status(400).json({ message: "Missing invitation id." });
+      hideInvitationForUser(String(auth.userId), inviteId);
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("Invitation remove error:", e.message);
+      return res.status(500).json({ message: "Could not remove the invitation. Please try again." });
+    }
+  });
   app2.get("/api/dashboard", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
@@ -2880,7 +5338,9 @@ async function registerRoutes(app2) {
           console.error("Fleet runs query error:", fleetErr.message);
         }
       }
-      const today = /* @__PURE__ */ new Date();
+      const rawTz = Number(req.header("X-TZ-Offset"));
+      const tzOffsetMin = Number.isFinite(rawTz) ? rawTz : 0;
+      const today = new Date(Date.now() - tzOffsetMin * 6e4);
       today.setHours(0, 0, 0, 0);
       const horizonDays = 7;
       const lastDay = new Date(today);
@@ -2889,10 +5349,11 @@ async function registerRoutes(app2) {
       const startDateStr = fmtDate(today);
       const endDateStr = fmtDate(lastDay);
       const isContractorOnly = role.includes("contractor") && role !== "trucking_company";
+      const isPosterView = isContractorOnly || role === "broker";
       let userTrucks = [];
       let truckAssignments = [];
       let contractorJobsForDays = [];
-      if (isContractorOnly) {
+      if (isPosterView) {
         try {
           const cjRes = await pool.query(
             `SELECT j.id,
@@ -2908,7 +5369,9 @@ async function registerRoutes(app2) {
                     (SELECT COUNT(*)::int FROM job_assignments ja
                        WHERE ja.job_id = j.id AND ja.status::text = 'approved') AS trucks_assigned,
                     (SELECT COUNT(*)::int FROM job_assignments ja
-                       WHERE ja.job_id = j.id) AS applications_count
+                       WHERE ja.job_id = j.id) AS applications_count,
+                    (SELECT COUNT(*)::int FROM job_runs jr
+                       WHERE jr.job_id = j.id AND jr.status::text = 'active') AS active_run_count
                FROM jobs j
                LEFT JOIN contractor_projects cp ON j.project_id = cp.id
               WHERE j.contractor_id = $1
@@ -3015,7 +5478,7 @@ async function registerRoutes(app2) {
         const d = new Date(today);
         d.setDate(today.getDate() + i);
         const dDateStr = fmtDate(d);
-        if (isContractorOnly) {
+        if (isPosterView) {
           const dayJobs = contractorJobsForDays.filter(
             (j) => j.workingDates && j.workingDates.has(dDateStr)
           );
@@ -3036,6 +5499,7 @@ async function registerRoutes(app2) {
               trucksNeeded: j.trucks_needed || 1,
               assigned: j.trucks_assigned || 0,
               applied: j.applications_count || 0,
+              activeRunCount: j.active_run_count || 0,
               status: j.job_status
             }))
           });
@@ -3088,7 +5552,49 @@ async function registerRoutes(app2) {
           }))
         });
       }
+      let brokerConfirmations;
+      if (role === "broker" && auth.jwt && !auth.jwt.startsWith("dev-local:")) {
+        try {
+          const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt: auth.jwt });
+          if (jr.ok) {
+            const bJobs = await jr.json().catch(() => []);
+            const byDay = /* @__PURE__ */ new Map();
+            for (const job of Array.isArray(bJobs) ? bJobs : []) {
+              const jd = String(job.scheduledDate || job.scheduled_date || "").slice(0, 10);
+              if (!jd) continue;
+              const s = job.assignmentStats || {};
+              const cur = byDay.get(jd) || { confirmed: 0, sent: 0, declined: 0, jobs: 0, held: 0, heldJobIds: [] };
+              cur.confirmed += Number(s.confirmed ?? s.confirmedCount) || 0;
+              cur.sent += Number(s.sent ?? s.sentCount) || 0;
+              cur.declined += Number(s.declined ?? s.declinedCount) || 0;
+              cur.jobs += 1;
+              const heldHere = Number(s.held ?? s.heldCount) || 0;
+              if (heldHere > 0) {
+                cur.held += heldHere;
+                cur.heldJobIds.push(String(job.id));
+              }
+              byDay.set(jd, cur);
+            }
+            brokerConfirmations = upcomingDays.map((d) => {
+              const g = byDay.get(d.date) || { confirmed: 0, sent: 0, declined: 0, jobs: 0, held: 0, heldJobIds: [] };
+              const totalOut = g.confirmed + g.sent;
+              return {
+                date: d.date,
+                confirmed: g.confirmed,
+                totalSent: totalOut,
+                declined: g.declined,
+                held: g.held,
+                heldJobIds: g.heldJobIds,
+                allConfirmed: totalOut > 0 && g.confirmed >= totalOut
+              };
+            });
+          }
+        } catch (e) {
+          console.error("Dashboard broker confirmations error:", e.message);
+        }
+      }
       const dashboard = {
+        brokerConfirmations,
         openJobs,
         activeJobs,
         completedJobs,
@@ -3119,16 +5625,73 @@ async function registerRoutes(app2) {
   app2.get("/api/earnings", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
-      const result = await pool.query(
-        `SELECT COALESCE(SUM(total_amount), 0)::float as total,
-                COALESCE(SUM(CASE WHEN status::text = 'payment_received' THEN total_amount ELSE 0 END), 0)::float as paid,
-                COALESCE(SUM(CASE WHEN status::text IN ('open', 'issued', 'payment_sent') THEN total_amount ELSE 0 END), 0)::float as pending
-         FROM monthly_invoices WHERE driver_id = $1`,
+      const period = req.query.period || "all";
+      let dateFilter = "";
+      if (period === "week") {
+        dateFilter = `AND COALESCE(j.completed_date, j.scheduled_date) >= date_trunc('week', now())`;
+      } else if (period === "month") {
+        dateFilter = `AND COALESCE(j.completed_date, j.scheduled_date) >= date_trunc('month', now())`;
+      }
+      const jobsRes = await pool.query(
+        `SELECT j.*, c.company AS contractor_company, c.full_name AS contractor_name
+         FROM jobs j
+         LEFT JOIN users c ON c.id = j.contractor_id
+         WHERE (j.driver_id = $1
+                OR j.id IN (SELECT job_id FROM job_assignments
+                            WHERE driver_id = $1 AND status::text = 'approved'))
+           AND j.archived_at IS NULL
+           AND j.status::text IN ('completed', 'in_progress')
+           ${dateFilter}
+         ORDER BY COALESCE(j.completed_date, j.scheduled_date) DESC NULLS LAST`,
         [auth.userId]
       );
-      return res.json(addDualKeys(result.rows[0] || { total: 0, paid: 0, pending: 0 }));
-    } catch {
-      return res.json({ total: 0, paid: 0, pending: 0 });
+      let total = 0, paid = 0, pending = 0;
+      const earnings = [];
+      for (const job of jobsRes.rows) {
+        const calc = await computeJobEarnings(job);
+        const amount = Number(calc.earnings.toFixed(2));
+        const payStatus = job.payment_status || "unpaid";
+        const status = job.status === "in_progress" ? "in_progress" : payStatus;
+        total += amount;
+        if (payStatus === "payment_received") paid += amount;
+        else pending += amount;
+        const dateVal = job.completed_date || job.scheduled_date;
+        earnings.push(addDualKeys({
+          id: job.id,
+          job_id: job.id,
+          material: job.material,
+          contractor_company: job.contractor_company || job.contractor_name || "",
+          date: dateVal ? new Date(dateVal).toISOString() : "",
+          completed_date: job.completed_date ? new Date(job.completed_date).toISOString() : null,
+          billed_hours: Number((calc.totalMinutes / 60).toFixed(1)),
+          rate: Number(job.rate || 0),
+          rate_type: job.rate_type,
+          amount,
+          status,
+          sessions: calc.runs.length,
+          total_loads: calc.totalLoads
+        }));
+      }
+      total = Number(total.toFixed(2));
+      paid = Number(paid.toFixed(2));
+      pending = Number(pending.toFixed(2));
+      return res.json({
+        earnings,
+        stats: {
+          totalEarnings: total,
+          paidAmount: paid,
+          pendingAmount: pending,
+          total_earnings: total,
+          paid_amount: paid,
+          pending_amount: pending
+        },
+        total,
+        paid,
+        pending
+      });
+    } catch (e) {
+      console.error("GET /api/earnings error:", e.message);
+      return res.json({ earnings: [], stats: { totalEarnings: 0, paidAmount: 0, pendingAmount: 0 }, total: 0, paid: 0, pending: 0 });
     }
   });
   app2.get("/api/contractor/jobs", requireAuth, async (req, res) => {
@@ -3140,7 +5703,8 @@ async function registerRoutes(app2) {
       const search = req.query.search;
       let query = `SELECT j.*, cp.name as project_name,
           COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'pending'), 0) as pending_applications,
-          COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'approved'), 0) as approved_assignments
+          COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'approved'), 0) as approved_assignments,
+          COALESCE((SELECT COUNT(*)::int FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active'), 0) as active_run_count
         FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
       const params = [contractorId];
       let paramIdx = 2;
@@ -3165,9 +5729,12 @@ async function registerRoutes(app2) {
       if (status) {
         const statusLower = status.toLowerCase();
         if (statusLower === "in_progress" || statusLower === "active") {
-          query += ` AND j.status::text IN ('in_progress', 'accepted', 'pending')`;
+          query += ` AND (j.status::text IN ('in_progress', 'accepted', 'pending')
+            OR (j.status::text NOT IN ('completed', 'cancelled')
+                AND EXISTS (SELECT 1 FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active')))`;
         } else if (statusLower === "open") {
-          query += ` AND j.status::text IN ('open', 'accepted', 'pending')`;
+          query += ` AND j.status::text IN ('open', 'accepted', 'pending')
+            AND NOT EXISTS (SELECT 1 FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active')`;
         } else {
           query += ` AND j.status::text = $${paramIdx}`;
           params.push(statusLower);
@@ -3177,6 +5744,12 @@ async function registerRoutes(app2) {
       if (search) {
         query += ` AND (j.material_type ILIKE $${paramIdx} OR j.pickup_location ILIKE $${paramIdx} OR j.dropoff_location ILIKE $${paramIdx})`;
         params.push(`%${search}%`);
+        paramIdx++;
+      }
+      const truckType = req.query.truck_type;
+      if (truckType) {
+        query += ` AND j.truck_type::text = $${paramIdx}`;
+        params.push(truckType);
         paramIdx++;
       }
       query += ` ORDER BY j.scheduled_date ASC NULLS LAST, j.created_at DESC`;
@@ -3192,12 +5765,44 @@ async function registerRoutes(app2) {
       const auth = getWebsiteAuth(req);
       const result = await pool.query(
         `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
-         WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
+         WHERE (j.driver_id = $1 OR j.id IN (
+           SELECT ja.job_id FROM job_assignments ja
+           WHERE ja.driver_id = $1
+             AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
+               SELECT 1 FROM users bu
+               WHERE bu.id::text = j.contractor_id::text AND bu.role::text = 'broker'))))
          AND j.archived_at IS NULL
          ORDER BY j.created_at DESC`,
         [auth.userId]
       );
-      return res.json(result.rows.map(addDualKeys));
+      const rows = result.rows.map(addDualKeys);
+      try {
+        const pend = await pool.query(
+          `SELECT ja.id, ja.job_id, ja.sent_at
+           FROM job_assignments ja
+           JOIN jobs bj ON bj.id = ja.job_id
+           JOIN users bu ON bu.id::text = bj.contractor_id::text AND bu.role::text = 'broker'
+           WHERE ja.driver_id::text = $1
+             AND ja.status::text = 'pending'
+             AND ja.sent_at IS NOT NULL`,
+          [auth.userId]
+        );
+        const byJob = new Map(pend.rows.map((r) => [String(r.job_id), r]));
+        for (const row of rows) {
+          const m = byJob.get(String(row.id));
+          if (m) {
+            row.needsConfirmation = true;
+            row.needs_confirmation = true;
+            row.assignmentId = m.id;
+            row.assignment_id = m.id;
+            row.assignmentSentAt = m.sent_at;
+            row.assignment_sent_at = m.sent_at;
+          }
+        }
+      } catch (e) {
+        console.error("GET /api/driver/jobs broker annotate error:", e.message);
+      }
+      return res.json(rows);
     } catch {
       return res.json([]);
     }
@@ -3212,7 +5817,7 @@ async function registerRoutes(app2) {
     while (added < days) {
       const dow = current.getUTCDay();
       const isWeekendDay = dow === 0 || dow === 6;
-      const dayAllowed = !isWeekendDay ? true : includesWeekends && (dow === 6 && includesSaturday || dow === 0 && includesSunday);
+      const dayAllowed = added === 0 ? true : !isWeekendDay ? true : includesWeekends && (dow === 6 && includesSaturday || dow === 0 && includesSunday);
       if (dayAllowed) {
         const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, "0")}-${String(current.getUTCDate()).padStart(2, "0")}`;
         dates.push(key);
@@ -3221,6 +5826,218 @@ async function registerRoutes(app2) {
       current.setUTCDate(current.getUTCDate() + 1);
     }
     return dates;
+  }
+  async function findApprovedTruckConflicts(vehicleIds, targetJobId) {
+    const vIds = Array.from(new Set((vehicleIds || []).filter((v) => !!v)));
+    if (vIds.length === 0) return [];
+    const jr = await pool.query(
+      `SELECT scheduled_date, estimated_days, includes_weekends, includes_saturday, includes_sunday FROM jobs WHERE id = $1`,
+      [targetJobId]
+    );
+    const tj = jr.rows[0];
+    if (!tj || !tj.scheduled_date) return [];
+    const targetDates = new Set(
+      getJobDateRange(
+        tj.scheduled_date,
+        Number(tj.estimated_days) || 1,
+        !!tj.includes_weekends,
+        tj.includes_saturday !== false,
+        tj.includes_sunday !== false
+      )
+    );
+    if (targetDates.size === 0) return [];
+    const other = await pool.query(
+      `SELECT ja.vehicle_id, j.material AS job_material, j.scheduled_date, j.estimated_days,
+              j.includes_weekends, j.includes_saturday, j.includes_sunday
+       FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id
+       WHERE ja.vehicle_id::text = ANY($1::text[])
+         AND ja.job_id <> $2
+         AND ja.status::text = 'approved'
+         AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
+      [vIds, targetJobId]
+    );
+    const conflicts = [];
+    for (const r of other.rows) {
+      const otherDates = getJobDateRange(
+        r.scheduled_date,
+        Number(r.estimated_days) || 1,
+        !!r.includes_weekends,
+        r.includes_saturday !== false,
+        r.includes_sunday !== false
+      );
+      const overlap = otherDates.filter((d) => targetDates.has(d));
+      if (overlap.length > 0) {
+        conflicts.push({ vehicleId: r.vehicle_id, conflictDates: overlap, jobMaterial: r.job_material || null });
+      }
+    }
+    return conflicts;
+  }
+  function bookingConflictMessage(conflicts) {
+    const allDates = Array.from(new Set(conflicts.flatMap((c) => c.conflictDates))).sort();
+    const pretty = allDates.map((d) => {
+      const [, m, day] = d.split("-");
+      return `${Number(m)}/${Number(day)}`;
+    });
+    const material = conflicts.find((c) => c.jobMaterial)?.jobMaterial;
+    const onJob = material ? ` on another "${material}" job` : " on another job";
+    return `That truck is already booked${onJob} for ${pretty.join(", ")}. Pick a different truck or remove the other booking first.`;
+  }
+  async function isFleetAccount(userId) {
+    if (!userId) return false;
+    const r = await pool.query(`SELECT role FROM users WHERE id::text = $1`, [String(userId)]);
+    if (String(r.rows[0]?.role || "").includes("trucking_company")) return true;
+    const tc = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM trucks WHERE trucking_company_id::text = $1 AND archived_at IS NULL`,
+      [String(userId)]
+    );
+    return (tc.rows[0]?.n || 0) >= 2;
+  }
+  async function findApprovedDriverConflicts(driverIds, targetJobId) {
+    const dIds = Array.from(new Set((driverIds || []).filter((v) => !!v)));
+    if (dIds.length === 0) return [];
+    const jr = await pool.query(
+      `SELECT scheduled_date, estimated_days, includes_weekends, includes_saturday, includes_sunday FROM jobs WHERE id = $1`,
+      [targetJobId]
+    );
+    const tj = jr.rows[0];
+    if (!tj || !tj.scheduled_date) return [];
+    const targetDates = new Set(
+      getJobDateRange(
+        tj.scheduled_date,
+        Number(tj.estimated_days) || 1,
+        !!tj.includes_weekends,
+        tj.includes_saturday !== false,
+        tj.includes_sunday !== false
+      )
+    );
+    if (targetDates.size === 0) return [];
+    const other = await pool.query(
+      `SELECT ja.driver_id, j.material AS job_material, j.scheduled_date, j.estimated_days,
+              j.includes_weekends, j.includes_saturday, j.includes_sunday
+       FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id
+       WHERE ja.driver_id::text = ANY($1::text[])
+         AND ja.job_id <> $2
+         AND ja.status::text = 'approved'
+         AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
+      [dIds, targetJobId]
+    );
+    const conflicts = [];
+    for (const r of other.rows) {
+      const otherDates = getJobDateRange(
+        r.scheduled_date,
+        Number(r.estimated_days) || 1,
+        !!r.includes_weekends,
+        r.includes_saturday !== false,
+        r.includes_sunday !== false
+      );
+      const overlap = otherDates.filter((d) => targetDates.has(d));
+      if (overlap.length > 0) {
+        conflicts.push({ driverId: r.driver_id, conflictDates: overlap, jobMaterial: r.job_material || null });
+      }
+    }
+    return conflicts;
+  }
+  function driverConflictMessage(conflicts, self) {
+    const allDates = Array.from(new Set(conflicts.flatMap((c) => c.conflictDates))).sort();
+    const pretty = allDates.map((d) => {
+      const [, m, day] = d.split("-");
+      return `${Number(m)}/${Number(day)}`;
+    });
+    const material = conflicts.find((c) => c.jobMaterial)?.jobMaterial;
+    const onJob = material ? ` on another "${material}" job` : " on another job";
+    return self ? `You're already booked${onJob} for ${pretty.join(", ")}. You can't be on two jobs the same day \u2014 finish or drop the other booking first.` : `That driver is already booked${onJob} for ${pretty.join(", ")}. Approve them on different dates or remove the other booking first.`;
+  }
+  async function withdrawConflictingPendingApplications(targetJobId, vehicleIds, driverIds, auth) {
+    try {
+      const vIds = Array.from(new Set((vehicleIds || []).filter((v) => !!v)));
+      const dIds = Array.from(new Set((driverIds || []).filter((v) => !!v)));
+      if (vIds.length === 0 && dIds.length === 0) return;
+      const jr = await pool.query(
+        `SELECT material, scheduled_date, estimated_days, includes_weekends, includes_saturday, includes_sunday FROM jobs WHERE id = $1`,
+        [targetJobId]
+      );
+      const tj = jr.rows[0];
+      if (!tj || !tj.scheduled_date) return;
+      const targetDates = new Set(
+        getJobDateRange(
+          tj.scheduled_date,
+          Number(tj.estimated_days) || 1,
+          !!tj.includes_weekends,
+          tj.includes_saturday !== false,
+          tj.includes_sunday !== false
+        )
+      );
+      if (targetDates.size === 0) return;
+      const targetMaterial = tj.material || "";
+      const others = await pool.query(
+        `SELECT ja.id, ja.driver_id, ja.job_id, j.material AS job_material, j.scheduled_date,
+                j.estimated_days, j.includes_weekends, j.includes_saturday, j.includes_sunday
+         FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id
+         WHERE ja.job_id <> $1
+           AND ja.status::text = 'pending'
+           AND ( ja.vehicle_id::text = ANY($2::text[]) OR ja.driver_id::text = ANY($3::text[]) )
+           AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
+        [targetJobId, vIds, dIds]
+      );
+      const toWithdraw = [];
+      for (const r of others.rows) {
+        const otherDates = getJobDateRange(
+          r.scheduled_date,
+          Number(r.estimated_days) || 1,
+          !!r.includes_weekends,
+          r.includes_saturday !== false,
+          r.includes_sunday !== false
+        );
+        const overlap = otherDates.filter((d) => targetDates.has(d));
+        if (overlap.length > 0) {
+          toWithdraw.push({ id: String(r.id), driverId: String(r.driver_id), jobId: String(r.job_id), jobMaterial: r.job_material || null, dates: overlap });
+        }
+      }
+      if (toWithdraw.length === 0) return;
+      const updated = await pool.query(
+        `UPDATE job_assignments SET status = 'withdrawn'
+         WHERE id = ANY($1::varchar[]) AND status::text = 'pending'
+         RETURNING id`,
+        [toWithdraw.map((w) => w.id)]
+      );
+      const withdrawnIds = new Set(updated.rows.map((r) => String(r.id)));
+      const pulled = toWithdraw.filter((w) => withdrawnIds.has(w.id));
+      if (pulled.length === 0) return;
+      for (const jobId of Array.from(new Set(pulled.map((w) => w.jobId)))) {
+        const remaining = await pool.query(
+          `SELECT COUNT(*)::int AS c FROM job_assignments WHERE job_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')`,
+          [jobId]
+        );
+        if ((remaining.rows[0]?.c || 0) === 0) {
+          await pool.query(
+            `UPDATE jobs SET status = 'open', updated_at = NOW() WHERE id = $1 AND status::text IN ('open', 'pending')`,
+            [jobId]
+          );
+        }
+      }
+      const onJob = targetMaterial ? `a "${targetMaterial}" job` : "another job";
+      for (const w of pulled) {
+        const dates = Array.from(new Set(w.dates)).sort().map((d) => {
+          const [, m, day] = d.split("-");
+          return `${Number(m)}/${Number(day)}`;
+        });
+        const title = "Application withdrawn \u2014 double booking";
+        const body = `Your application${w.jobMaterial ? ` for the "${w.jobMaterial}" job` : ""} was automatically withdrawn because you were approved on ${onJob} that overlaps ${dates.join(", ")}.`;
+        try {
+          await pool.query(
+            `INSERT INTO notifications (id, user_id, type, title, message, job_id, is_read, created_at)
+             VALUES ($1, $2, 'general', $3, $4, $5, false, NOW())`,
+            [crypto.randomUUID(), w.driverId, title, body, w.jobId]
+          );
+        } catch (e) {
+          console.error("Auto-withdraw notification insert error:", e.message);
+        }
+        await sendPushNotification(w.driverId, title, body, { jobId: w.jobId, type: "application_withdrawn" }).catch(() => {
+        });
+      }
+    } catch (e) {
+      console.error("withdrawConflictingPendingApplications error:", e.message);
+    }
   }
   async function getJobsForCalendar(auth, role) {
     try {
@@ -3260,6 +6077,8 @@ async function registerRoutes(app2) {
       const userId = auth.userId;
       const userRole = (auth.user?.role || "").toLowerCase();
       const isContractorRole = userRole.includes("contractor") && userRole !== "trucking_company";
+      const isTruckingCompany = userRole === "trucking_company";
+      const isDriverView = !isContractorRole && !isTruckingCompany;
       const allJobs = await getJobsForCalendar(auth, isContractorRole ? "contractor" : "driver");
       const month = parseInt(req.query.month) || (/* @__PURE__ */ new Date()).getMonth() + 1;
       const year = parseInt(req.query.year) || (/* @__PURE__ */ new Date()).getFullYear();
@@ -3286,7 +6105,7 @@ async function registerRoutes(app2) {
       if (jobIds.length > 0) {
         try {
           const assResult = await pool.query(
-            `SELECT ja.job_id, ja.vehicle_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type
+            `SELECT ja.job_id, ja.vehicle_id, ja.driver_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type, t.trucking_company_id
              FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id
              WHERE ja.job_id = ANY($1) AND ja.status::text NOT IN ('withdrawn', 'rejected')`,
             [jobIds]
@@ -3295,13 +6114,15 @@ async function registerRoutes(app2) {
             if (!assignmentsByJob[row.job_id]) assignmentsByJob[row.job_id] = [];
             assignmentsByJob[row.job_id].push({
               vehicleId: row.vehicle_id,
+              driverId: row.driver_id,
               status: row.status,
               make: row.make,
               model: row.model,
               year: row.year,
               truckNumber: row.truck_number,
               licensePlate: row.license_plate,
-              truckType: row.truck_type
+              truckType: row.truck_type,
+              truckCompanyId: row.trucking_company_id
             });
           }
         } catch {
@@ -3329,8 +6150,10 @@ async function registerRoutes(app2) {
         const includesSat = (job.includesSaturday ?? job.includes_saturday) !== false;
         const includesSun = (job.includesSunday ?? job.includes_sunday) !== false;
         const jobDates = getJobDateRange(sd, estDays, includesWeekends, includesSat, includesSun);
-        const vehicleAssignments = assignmentsByJob[job.id] || [];
-        const activeRuns = activeRunsByJob[job.id] || [];
+        const allAssignments = assignmentsByJob[job.id] || [];
+        const vehicleAssignments = isTruckingCompany ? allAssignments.filter((a) => String(a.truckCompanyId) === String(userId)) : isDriverView ? allAssignments.filter((a) => String(a.driverId) === String(userId)) : allAssignments;
+        const rawActiveRuns = activeRunsByJob[job.id] || [];
+        const activeRuns = isTruckingCompany || isDriverView ? rawActiveRuns.filter((r) => vehicleAssignments.some((a) => String(a.vehicleId) === String(r.vehicle_id))) : rawActiveRuns;
         const activeAssignments = vehicleAssignments.filter((a) => a.status !== "rejected" && a.status !== "withdrawn");
         const entriesToAdd = [];
         if (activeAssignments.length > 1) {
@@ -3470,6 +6293,7 @@ async function registerRoutes(app2) {
         earnings = totalLoads * rate;
         break;
       case "flat":
+      case "flat_rate":
       case "per_job":
         earnings = rate;
         break;
@@ -3478,23 +6302,113 @@ async function registerRoutes(app2) {
     }
     return { earnings, totalMinutes, totalLoads, runs: runsRes.rows };
   }
+  app2.get("/api/jobs/:id/billing", requireAuth, async (req, res) => {
+    try {
+      const auth = getWebsiteAuth(req);
+      const jobRes = await pool.query(`SELECT * FROM jobs WHERE id = $1`, [req.params.id]);
+      const job = jobRes.rows[0];
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      if (String(job.contractor_id) !== String(auth.userId)) {
+        return res.status(403).json({ message: "Only the job poster can view billing" });
+      }
+      const runsRes = await pool.query(
+        `SELECT jr.driver_id, jr.vehicle_id, jr.billed_duration_minutes, jr.actual_duration_minutes,
+                jr.started_at, jr.ended_at, jr.status, jr.loads_hauled,
+                u.full_name AS driver_name,
+                COALESCE(u.trucking_company_id::text, u.id::text) AS company_id,
+                COALESCE(NULLIF(tc.company, ''), NULLIF(tc.full_name, ''), NULLIF(u.company, '')) AS company_name,
+                t.truck_number, t.make, t.model, t.year
+         FROM job_runs jr
+         JOIN users u ON u.id::text = jr.driver_id::text
+         LEFT JOIN users tc ON tc.id::text = u.trucking_company_id::text
+         LEFT JOIN trucks t ON t.id::text = jr.vehicle_id::text
+         WHERE jr.job_id = $1
+         ORDER BY jr.started_at ASC`,
+        [req.params.id]
+      );
+      const byDriver = /* @__PURE__ */ new Map();
+      for (const r of runsRes.rows) {
+        const billed = r.billed_duration_minutes != null ? Number(r.billed_duration_minutes) : null;
+        const actual = r.actual_duration_minutes != null ? Number(r.actual_duration_minutes) : null;
+        let mins = 0;
+        if (billed != null) mins = billed;
+        else if (actual != null) mins = actual;
+        else if (r.started_at && r.ended_at) {
+          mins = Math.max(0, (new Date(r.ended_at).getTime() - new Date(r.started_at).getTime()) / 6e4);
+        } else if (r.started_at && r.status !== "completed") {
+          mins = Math.max(0, (Date.now() - new Date(r.started_at).getTime()) / 6e4);
+        }
+        const truckLabel = r.truck_number ? `#${r.truck_number}` : [r.year, r.make, r.model].filter(Boolean).join(" ") || null;
+        const key = String(r.driver_id);
+        const e = byDriver.get(key) || {
+          driver_id: key,
+          driver_name: r.driver_name || null,
+          company_id: String(r.company_id),
+          company_name: r.company_name || null,
+          trucks: [],
+          minutes: 0,
+          loads: 0,
+          run_count: 0,
+          has_active_run: false
+        };
+        e.minutes += mins;
+        e.loads += Number(r.loads_hauled || 0);
+        e.run_count += 1;
+        if (r.status === "active") e.has_active_run = true;
+        if (truckLabel && !e.trucks.includes(truckLabel)) e.trucks.push(truckLabel);
+        byDriver.set(key, e);
+      }
+      const rate = Number(job.rate || 0);
+      const rateType = String(job.rate_type || "per_hour");
+      const isFlat = rateType === "flat" || rateType === "flat_rate" || rateType === "per_job";
+      const entriesRaw = Array.from(byDriver.values());
+      const entries = entriesRaw.map((e) => {
+        let amount = 0;
+        if (isFlat) amount = entriesRaw.length > 0 ? rate / entriesRaw.length : 0;
+        else if (rateType === "per_load") amount = e.loads * rate;
+        else amount = e.minutes / 60 * rate;
+        return {
+          ...e,
+          minutes: Math.round(e.minutes),
+          amount: Number(amount.toFixed(2))
+        };
+      }).sort((a, b) => b.amount - a.amount);
+      const total = entries.reduce((s, e) => s + e.amount, 0);
+      res.json(addDualKeys({
+        job_id: job.id,
+        rate,
+        rate_type: rateType,
+        entries,
+        total_amount: Number(total.toFixed(2)),
+        total_minutes: entries.reduce((s, e) => s + e.minutes, 0),
+        total_loads: entries.reduce((s, e) => s + e.loads, 0)
+      }));
+    } catch (error) {
+      console.error("Job billing error:", error.message);
+      res.status(500).json({ message: "Failed to load job billing" });
+    }
+  });
   async function recomputeInvoice(invoice) {
     const isOpen = invoice.status === "open";
     let jobsRes;
     if (isOpen) {
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.* FROM jobs j
+        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+         LEFT JOIN contractor_projects cp ON cp.id = j.project_id
          LEFT JOIN job_runs jr ON jr.job_id = j.id
          WHERE j.invoice_id = $1
             OR (j.contractor_id = $2
                 AND (j.driver_id = $3 OR jr.driver_id = $3)
                 AND j.status::text IN ('completed', 'in_progress', 'accepted')
-                AND (j.invoice_id IS NULL OR j.invoice_id = $1))`,
-        [invoice.id, invoice.contractor_id, invoice.driver_id]
+                AND (j.invoice_id IS NULL OR j.invoice_id = $1)
+                AND date_trunc('month', COALESCE(j.scheduled_date, j.created_at)) = date_trunc('month', $4::timestamp))`,
+        [invoice.id, invoice.contractor_id, invoice.driver_id, invoice.period_month]
       );
     } else {
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.* FROM jobs j WHERE j.invoice_id = $1`,
+        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+         LEFT JOIN contractor_projects cp ON cp.id = j.project_id
+         WHERE j.invoice_id = $1`,
         [invoice.id]
       );
     }
@@ -3512,9 +6426,62 @@ async function registerRoutes(app2) {
     }
     return { jobs: enrichedJobs, total: Number(total.toFixed(2)), jobCount: enrichedJobs.length };
   }
+  async function ensureMonthlyInvoices(userId) {
+    const candidates = await pool.query(
+      `SELECT DISTINCT j.contractor_id,
+              COALESCE(jr.driver_id, j.driver_id) AS billing_driver_id,
+              date_trunc('month', COALESCE(j.scheduled_date, j.created_at)) AS bill_month
+       FROM jobs j
+       LEFT JOIN job_runs jr ON jr.job_id = j.id
+       WHERE j.invoice_id IS NULL
+         AND j.status::text IN ('completed', 'in_progress', 'accepted')
+         AND COALESCE(jr.driver_id, j.driver_id) IS NOT NULL
+         AND (j.contractor_id = $1 OR jr.driver_id = $1 OR j.driver_id = $1)`,
+      [userId]
+    );
+    for (const row of candidates.rows) {
+      if (!row.contractor_id || !row.billing_driver_id || !row.bill_month) continue;
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const monthKey = new Date(row.bill_month).toISOString().slice(0, 7);
+        await client.query(
+          `SELECT pg_advisory_xact_lock(hashtext($1))`,
+          [`inv:${row.contractor_id}:${row.billing_driver_id}:${monthKey}`]
+        );
+        const existing = await client.query(
+          `SELECT id FROM monthly_invoices
+           WHERE contractor_id = $1 AND driver_id = $2
+             AND date_trunc('month', period_month) = date_trunc('month', $3::timestamp)
+           LIMIT 1`,
+          [row.contractor_id, row.billing_driver_id, row.bill_month]
+        );
+        if (existing.rows.length === 0) {
+          const d = new Date(row.bill_month);
+          const label = d.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+          const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+          await client.query(
+            `INSERT INTO monthly_invoices (invoice_number, contractor_id, driver_id, period_month, period_label, status)
+             VALUES ($1, $2, $3, $4, $5, 'open')`,
+            [invoiceNumber, row.contractor_id, row.billing_driver_id, row.bill_month, label]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {
+        });
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+  }
   app2.get("/api/invoices", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
+      await ensureMonthlyInvoices(auth.userId).catch(
+        (e) => console.error("ensureMonthlyInvoices error:", e.message)
+      );
       const status = req.query.status;
       const includeHidden = req.query.include_hidden === "1" || req.query.include_hidden === "true";
       let query = `
@@ -3526,10 +6493,16 @@ async function registerRoutes(app2) {
           d.full_name AS driver_name, d.company AS driver_company,
           d.email AS driver_email, d.phone AS driver_phone,
           d.address AS driver_address, d.city AS driver_city,
-          d.state AS driver_state, d.zip_code AS driver_zip
+          d.state AS driver_state, d.zip_code AS driver_zip,
+          d.trucking_company_id AS driver_parent_company_id,
+          COALESCE(NULLIF(tcp.company, ''), NULLIF(tcp.full_name, '')) AS driver_parent_company_name,
+          tcp.email AS driver_parent_company_email, tcp.phone AS driver_parent_company_phone,
+          tcp.address AS driver_parent_company_address, tcp.city AS driver_parent_company_city,
+          tcp.state AS driver_parent_company_state, tcp.zip_code AS driver_parent_company_zip
         FROM monthly_invoices mi
         LEFT JOIN users c ON c.id = mi.contractor_id
         LEFT JOIN users d ON d.id = mi.driver_id
+        LEFT JOIN users tcp ON tcp.id::text = d.trucking_company_id::text
         WHERE (mi.contractor_id = $1 OR mi.driver_id = $1)`;
       const params = [auth.userId];
       if (!includeHidden) {
@@ -3560,6 +6533,7 @@ async function registerRoutes(app2) {
   });
   app2.get("/api/invoices/:id", requireAuth, async (req, res) => {
     try {
+      const auth = getWebsiteAuth(req);
       const result = await pool.query(
         `SELECT mi.*,
           c.full_name AS contractor_name, c.company AS contractor_company,
@@ -3569,12 +6543,18 @@ async function registerRoutes(app2) {
           d.full_name AS driver_name, d.company AS driver_company,
           d.email AS driver_email, d.phone AS driver_phone,
           d.address AS driver_address, d.city AS driver_city,
-          d.state AS driver_state, d.zip_code AS driver_zip
+          d.state AS driver_state, d.zip_code AS driver_zip,
+          d.trucking_company_id AS driver_parent_company_id,
+          COALESCE(NULLIF(tcp.company, ''), NULLIF(tcp.full_name, '')) AS driver_parent_company_name,
+          tcp.email AS driver_parent_company_email, tcp.phone AS driver_parent_company_phone,
+          tcp.address AS driver_parent_company_address, tcp.city AS driver_parent_company_city,
+          tcp.state AS driver_parent_company_state, tcp.zip_code AS driver_parent_company_zip
         FROM monthly_invoices mi
         LEFT JOIN users c ON c.id = mi.contractor_id
         LEFT JOIN users d ON d.id = mi.driver_id
-        WHERE mi.id = $1`,
-        [req.params.id]
+        LEFT JOIN users tcp ON tcp.id::text = d.trucking_company_id::text
+        WHERE mi.id = $1 AND (mi.contractor_id = $2 OR mi.driver_id = $2)`,
+        [req.params.id, auth.userId]
       );
       if (result.rows.length > 0) {
         const invoice = result.rows[0];
@@ -3594,6 +6574,11 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const { status } = req.body;
+      const owned = await pool.query(
+        `SELECT id FROM monthly_invoices WHERE id = $1 AND (contractor_id = $2 OR driver_id = $2)`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Invoice not found" });
       await pool.query(`UPDATE monthly_invoices SET status = $1, updated_at = NOW() WHERE id = $2`, [status, req.params.id]);
       pushToWebsite(`/api/invoices/${req.params.id}/status`, auth, { method: "POST", body: req.body }).catch(() => {
       });
@@ -3668,6 +6653,17 @@ async function registerRoutes(app2) {
       );
       const result = await pool.query(`SELECT * FROM contractor_projects WHERE id = $1`, [id]);
       const project = result.rows[0];
+      (async () => {
+        await pushToWebsite("/api/contractor-projects", auth, {
+          method: "POST",
+          body: { id, name, site_address: siteAddress, site_lat: siteLat, site_lng: siteLng, contractorId: auth.userId }
+        });
+        await pushToWebsite(`/api/contractor-projects/${id}`, auth, {
+          method: "PUT",
+          body: { name, job_number: jobNumber, site_address: siteAddress, site_lat: siteLat, site_lng: siteLng, notes }
+        });
+      })().catch(() => {
+      });
       return res.status(201).json(addDualKeys(project));
     } catch (e) {
       console.error("POST /api/projects error:", e.message);
@@ -3677,6 +6673,11 @@ async function registerRoutes(app2) {
   app2.put("/api/projects/:id", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
+      const owned = await pool.query(
+        `SELECT id FROM contractor_projects WHERE id = $1 AND contractor_id::text = $2 AND deleted_at IS NULL`,
+        [req.params.id, auth.userId]
+      );
+      if (owned.rows.length === 0) return res.status(404).json({ message: "Project not found" });
       const updates = [];
       const values = [];
       let paramIdx = 1;
@@ -3735,6 +6736,18 @@ async function registerRoutes(app2) {
           console.log(`PUT /api/projects/${req.params.id} cascaded address to ${cascaded} job(s) (${role})`);
         }
       }
+      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, {
+        method: "PUT",
+        body: {
+          name: project.name,
+          job_number: project.job_number,
+          site_address: project.site_address,
+          site_lat: project.site_lat,
+          site_lng: project.site_lng,
+          notes: project.notes
+        }
+      }).catch(() => {
+      });
       return res.json({ ...addDualKeys(project), cascadedJobs: cascaded });
     } catch (e) {
       console.error("PUT /api/projects error:", e.message);
@@ -3750,6 +6763,10 @@ async function registerRoutes(app2) {
         [req.params.id, auth.userId]
       );
       if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+      pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, {
+        method: "DELETE"
+      }).catch(() => {
+      });
       return res.json({ ok: true });
     } catch {
       return res.json({ ok: true });
@@ -3757,13 +6774,42 @@ async function registerRoutes(app2) {
   });
   app2.post("/api/projects/:id/restore", requireAuth, async (req, res) => {
     try {
-      await pool.query(
-        `UPDATE contractor_projects SET status = 'active', deleted_at = NULL WHERE id = $1`,
-        [req.params.id]
+      const auth = getWebsiteAuth(req);
+      const upd = await pool.query(
+        `UPDATE contractor_projects SET status = 'active', deleted_at = NULL
+         WHERE id = $1 AND contractor_id::text = $2 RETURNING *`,
+        [req.params.id, auth.userId]
       );
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+      const p = upd.rows[0];
+      (async () => {
+        await pushToWebsite("/api/contractor-projects", auth, {
+          method: "POST",
+          body: {
+            id: p.id,
+            name: p.name,
+            site_address: p.site_address,
+            site_lat: p.site_lat,
+            site_lng: p.site_lng,
+            contractorId: auth.userId
+          }
+        });
+        await pushToWebsite(`/api/contractor-projects/${p.id}`, auth, {
+          method: "PUT",
+          body: {
+            name: p.name,
+            job_number: p.job_number,
+            site_address: p.site_address,
+            site_lat: p.site_lat,
+            site_lng: p.site_lng,
+            notes: p.notes
+          }
+        });
+      })().catch(() => {
+      });
       return res.json({ ok: true });
     } catch {
-      return res.json({ ok: true });
+      return res.status(500).json({ message: "Failed to restore project" });
     }
   });
   app2.get("/api/materials", requireAuth, async (req, res) => {
@@ -3796,12 +6842,53 @@ async function registerRoutes(app2) {
   app2.post("/api/reviews", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
-      const id = crypto.randomUUID();
       const b = req.body;
+      const jobId = b.jobId || b.job_id;
+      const revieweeId = b.revieweeId || b.reviewee_id;
+      const jobRow = await pool.query(
+        `SELECT id, contractor_id, driver_id FROM jobs WHERE id = $1 AND status = 'completed'`,
+        [jobId]
+      );
+      if (jobRow.rows.length === 0) {
+        return res.status(400).json({ message: "Job not found or not completed" });
+      }
+      const job = jobRow.rows[0];
+      let resolvedDriverId = job.driver_id;
+      if (!resolvedDriverId) {
+        const a = await pool.query(
+          `SELECT driver_id FROM job_assignments WHERE job_id = $1
+           AND status::text = 'approved'
+           ORDER BY approved_at DESC NULLS LAST, created_at DESC
+           LIMIT 1`,
+          [jobId]
+        );
+        resolvedDriverId = a.rows[0]?.driver_id || null;
+      }
+      const callerIsContractor = String(job.contractor_id) === String(auth.userId);
+      const callerIsDriver = resolvedDriverId != null && String(resolvedDriverId) === String(auth.userId);
+      if (!callerIsContractor && !callerIsDriver) {
+        return res.status(403).json({ message: "You did not participate in this job" });
+      }
+      const expectedReviewee = callerIsContractor ? resolvedDriverId : job.contractor_id;
+      if (!expectedReviewee) {
+        return res.status(409).json({ message: "This job has no finalized hauler to review yet." });
+      }
+      if (String(revieweeId) !== String(expectedReviewee)) {
+        return res.status(400).json({ message: "Invalid reviewee for this job" });
+      }
+      const existing = await pool.query(
+        `SELECT id FROM reviews WHERE job_id = $1 AND reviewer_id = $2`,
+        [jobId, auth.userId]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ message: "You have already reviewed this job" });
+      }
+      const id = crypto.randomUUID();
+      const reviewerRole = callerIsContractor ? "contractor" : "driver";
       await pool.query(
         `INSERT INTO reviews (id, job_id, reviewer_id, reviewee_id, rating, comment, reviewer_role, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-        [id, b.jobId || b.job_id, auth.userId, b.revieweeId || b.reviewee_id, b.rating, b.comment, b.reviewerRole || b.reviewer_role || auth.user?.role]
+        [id, jobId, auth.userId, revieweeId, b.rating, b.comment, reviewerRole]
       );
       return res.status(201).json({ ok: true, id });
     } catch (e) {
@@ -3987,7 +7074,7 @@ async function registerRoutes(app2) {
         const durationSeconds = leg.duration.value;
         const distanceMeters = leg.distance.value;
         const distanceMiles = (distanceMeters / 1609.34).toFixed(1);
-        const truckDurationSeconds = Math.round(durationSeconds * 1.4);
+        const truckDurationSeconds = Math.round(durationSeconds * 1.25);
         return res.json({
           duration_seconds: durationSeconds,
           duration_text: leg.duration.text,
@@ -4000,6 +7087,54 @@ async function registerRoutes(app2) {
       return res.status(404).json({ message: "No route found" });
     } catch (err) {
       console.error("Directions error:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+  app2.get("/api/jobs/:id/road-distance", requireAuth, async (req, res) => {
+    try {
+      const lat = Number(req.query.lat);
+      const lng = Number(req.query.lng);
+      if (!isFinite(lat) || !isFinite(lng) || lat === 0 && lng === 0) {
+        return res.status(400).json({ message: "lat and lng are required" });
+      }
+      const jobRes = await pool.query(
+        `SELECT origin_lat, origin_lng, destination_lat, destination_lng,
+                haul_both_ways, return_origin_lat, return_origin_lng, return_destination_lat, return_destination_lng
+         FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      const job = jobRes.rows[0];
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      const oLat = job.origin_lat ? Number(job.origin_lat) : null;
+      const oLng = job.origin_lng ? Number(job.origin_lng) : null;
+      const dLat = job.destination_lat ? Number(job.destination_lat) : null;
+      const dLng = job.destination_lng ? Number(job.destination_lng) : null;
+      const bothWays = job.haul_both_ways === true;
+      const roLat = bothWays && job.return_origin_lat ? Number(job.return_origin_lat) : null;
+      const roLng = bothWays && job.return_origin_lng ? Number(job.return_origin_lng) : null;
+      const rdLat = bothWays && job.return_destination_lat ? Number(job.return_destination_lat) : null;
+      const rdLng = bothWays && job.return_destination_lng ? Number(job.return_destination_lng) : null;
+      const hasReturnCoords = roLat != null && roLng != null || rdLat != null && rdLng != null;
+      const legAir = [
+        airMilesToLeg(lat, lng, oLat, oLng, dLat, dLng),
+        hasReturnCoords ? airMilesToLeg(lat, lng, roLat, roLng, rdLat, rdLng) : null
+      ].filter((m) => m != null);
+      if (legAir.length === 0) {
+        return res.status(404).json({ message: "Job has no coordinates" });
+      }
+      const airMiles = Math.min(...legAir);
+      const legRoad = await Promise.all([
+        roadMilesToJobArea(lat, lng, oLat, oLng, dLat, dLng),
+        hasReturnCoords ? roadMilesToJobArea(lat, lng, roLat, roLng, rdLat, rdLng) : Promise.resolve(null)
+      ]);
+      const validRoad = legRoad.filter((m) => m != null);
+      const roadMiles = validRoad.length > 0 ? Math.min(...validRoad) : null;
+      return res.json(addDualKeys({
+        road_miles: roadMiles != null ? Math.round(roadMiles * 10) / 10 : null,
+        air_miles: Math.round(airMiles * 10) / 10
+      }));
+    } catch (err) {
+      console.error("GET /api/jobs/:id/road-distance error:", err.message);
       return res.status(500).json({ message: "Server error" });
     }
   });
@@ -4096,6 +7231,8 @@ function initMap(){
       return res.status(500).json({ message: "Server error" });
     }
   });
+  startNewJobWatcher();
+  startBrokerScheduledSendWorker();
   startPeriodicSync(() => {
     const latestPerUser = /* @__PURE__ */ new Map();
     for (const [, auth] of tokenToJwt) {
@@ -4131,7 +7268,7 @@ function setupCors(app2) {
         "Access-Control-Allow-Methods",
         "GET, POST, PUT, PATCH, DELETE, OPTIONS"
       );
-      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-TZ-Offset");
       res.header("Access-Control-Allow-Credentials", "true");
     }
     if (req.method === "OPTIONS") {
