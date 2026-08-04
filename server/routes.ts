@@ -2229,6 +2229,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
           map[String(r.driver_id)] = { unavailable: false, notes: null };
         }
       }
+      // Also flag drivers already booked (approved) on another active job
+      // whose scheduled window covers this date — e.g. a roster driver who
+      // booked his own work that day. Calendar-unavailable notes win.
+      try {
+        const booked = await pool.query(
+          `SELECT DISTINCT ja.driver_id, j.material
+             FROM job_assignments ja
+             JOIN jobs j ON j.id = ja.job_id
+            WHERE ja.driver_id::text = ANY($2)
+              AND ja.status::text = 'approved'
+              AND j.status::text NOT IN ('completed','cancelled','expired')
+              AND $1::date >= j.scheduled_date::date
+              AND $1::date <= (j.scheduled_date::date
+                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) - 1) * INTERVAL '1 day')::date`,
+          [date, driverIds.map(String)]
+        );
+        for (const r of booked.rows) {
+          const key = String(r.driver_id);
+          if (!map[key]?.unavailable) {
+            map[key] = { unavailable: true, notes: `Booked on another job${r.material ? ` (${r.material})` : ''}` };
+          }
+        }
+      } catch (e: any) {
+        console.error("roster-availability booked-job check error:", e.message);
+      }
       return res.json(map);
     } catch (e: any) {
       console.error("GET /api/broker/roster-availability error:", e.message);
