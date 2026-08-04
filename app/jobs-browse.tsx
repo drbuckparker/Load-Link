@@ -114,6 +114,13 @@ export default function JobsBrowseScreen() {
   const [inviteClientPhone, setInviteClientPhone] = useState('');
   const [inviteClientAddress, setInviteClientAddress] = useState('');
   const [inviteClientNotes, setInviteClientNotes] = useState('');
+  const [editingClient, setEditingClient] = useState<any | null>(null);
+  const [editClientName, setEditClientName] = useState('');
+  const [editClientEmail, setEditClientEmail] = useState('');
+  const [editClientContact, setEditClientContact] = useState('');
+  const [editClientPhone, setEditClientPhone] = useState('');
+  const [editClientAddress, setEditClientAddress] = useState('');
+  const [editClientNotes, setEditClientNotes] = useState('');
   const [activeFilter, setActiveFilter] = useState<string>(params.filter || (params.date ? 'All' : 'Open'));
   const [dateFilter, setDateFilter] = useState<string | undefined>(params.date || undefined);
   const [selectedProjectFilter, setSelectedProjectFilter] = useState<string | null>(params.projectId || null);
@@ -294,6 +301,63 @@ export default function JobsBrowseScreen() {
       Alert.alert('Could Not Add Client', e?.message || 'Please try again.');
     },
   });
+
+  const updateClientMutation = useMutation({
+    mutationFn: async (data: { id: string; name: string; email?: string; contactName?: string; phone?: string; address?: string; notes?: string }) => {
+      const { id, ...body } = data;
+      const res = await apiRequest('PUT', `/api/broker/clients/${id}`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/broker/clients')) });
+      setEditingClient(null);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (e: any) => {
+      Alert.alert('Could Not Update Client', e?.message || 'Please try again.');
+    },
+  });
+
+  const deleteClientMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest('DELETE', `/api/broker/clients/${id}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/broker/clients')) });
+      setEditingClient(null);
+      setSelectedClient(null);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (e: any) => {
+      Alert.alert('Could Not Remove Client', e?.message || 'Please try again.');
+    },
+  });
+
+  const openEditClient = useCallback((item: any) => {
+    setEditingClient(item);
+    setEditClientName(item.name || item.client_name || item.clientName || '');
+    setEditClientEmail(item.email || '');
+    setEditClientContact(item.contactName || item.contact_name || '');
+    setEditClientPhone(item.phone || '');
+    setEditClientAddress(item.address || '');
+    setEditClientNotes(item.notes || '');
+  }, []);
+
+  const handleDeleteClient = useCallback(() => {
+    if (!editingClient) return;
+    const id = String(editingClient.clientUserId || editingClient.client_user_id || '');
+    const cName = editingClient.name || editingClient.client_name || editingClient.clientName || 'this client';
+    const message = `Remove "${cName}" from your client list? Jobs you already posted for them are not affected.`;
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(message)) deleteClientMutation.mutate(id);
+      return;
+    }
+    Alert.alert('Remove Client', message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => deleteClientMutation.mutate(id) },
+    ]);
+  }, [editingClient, deleteClientMutation]);
 
   const createProjectMutation = useMutation({
     mutationFn: async (data: { name: string; job_number?: string; site_address?: string; site_lat?: number; site_lng?: number; notes?: string }) => {
@@ -1218,6 +1282,7 @@ export default function JobsBrowseScreen() {
                 const pending = item.status === 'pending';
                 const cKey = String(item.clientUserId || item.client_user_id || item.invitationId || item.invitation_id || item.id || item.email || cName);
                 const activeJobs = Number(item.activeJobsCount ?? item.active_jobs_count ?? 0);
+                const isManualClient = String(item.clientUserId || item.client_user_id || '').startsWith('manual-');
                 return (
                   <View style={styles.projectCard}>
                     <Pressable
@@ -1227,6 +1292,7 @@ export default function JobsBrowseScreen() {
                         setSelectedProjectFilter(null);
                         setSelectedClient(item);
                       }}
+                      onLongPress={isManualClient ? () => openEditClient(item) : undefined}
                     >
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                         <Ionicons name="business" size={20} color={Colors.primary} />
@@ -1238,6 +1304,11 @@ export default function JobsBrowseScreen() {
                             </Text>
                           )}
                         </View>
+                        {isManualClient && (
+                          <Pressable onPress={() => openEditClient(item)} hitSlop={10} testID={`edit-client-${cKey}`}>
+                            <Ionicons name="ellipsis-horizontal" size={20} color={Colors.textMuted} />
+                          </Pressable>
+                        )}
                         <View style={[styles.projectStatusBadge, { backgroundColor: pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
                           <Text style={[styles.projectStatusText, { color: pending ? '#eab308' : '#22c55e' }]}>
                             {pending ? 'PENDING' : 'ACTIVE'}
@@ -1473,6 +1544,119 @@ export default function JobsBrowseScreen() {
                 <ActivityIndicator size="small" color={Colors.primaryForeground} />
               ) : (
                 <Text style={styles.modalCreateBtnText}>Add Client</Text>
+              )}
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={!!editingClient}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingClient(null)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setEditingClient(null)}>
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>EDIT CLIENT</Text>
+              <Pressable onPress={() => setEditingClient(null)} hitSlop={8}>
+                <Ionicons name="close" size={24} color={Colors.textMuted} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalLabel}>Client / Company Name</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. Wilson Excavation"
+                placeholderTextColor={Colors.textMuted}
+                value={editClientName}
+                onChangeText={setEditClientName}
+                testID="edit-client-name"
+              />
+              <Text style={styles.modalLabel}>Contact Person (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. John Wilson"
+                placeholderTextColor={Colors.textMuted}
+                value={editClientContact}
+                onChangeText={setEditClientContact}
+                testID="edit-client-contact"
+              />
+              <Text style={styles.modalLabel}>Email (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="client@example.com"
+                placeholderTextColor={Colors.textMuted}
+                value={editClientEmail}
+                onChangeText={setEditClientEmail}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                testID="edit-client-email"
+              />
+              <Text style={styles.modalLabel}>Phone (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="(555) 123-4567"
+                placeholderTextColor={Colors.textMuted}
+                value={editClientPhone}
+                onChangeText={setEditClientPhone}
+                keyboardType="phone-pad"
+                testID="edit-client-phone"
+              />
+              <Text style={styles.modalLabel}>Address (optional)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Street, city, state"
+                placeholderTextColor={Colors.textMuted}
+                value={editClientAddress}
+                onChangeText={setEditClientAddress}
+                testID="edit-client-address"
+              />
+              <Text style={styles.modalLabel}>Notes (optional)</Text>
+              <TextInput
+                style={[styles.modalInput, { height: 72, textAlignVertical: 'top' }]}
+                placeholder="Anything worth remembering about this client..."
+                placeholderTextColor={Colors.textMuted}
+                value={editClientNotes}
+                onChangeText={setEditClientNotes}
+                multiline
+                testID="edit-client-notes"
+              />
+            </ScrollView>
+            <Pressable
+              style={[styles.modalCreateBtn, (!editClientName.trim() || updateClientMutation.isPending) && { opacity: 0.5 }]}
+              disabled={!editClientName.trim() || updateClientMutation.isPending}
+              onPress={() => editingClient && updateClientMutation.mutate({
+                id: String(editingClient.clientUserId || editingClient.client_user_id || ''),
+                name: editClientName.trim(),
+                email: editClientEmail.trim() || undefined,
+                contactName: editClientContact.trim() || undefined,
+                phone: editClientPhone.trim() || undefined,
+                address: editClientAddress.trim() || undefined,
+                notes: editClientNotes.trim() || undefined,
+              })}
+              testID="edit-client-save"
+            >
+              {updateClientMutation.isPending ? (
+                <ActivityIndicator size="small" color={Colors.primaryForeground} />
+              ) : (
+                <Text style={styles.modalCreateBtnText}>Save Changes</Text>
+              )}
+            </Pressable>
+            <Pressable
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, marginTop: 4 }}
+              disabled={deleteClientMutation.isPending}
+              onPress={handleDeleteClient}
+              testID="edit-client-delete"
+            >
+              {deleteClientMutation.isPending ? (
+                <ActivityIndicator size="small" color={'#ef4444'} />
+              ) : (
+                <>
+                  <Ionicons name="trash-outline" size={16} color={'#ef4444'} />
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: '#ef4444' }}>Remove Client</Text>
+                </>
               )}
             </Pressable>
           </Pressable>

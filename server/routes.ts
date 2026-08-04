@@ -2418,6 +2418,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Edit a manually added client (typo fixes / contact updates). Only
+  // companion-local manual clients (ids prefixed `manual-`) are editable —
+  // registered/invited clients live upstream and are not touched here.
+  app.put("/api/broker/clients/:id", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const rawId = String(req.params.id || "");
+    if (!rawId.startsWith("manual-")) {
+      return res.status(400).json({ message: "Only manually added clients can be edited" });
+    }
+    const id = rawId.slice(7);
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "").trim();
+    const phone = String(req.body?.phone || "").trim();
+    const contactName = String(req.body?.contactName || req.body?.contact_name || "").trim();
+    const address = String(req.body?.address || "").trim();
+    const notes = String(req.body?.notes || "").trim();
+    if (!name) return res.status(400).json({ message: "Client name is required" });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: "Invalid email address" });
+    }
+    try {
+      const dupe = await pool.query(
+        `SELECT id FROM broker_manual_clients WHERE broker_id = $1 AND lower(name) = lower($2) AND id::text <> $3`,
+        [auth.userId, name, id]
+      );
+      if (dupe.rows[0]) return res.status(409).json({ message: "You already have a client with that name" });
+      const result = await pool.query(
+        `UPDATE broker_manual_clients SET name = $1, email = $2, phone = $3, contact_name = $4, address = $5, notes = $6
+         WHERE id::text = $7 AND broker_id = $8 RETURNING *`,
+        [name, email || null, phone || null, contactName || null, address || null, notes || null, id, auth.userId]
+      );
+      if (!result.rows[0]) return res.status(404).json({ message: "Client not found" });
+      return res.json(addDualKeys(result.rows[0]));
+    } catch (e: any) {
+      console.error("PUT /api/broker/clients/:id error:", e.message);
+      return res.status(500).json({ message: "Failed to update client" });
+    }
+  });
+
+  // Remove a manually added client. Scoped to the broker's own rows.
+  app.delete("/api/broker/clients/:id", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const rawId = String(req.params.id || "");
+    if (!rawId.startsWith("manual-")) {
+      return res.status(400).json({ message: "Only manually added clients can be removed" });
+    }
+    try {
+      const result = await pool.query(
+        `DELETE FROM broker_manual_clients WHERE id::text = $1 AND broker_id = $2 RETURNING id`,
+        [rawId.slice(7), auth.userId]
+      );
+      if (!result.rows[0]) return res.status(404).json({ message: "Client not found" });
+      return res.json({ success: true });
+    } catch (e: any) {
+      console.error("DELETE /api/broker/clients/:id error:", e.message);
+      return res.status(500).json({ message: "Failed to remove client" });
+    }
+  });
+
   // Verifies the given clientUserId belongs to this broker. Manual clients are
   // checked against the companion-local table; registered clients against the
   // broker's upstream client list. Returns null on success or an error tuple.
