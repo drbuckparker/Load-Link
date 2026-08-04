@@ -283,7 +283,23 @@ export default function BrokerDashboardScreen() {
   });
   const availabilityMap = availabilityQuery.data || {};
 
-  const jobs = Array.isArray(jobsQuery.data) ? jobsQuery.data : [];
+  // The website's jobs list sends stats as assignedCount/sentCount/etc.
+  // (and omits the assignments array); normalize once so every consumer
+  // (day-plan chips, header tally, held rows, chime) sees the short keys.
+  const jobs = (Array.isArray(jobsQuery.data) ? jobsQuery.data : []).map(j => {
+    const s: any = j.assignmentStats || {};
+    return {
+      ...j,
+      assignmentStats: {
+        assigned: Number(s.assigned ?? s.assignedCount) || 0,
+        sent: Number(s.sent ?? s.sentCount) || 0,
+        held: Number(s.held ?? s.heldCount) || 0,
+        confirmed: Number(s.confirmed ?? s.confirmedCount) || 0,
+        declined: Number(s.declined ?? s.declinedCount) || 0,
+        trucksNeeded: Number(s.trucksNeeded ?? s.trucks_needed) || 0,
+      },
+    };
+  });
   const todayJobs = jobs.filter(j => jobCoversDay(j, selectedDate));
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
