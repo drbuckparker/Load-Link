@@ -11,4 +11,5 @@ The shared DB's `users.role` is NOT what the website gates on — the website ha
 - Any role persistence in the companion must also PUT the role upstream. The accepted endpoint is `PUT /api/users/:id` with `{role}` (returns full user). `PUT /api/profile` rejects `role` ("No valid fields to update"); `PUT /api/profile/role` and `PATCH` are 404 upstream.
 - CAUTION: `POST /api/auth/switch-role` on the website with `{role}` may set an unexpected role (it set `driver` during probing) — do not use it.
 - Diagnose drift by comparing `SELECT role FROM users` vs website `GET /api/auth/user` role; fix with the PUT above.
-- Login log line `[Login] Using DB role 'X' over website-reported 'Y'` is the tell that drift exists.
+- Login log line `[Login] Using DB role 'X' over website-reported 'Y'` is the tell that drift exists (login now auto-heals simple-role drift; compound roles are never pushed upstream).
+- Website mutation endpoints can 428 `PRIVACY_CONSENT_REQUIRED` for accounts that never accepted the privacy policy on the website — the website checks its OWN record, not the shared-DB consent columns. Clear it via website `POST /api/auth/accept-privacy-policy` with `{version}` (user JWT + API key); never consent on a user's behalf without an explicit user action.

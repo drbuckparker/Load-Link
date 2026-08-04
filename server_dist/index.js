@@ -2229,6 +2229,30 @@ async function registerRoutes(app2) {
         if (dbRole && dbRole !== user.role) {
           console.log(`[Login] Using DB role '${dbRole}' over website-reported '${user.role}' for ${email}`);
           user.role = dbRole;
+          const isCompoundRole = allowedRolesForUser(String(dbRole)).length > 1;
+          if (isCompoundRole) {
+            console.log(`[RoleSync] Skipping upstream push of compound role '${dbRole}' at login for ${email}`);
+          } else {
+            try {
+              const ur = await Promise.race([
+                websiteFetch(`/api/users/${user.id}`, {
+                  method: "PUT",
+                  body: { role: dbRole },
+                  jwt
+                }),
+                new Promise(
+                  (_, reject) => setTimeout(() => reject(new Error("timed out after 5000ms")), 5e3)
+                )
+              ]);
+              if (ur.ok) {
+                console.log(`[RoleSync] Healed login role drift: pushed '${dbRole}' to website for ${email}`);
+              } else {
+                console.error(`[RoleSync] Failed to push role '${dbRole}' to website at login for ${email}: ${ur.status}`);
+              }
+            } catch (e) {
+              console.error(`[RoleSync] Error pushing role to website at login:`, e.message);
+            }
+          }
         }
       } catch {
       }
@@ -3167,8 +3191,7 @@ async function registerRoutes(app2) {
           roster = roster.map((r) => {
             const dId = String(r.driverId || r.driver_id || "");
             const u = userMap.get(dId);
-            const assigned = tr.rows.filter((t) => t.assigned_driver_id === dId);
-            const pool_ = assigned.length > 0 ? assigned : tr.rows.filter((t) => u && u.company_key === brokerKey && t.trucking_company_id === brokerKey && !t.assigned_driver_id);
+            const pool_ = tr.rows.filter((t) => t.assigned_driver_id === dId);
             return {
               ...r,
               companyName: pool_[0]?.owner_company || u?.company || "",
@@ -3225,6 +3248,37 @@ async function registerRoutes(app2) {
         } else if (!map[String(r.driver_id)]) {
           map[String(r.driver_id)] = { unavailable: false, notes: null };
         }
+      }
+      try {
+        const booked = await pool.query(
+          `SELECT DISTINCT ja.driver_id, j.scheduled_date, j.estimated_days,
+                  j.includes_weekends, j.includes_saturday, j.includes_sunday
+             FROM job_assignments ja
+             JOIN jobs j ON j.id = ja.job_id
+            WHERE ja.driver_id::text = ANY($2)
+              AND ja.status::text = 'approved'
+              AND j.status::text NOT IN ('completed','cancelled','expired')
+              AND $1::date >= j.scheduled_date::date
+              AND $1::date <= (j.scheduled_date::date
+                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) * 3) * INTERVAL '1 day')::date`,
+          [date, driverIds.map(String)]
+        );
+        for (const r of booked.rows) {
+          const key = String(r.driver_id);
+          if (map[key]?.unavailable) continue;
+          const workingDays = getJobDateRange(
+            r.scheduled_date,
+            Number(r.estimated_days) || 1,
+            !!r.includes_weekends,
+            r.includes_saturday !== false,
+            r.includes_sunday !== false
+          );
+          if (workingDays.includes(date)) {
+            map[key] = { unavailable: true, notes: null };
+          }
+        }
+      } catch (e) {
+        console.error("roster-availability booked-job check error:", e.message);
       }
       return res.json(map);
     } catch (e) {
@@ -5113,6 +5167,29 @@ async function registerRoutes(app2) {
         `SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
         [auth.userId]
       );
+      for (const row of result.rows) {
+        if (row.job_id || !row.message) continue;
+        const m = String(row.message).match(/assigned you an? (.+?) job on (\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+        if (!m) continue;
+        try {
+          const [, material, mo, day, yr] = m;
+          const jr = await pool.query(
+            `SELECT j.id FROM jobs j
+              JOIN job_assignments a ON a.job_id = j.id AND a.driver_id::text = $1
+                AND a.status::text NOT IN ('declined','withdrawn','rejected')
+             WHERE LOWER(j.material) = LOWER($2)
+               AND j.scheduled_date::date = make_date($3::int, $4::int, $5::int)
+             ORDER BY j.created_at DESC LIMIT 1`,
+            [String(auth.userId), material.trim(), yr, mo, day]
+          );
+          if (jr.rows[0]?.id) {
+            row.job_id = jr.rows[0].id;
+            pool.query(`UPDATE notifications SET job_id = $1 WHERE id = $2`, [row.job_id, row.id]).catch(() => {
+            });
+          }
+        } catch {
+        }
+      }
       return res.json(result.rows.map(addDualKeys));
     } catch {
       return res.json([]);

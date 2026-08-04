@@ -1096,6 +1096,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (dbRole && dbRole !== user.role) {
           console.log(`[Login] Using DB role '${dbRole}' over website-reported '${user.role}' for ${email}`);
           user.role = dbRole;
+          // The website gates /api/broker/* etc. on ITS OWN user record, so a
+          // DB-vs-website role mismatch means role-gated endpoints 403 upstream
+          // while the app shows the role — jobs "disappear". Heal the drift by
+          // pushing the authoritative DB role upstream (PUT /api/users/:id is
+          // the accepted endpoint; do NOT use POST /api/auth/switch-role).
+          // Skip compound roles the website may reject — pushing one component
+          // could collapse the entitlement.
+          // Awaited (bounded) so the website record is already fixed before the
+          // client's first post-login /api/broker/* request — otherwise the
+          // first screen can still 403 upstream and come up blank.
+          const isCompoundRole = allowedRolesForUser(String(dbRole)).length > 1;
+          if (isCompoundRole) {
+            console.log(`[RoleSync] Skipping upstream push of compound role '${dbRole}' at login for ${email}`);
+          } else {
+            try {
+              const ur = await Promise.race([
+                websiteFetch(`/api/users/${user.id}`, {
+                  method: "PUT",
+                  body: { role: dbRole },
+                  jwt,
+                }),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error("timed out after 5000ms")), 5000),
+                ),
+              ]);
+              if (ur.ok) {
+                console.log(`[RoleSync] Healed login role drift: pushed '${dbRole}' to website for ${email}`);
+              } else {
+                console.error(`[RoleSync] Failed to push role '${dbRole}' to website at login for ${email}: ${ur.status}`);
+              }
+            } catch (e: any) {
+              console.error(`[RoleSync] Error pushing role to website at login:`, e.message);
+            }
+          }
         }
       } catch {}
 
