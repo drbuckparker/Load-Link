@@ -23,6 +23,17 @@ if (Platform.OS === 'web' && typeof window !== 'undefined') {
       event.preventDefault();
     }
   });
+  // fontfaceobserver throws its "6000ms timeout exceeded" inside a setTimeout,
+  // which surfaces as a plain uncaught error (not a rejection) and triggers the
+  // red dev overlay on slow connections. Fonts still swap in when they arrive,
+  // so this error is harmless — suppress it.
+  window.addEventListener('error', (event) => {
+    const msg = String(event.message || event.error?.message || '');
+    // "<n>ms timeout exceeded" only comes from fontfaceobserver in this bundle.
+    if (/ms timeout exceeded/i.test(msg)) {
+      event.preventDefault();
+    }
+  }, true);
 }
 
 SplashScreen.preventAutoHideAsync();
