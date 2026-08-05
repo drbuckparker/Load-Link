@@ -1409,7 +1409,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const search = req.query.search as string | undefined;
       const driverId = req.query.driver_id as string | undefined;
 
-      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.archived_at IS NULL`;
+      let query = `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text WHERE j.archived_at IS NULL`;
       const params: any[] = [];
       let paramIdx = 1;
 
@@ -1467,6 +1467,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (driverId) {
         query += ` AND (j.driver_id = $${paramIdx} OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $${paramIdx}))`;
         params.push(driverId);
+        paramIdx++;
+      }
+      const projectIdFilter = req.query.project_id as string | undefined;
+      if (projectIdFilter) {
+        query += ` AND j.project_id = $${paramIdx}`;
+        params.push(projectIdFilter);
         paramIdx++;
       }
       if (search) {
@@ -1575,7 +1581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          WHERE j.archived_at IS NOT NULL AND (j.contractor_id = $1 OR j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
          ORDER BY j.archived_at DESC`,
         [auth.userId]
@@ -1640,7 +1646,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name, u.company as contractor_name,
+        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name,
                 u.company as contractor_company,
                 u.full_name as contractor_full_name,
                 u.phone as contractor_phone,
@@ -1648,7 +1654,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 d.full_name as driver_name,
                 COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company
          FROM jobs j
-         LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+         LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          LEFT JOIN users u ON j.contractor_id::text = u.id::text
          LEFT JOIN users d ON j.driver_id::text = d.id::text
          LEFT JOIN users dtc ON d.trucking_company_id::text = dtc.id::text
@@ -2053,7 +2059,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // table keeps project_id; resolve names from both project tables so the
       // app can show "which project is this job under".
       const projRows = await pool.query(
-        `SELECT j.id, j.project_id, COALESCE(bp.name, cp.name) AS project_name
+        `SELECT j.id, j.project_id, COALESCE(cp.name, bp.name) AS project_name
          FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id::text = j.project_id::text
          LEFT JOIN broker_client_projects bp ON bp.id::text = j.project_id::text
@@ -4764,13 +4770,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     t.truck_number, t.make as truck_make, t.model as truck_model, t.year as truck_year,
                     j.material, j.origin_address,
                     c.full_name as contractor_name, c.company as contractor_company,
-                    cp.name as project_name,
+                    COALESCE(cp.name, bcp.name) as project_name,
                     u.full_name as driver_name
              FROM job_runs jr
              JOIN trucks t ON jr.vehicle_id = t.id
              JOIN jobs j ON jr.job_id = j.id
              LEFT JOIN users c ON j.contractor_id = c.id
-             LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+             LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
              LEFT JOIN users u ON jr.driver_id = u.id
              WHERE t.trucking_company_id = $1 AND jr.status::text = 'active'
              ORDER BY jr.started_at ASC`,
@@ -4842,7 +4848,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     COALESCE(j.includes_sunday, true)    AS includes_sunday,
                     j.status::text AS job_status,
                     COALESCE(j.trucks_needed, 1)::int AS trucks_needed,
-                    cp.name AS project_name,
+                    COALESCE(cp.name, bcp.name) AS project_name,
                     (SELECT COUNT(*)::int FROM job_assignments ja
                        WHERE ja.job_id = j.id AND ja.status::text = 'approved') AS trucks_assigned,
                     (SELECT COUNT(*)::int FROM job_assignments ja
@@ -4850,7 +4856,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     (SELECT COUNT(*)::int FROM job_runs jr
                        WHERE jr.job_id = j.id AND jr.status::text = 'active') AS active_run_count
                FROM jobs j
-               LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+               LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
               WHERE j.contractor_id = $1
                 AND j.archived_at IS NULL
                 AND j.status::text NOT IN ('cancelled', 'completed')
@@ -4911,12 +4917,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
                j.material, j.status::text AS job_status, j.contractor_id,
                contractor.full_name AS contractor_name,
                contractor.company   AS contractor_company,
-               cp.name AS project_name
+               COALESCE(cp.name, bcp.name) AS project_name
              FROM job_assignments ja
              JOIN trucks t ON ja.vehicle_id = t.id
              JOIN jobs   j ON ja.job_id     = j.id
              LEFT JOIN users               contractor ON j.contractor_id = contractor.id
              LEFT JOIN contractor_projects cp         ON j.project_id    = cp.id
+             LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
              WHERE t.trucking_company_id = $1
                AND t.archived_at IS NULL
                AND ja.status::text = 'approved'
@@ -5203,11 +5210,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const status = req.query.status as string | undefined;
       const search = req.query.search as string | undefined;
 
-      let query = `SELECT j.*, cp.name as project_name,
+      let query = `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name,
           COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'pending'), 0) as pending_applications,
           COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'approved'), 0) as approved_assignments,
           COALESCE((SELECT COUNT(*)::int FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active'), 0) as active_run_count
-        FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
+        FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
       const params: any[] = [contractorId];
       let paramIdx = 2;
 
@@ -5278,7 +5285,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // invisible to the truck until the broker sends them. Driver-created
       // applications also have sent_at NULL, so the broker check is required.
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          WHERE (j.driver_id = $1 OR j.id IN (
            SELECT ja.job_id FROM job_assignments ja
            WHERE ja.driver_id = $1
@@ -5625,12 +5632,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userRole = (auth.user?.role || '').toLowerCase();
       if (role === 'contractor') {
         result = await pool.query(
-          `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
+          `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
           [auth.userId]
         );
       } else if (userRole === 'trucking_company') {
         result = await pool.query(
-          `SELECT DISTINCT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
+          `SELECT DISTINCT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text LEFT JOIN users u ON j.contractor_id::text = u.id::text
            WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON ja.vehicle_id = t.id WHERE t.trucking_company_id = $1 AND ja.status::text NOT IN ('withdrawn', 'rejected'))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
@@ -5638,7 +5645,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       } else {
         result = await pool.query(
-          `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
+          `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text LEFT JOIN users u ON j.contractor_id::text = u.id::text
            WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
@@ -6019,8 +6026,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // filter, an old open invoice would keep sweeping in every newer
       // un-invoiced job and its period label would be wrong.
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+        `SELECT DISTINCT j.*, COALESCE(cp.name, bcp.name) AS project_name FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id = j.project_id
+         LEFT JOIN broker_client_projects bcp ON bcp.id::text = j.project_id
          LEFT JOIN job_runs jr ON jr.job_id = j.id
          WHERE j.invoice_id = $1
             OR (j.contractor_id = $2
@@ -6032,8 +6040,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
     } else {
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+        `SELECT DISTINCT j.*, COALESCE(cp.name, bcp.name) AS project_name FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id = j.project_id
+         LEFT JOIN broker_client_projects bcp ON bcp.id::text = j.project_id
          WHERE j.invoice_id = $1`,
         [invoice.id]
       );
@@ -6275,7 +6284,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       query += ` ORDER BY created_at DESC`;
 
       const result = await pool.query(query, params);
-      const projects = result.rows;
+      let projects = result.rows;
+
+      // Brokers also create projects under their clients (companion-local
+      // table). Include those so the Projects tab shows every project, not
+      // just self-owned ones.
+      let brokerQuery = `SELECT * FROM broker_client_projects WHERE broker_id = $1`;
+      if (!includeDeleted) brokerQuery += ` AND deleted_at IS NULL`;
+      brokerQuery += ` ORDER BY created_at DESC`;
+      const brokerResult = await pool.query(brokerQuery, [auth.userId]).catch(() => ({ rows: [] as any[] }));
+      if (brokerResult.rows.length) {
+        const seen = new Set(projects.map((p: any) => String(p.id)));
+        projects = projects.concat(
+          brokerResult.rows
+            .filter((p: any) => !seen.has(String(p.id)))
+            // broker_client_projects has no status column; derive it.
+            .map((p: any) => ({ ...p, status: p.deleted_at ? "deleted" : "active" }))
+        );
+      }
 
       return res.json(projects.map(addDualKeys));
     } catch (e: any) {
@@ -6340,7 +6366,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `SELECT id FROM contractor_projects WHERE id = $1 AND contractor_id::text = $2 AND deleted_at IS NULL`,
         [req.params.id, auth.userId]
       );
-      if (owned.rows.length === 0) return res.status(404).json({ message: "Project not found" });
+      if (owned.rows.length === 0) {
+        // Broker-created client projects live in a companion-local table with
+        // a narrower column set (no status/site_address_type/updated_at).
+        const brokerOwned = await pool.query(
+          `SELECT id FROM broker_client_projects WHERE id::text = $1 AND broker_id = $2 AND deleted_at IS NULL`,
+          [req.params.id, auth.userId]
+        ).catch(() => ({ rows: [] as any[] }));
+        if (brokerOwned.rows.length === 0) return res.status(404).json({ message: "Project not found" });
+        const bFieldMap: Record<string, string> = {
+          name: 'name', projectName: 'name', project_name: 'name',
+          jobNumber: 'job_number', job_number: 'job_number',
+          siteAddress: 'site_address', site_address: 'site_address',
+          siteLat: 'site_lat', site_lat: 'site_lat',
+          siteLng: 'site_lng', site_lng: 'site_lng',
+          notes: 'notes',
+        };
+        const bUpdates: string[] = [];
+        const bValues: any[] = [];
+        let bIdx = 1;
+        for (const [bodyKey, dbCol] of Object.entries(bFieldMap)) {
+          if (req.body[bodyKey] !== undefined) {
+            bUpdates.push(`${dbCol} = $${bIdx}`);
+            bValues.push(req.body[bodyKey]);
+            bIdx++;
+          }
+        }
+        if (bUpdates.length > 0) {
+          bValues.push(req.params.id);
+          await pool.query(
+            `UPDATE broker_client_projects SET ${bUpdates.join(', ')} WHERE id::text = $${bIdx}`,
+            bValues
+          );
+        }
+        const bRow = await pool.query(`SELECT * FROM broker_client_projects WHERE id::text = $1`, [req.params.id]);
+        const bp = bRow.rows[0] || { id: req.params.id };
+        return res.json(addDualKeys({ ...bp, status: bp.deleted_at ? 'deleted' : 'active' }));
+      }
 
       const updates: string[] = [];
       const values: any[] = [];
@@ -6433,7 +6495,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
          WHERE id = $1 AND contractor_id::text = $2 RETURNING id`,
         [req.params.id, auth.userId]
       );
-      if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+      if (upd.rowCount === 0) {
+        // Broker client projects are companion-local; no website push needed.
+        const bUpd = await pool.query(
+          `UPDATE broker_client_projects SET deleted_at = NOW()
+           WHERE id::text = $1 AND broker_id = $2 RETURNING id`,
+          [req.params.id, auth.userId]
+        ).catch(() => ({ rowCount: 0 }));
+        if (bUpd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+        return res.json({ ok: true });
+      }
 
       // Propagate the delete to the website so it drops out of the reconcile list too.
       pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, {
@@ -6454,7 +6525,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
          WHERE id = $1 AND contractor_id::text = $2 RETURNING *`,
         [req.params.id, auth.userId]
       );
-      if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+      if (upd.rowCount === 0) {
+        // Broker client projects are companion-local; just clear the soft delete.
+        const bUpd = await pool.query(
+          `UPDATE broker_client_projects SET deleted_at = NULL
+           WHERE id::text = $1 AND broker_id = $2 RETURNING id`,
+          [req.params.id, auth.userId]
+        ).catch(() => ({ rowCount: 0 }));
+        if (bUpd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+        return res.json({ ok: true });
+      }
 
       // Re-register with the website (the delete dropped it from their list), so
       // the reconcile sees it again instead of soft-deleting it on the next sync.

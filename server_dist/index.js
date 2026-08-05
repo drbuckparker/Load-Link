@@ -2490,7 +2490,7 @@ async function registerRoutes(app2) {
       const status = req.query.status;
       const search = req.query.search;
       const driverId = req.query.driver_id;
-      let query = `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.archived_at IS NULL`;
+      let query = `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text WHERE j.archived_at IS NULL`;
       const params = [];
       let paramIdx = 1;
       const visFeats = await getVisibilityFeatures(pool);
@@ -2542,6 +2542,12 @@ async function registerRoutes(app2) {
       if (driverId) {
         query += ` AND (j.driver_id = $${paramIdx} OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $${paramIdx}))`;
         params.push(driverId);
+        paramIdx++;
+      }
+      const projectIdFilter = req.query.project_id;
+      if (projectIdFilter) {
+        query += ` AND j.project_id = $${paramIdx}`;
+        params.push(projectIdFilter);
         paramIdx++;
       }
       if (search) {
@@ -2630,7 +2636,7 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          WHERE j.archived_at IS NOT NULL AND (j.contractor_id = $1 OR j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1))
          ORDER BY j.archived_at DESC`,
         [auth.userId]
@@ -2692,7 +2698,7 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name, u.company as contractor_name,
+        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name,
                 u.company as contractor_company,
                 u.full_name as contractor_full_name,
                 u.phone as contractor_phone,
@@ -2700,7 +2706,7 @@ async function registerRoutes(app2) {
                 d.full_name as driver_name,
                 COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company
          FROM jobs j
-         LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+         LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          LEFT JOIN users u ON j.contractor_id::text = u.id::text
          LEFT JOIN users d ON j.driver_id::text = d.id::text
          LEFT JOIN users dtc ON d.trucking_company_id::text = dtc.id::text
@@ -3082,14 +3088,30 @@ async function registerRoutes(app2) {
         [auth.userId]
       );
       const linkMap = new Map(links.rows.map((l) => [String(l.job_id), l]));
+      const projRows = await pool.query(
+        `SELECT j.id, j.project_id, COALESCE(bp.name, cp.name) AS project_name
+         FROM jobs j
+         LEFT JOIN contractor_projects cp ON cp.id::text = j.project_id::text
+         LEFT JOIN broker_client_projects bp ON bp.id::text = j.project_id::text
+         WHERE j.contractor_id = $1 AND j.project_id IS NOT NULL`,
+        [auth.userId]
+      );
+      const projMap = new Map(projRows.rows.map((r) => [String(r.id), r]));
       const merged = jobs2.map((j) => {
         const l = linkMap.get(String(j.id));
-        if (!l) return j;
+        const p = projMap.get(String(j.id));
+        if (!l && !p) return j;
         return {
           ...j,
-          clientName: l.client_name || j.clientName,
-          clientEmail: l.client_email || j.clientEmail,
-          clientUserId: l.client_key || j.clientUserId
+          ...l ? {
+            clientName: l.client_name || j.clientName,
+            clientEmail: l.client_email || j.clientEmail,
+            clientUserId: l.client_key || j.clientUserId
+          } : {},
+          ...p ? {
+            projectId: j.projectId || p.project_id,
+            projectName: j.projectName || p.project_name || void 0
+          } : {}
         };
       });
       return res.json(addDualKeys(merged));
@@ -3291,20 +3313,22 @@ async function registerRoutes(app2) {
     const date = String(req.query.date || "").slice(0, 10);
     try {
       const params = [auth.userId];
-      let where = `broker_id = $1 AND status = 'pending'`;
+      let where = `broker_id = $1 AND status IN ('pending', 'failed')`;
       if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         where += ` AND date = $2`;
         params.push(date);
       }
       const r = await pool.query(
-        `SELECT id, date, send_at, status, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
+        `SELECT id, date, send_at, status, error, sent_jobs, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
         params
       );
       return res.json(r.rows.map((row) => ({
         id: row.id,
         date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
         sendAt: row.send_at,
-        status: row.status
+        status: row.status,
+        error: row.error ?? null,
+        sentJobs: row.sent_jobs ?? 0
       })));
     } catch (e) {
       console.error("GET /api/broker/scheduled-sends error:", e.message);
@@ -3323,7 +3347,7 @@ async function registerRoutes(app2) {
     if (sendAt.getTime() < Date.now() - 6e4) return res.status(400).json({ message: "sendAt is in the past" });
     try {
       await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status = 'pending'`,
+        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status IN ('pending', 'failed')`,
         [auth.userId, date]
       );
       const tzOffsetMin = Number(req.body?.tzOffsetMin ?? req.header("X-TZ-Offset") ?? 0) || 0;
@@ -3348,7 +3372,7 @@ async function registerRoutes(app2) {
     const auth = getWebsiteAuth(req);
     try {
       const r = await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status = 'pending' RETURNING id`,
+        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status IN ('pending', 'failed') RETURNING id`,
         [req.params.id, auth.userId]
       );
       if (r.rowCount === 0) return res.status(404).json({ message: "Scheduled send not found" });
@@ -3384,6 +3408,59 @@ async function registerRoutes(app2) {
     } catch (e) {
       console.error("POST /api/broker/clients error:", e.message);
       return res.status(500).json({ message: "Failed to add client" });
+    }
+  });
+  app2.put("/api/broker/clients/:id", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const rawId = String(req.params.id || "");
+    if (!rawId.startsWith("manual-")) {
+      return res.status(400).json({ message: "Only manually added clients can be edited" });
+    }
+    const id = rawId.slice(7);
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "").trim();
+    const phone = String(req.body?.phone || "").trim();
+    const contactName = String(req.body?.contactName || req.body?.contact_name || "").trim();
+    const address = String(req.body?.address || "").trim();
+    const notes = String(req.body?.notes || "").trim();
+    if (!name) return res.status(400).json({ message: "Client name is required" });
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: "Invalid email address" });
+    }
+    try {
+      const dupe = await pool.query(
+        `SELECT id FROM broker_manual_clients WHERE broker_id = $1 AND lower(name) = lower($2) AND id::text <> $3`,
+        [auth.userId, name, id]
+      );
+      if (dupe.rows[0]) return res.status(409).json({ message: "You already have a client with that name" });
+      const result = await pool.query(
+        `UPDATE broker_manual_clients SET name = $1, email = $2, phone = $3, contact_name = $4, address = $5, notes = $6
+         WHERE id::text = $7 AND broker_id = $8 RETURNING *`,
+        [name, email || null, phone || null, contactName || null, address || null, notes || null, id, auth.userId]
+      );
+      if (!result.rows[0]) return res.status(404).json({ message: "Client not found" });
+      return res.json(addDualKeys(result.rows[0]));
+    } catch (e) {
+      console.error("PUT /api/broker/clients/:id error:", e.message);
+      return res.status(500).json({ message: "Failed to update client" });
+    }
+  });
+  app2.delete("/api/broker/clients/:id", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const rawId = String(req.params.id || "");
+    if (!rawId.startsWith("manual-")) {
+      return res.status(400).json({ message: "Only manually added clients can be removed" });
+    }
+    try {
+      const result = await pool.query(
+        `DELETE FROM broker_manual_clients WHERE id::text = $1 AND broker_id = $2 RETURNING id`,
+        [rawId.slice(7), auth.userId]
+      );
+      if (!result.rows[0]) return res.status(404).json({ message: "Client not found" });
+      return res.json({ success: true });
+    } catch (e) {
+      console.error("DELETE /api/broker/clients/:id error:", e.message);
+      return res.status(500).json({ message: "Failed to remove client" });
     }
   });
   async function verifyBrokerClient(auth, clientUserId) {
@@ -5393,13 +5470,13 @@ async function registerRoutes(app2) {
                     t.truck_number, t.make as truck_make, t.model as truck_model, t.year as truck_year,
                     j.material, j.origin_address,
                     c.full_name as contractor_name, c.company as contractor_company,
-                    cp.name as project_name,
+                    COALESCE(cp.name, bcp.name) as project_name,
                     u.full_name as driver_name
              FROM job_runs jr
              JOIN trucks t ON jr.vehicle_id = t.id
              JOIN jobs j ON jr.job_id = j.id
              LEFT JOIN users c ON j.contractor_id = c.id
-             LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+             LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
              LEFT JOIN users u ON jr.driver_id = u.id
              WHERE t.trucking_company_id = $1 AND jr.status::text = 'active'
              ORDER BY jr.started_at ASC`,
@@ -5450,7 +5527,7 @@ async function registerRoutes(app2) {
                     (SELECT COUNT(*)::int FROM job_runs jr
                        WHERE jr.job_id = j.id AND jr.status::text = 'active') AS active_run_count
                FROM jobs j
-               LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+               LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
               WHERE j.contractor_id = $1
                 AND j.archived_at IS NULL
                 AND j.status::text NOT IN ('cancelled', 'completed')
@@ -5778,11 +5855,11 @@ async function registerRoutes(app2) {
       const projectFilter = req.query.project_id;
       const status = req.query.status;
       const search = req.query.search;
-      let query = `SELECT j.*, cp.name as project_name,
+      let query = `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name,
           COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'pending'), 0) as pending_applications,
           COALESCE((SELECT COUNT(*)::int FROM job_assignments ja WHERE ja.job_id = j.id AND ja.status::text = 'approved'), 0) as approved_assignments,
           COALESCE((SELECT COUNT(*)::int FROM job_runs jr WHERE jr.job_id = j.id AND jr.status::text = 'active'), 0) as active_run_count
-        FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
+        FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL`;
       const params = [contractorId];
       let paramIdx = 2;
       const singleDate = req.query.date;
@@ -5841,7 +5918,7 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const result = await pool.query(
-        `SELECT j.*, cp.name as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id
+        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          WHERE (j.driver_id = $1 OR j.id IN (
            SELECT ja.job_id FROM job_assignments ja
            WHERE ja.driver_id = $1
@@ -6122,12 +6199,12 @@ async function registerRoutes(app2) {
       const userRole = (auth.user?.role || "").toLowerCase();
       if (role === "contractor") {
         result = await pool.query(
-          `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
+          `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text LEFT JOIN users u ON j.contractor_id::text = u.id::text WHERE j.contractor_id = $1 AND j.archived_at IS NULL ORDER BY j.scheduled_date DESC`,
           [auth.userId]
         );
       } else if (userRole === "trucking_company") {
         result = await pool.query(
-          `SELECT DISTINCT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
+          `SELECT DISTINCT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text LEFT JOIN users u ON j.contractor_id::text = u.id::text
            WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON ja.vehicle_id = t.id WHERE t.trucking_company_id = $1 AND ja.status::text NOT IN ('withdrawn', 'rejected'))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
@@ -6135,7 +6212,7 @@ async function registerRoutes(app2) {
         );
       } else {
         result = await pool.query(
-          `SELECT j.*, cp.name as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN users u ON j.contractor_id::text = u.id::text
+          `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text LEFT JOIN users u ON j.contractor_id::text = u.id::text
            WHERE (j.driver_id = $1 OR j.id IN (SELECT job_id FROM job_assignments WHERE driver_id = $1 AND status::text NOT IN ('withdrawn', 'rejected')))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
@@ -6706,7 +6783,17 @@ async function registerRoutes(app2) {
       }
       query += ` ORDER BY created_at DESC`;
       const result = await pool.query(query, params);
-      const projects = result.rows;
+      let projects = result.rows;
+      let brokerQuery = `SELECT * FROM broker_client_projects WHERE broker_id = $1`;
+      if (!includeDeleted) brokerQuery += ` AND deleted_at IS NULL`;
+      brokerQuery += ` ORDER BY created_at DESC`;
+      const brokerResult = await pool.query(brokerQuery, [auth.userId]).catch(() => ({ rows: [] }));
+      if (brokerResult.rows.length) {
+        const seen = new Set(projects.map((p) => String(p.id)));
+        projects = projects.concat(
+          brokerResult.rows.filter((p) => !seen.has(String(p.id))).map((p) => ({ ...p, status: p.deleted_at ? "deleted" : "active" }))
+        );
+      }
       return res.json(projects.map(addDualKeys));
     } catch (e) {
       console.error("GET /api/projects error:", e.message, e.stack?.split("\n")[1]);
@@ -6754,7 +6841,47 @@ async function registerRoutes(app2) {
         `SELECT id FROM contractor_projects WHERE id = $1 AND contractor_id::text = $2 AND deleted_at IS NULL`,
         [req.params.id, auth.userId]
       );
-      if (owned.rows.length === 0) return res.status(404).json({ message: "Project not found" });
+      if (owned.rows.length === 0) {
+        const brokerOwned = await pool.query(
+          `SELECT id FROM broker_client_projects WHERE id::text = $1 AND broker_id = $2 AND deleted_at IS NULL`,
+          [req.params.id, auth.userId]
+        ).catch(() => ({ rows: [] }));
+        if (brokerOwned.rows.length === 0) return res.status(404).json({ message: "Project not found" });
+        const bFieldMap = {
+          name: "name",
+          projectName: "name",
+          project_name: "name",
+          jobNumber: "job_number",
+          job_number: "job_number",
+          siteAddress: "site_address",
+          site_address: "site_address",
+          siteLat: "site_lat",
+          site_lat: "site_lat",
+          siteLng: "site_lng",
+          site_lng: "site_lng",
+          notes: "notes"
+        };
+        const bUpdates = [];
+        const bValues = [];
+        let bIdx = 1;
+        for (const [bodyKey, dbCol] of Object.entries(bFieldMap)) {
+          if (req.body[bodyKey] !== void 0) {
+            bUpdates.push(`${dbCol} = $${bIdx}`);
+            bValues.push(req.body[bodyKey]);
+            bIdx++;
+          }
+        }
+        if (bUpdates.length > 0) {
+          bValues.push(req.params.id);
+          await pool.query(
+            `UPDATE broker_client_projects SET ${bUpdates.join(", ")} WHERE id::text = $${bIdx}`,
+            bValues
+          );
+        }
+        const bRow = await pool.query(`SELECT * FROM broker_client_projects WHERE id::text = $1`, [req.params.id]);
+        const bp = bRow.rows[0] || { id: req.params.id };
+        return res.json(addDualKeys({ ...bp, status: bp.deleted_at ? "deleted" : "active" }));
+      }
       const updates = [];
       const values = [];
       let paramIdx = 1;
@@ -6839,7 +6966,15 @@ async function registerRoutes(app2) {
          WHERE id = $1 AND contractor_id::text = $2 RETURNING id`,
         [req.params.id, auth.userId]
       );
-      if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+      if (upd.rowCount === 0) {
+        const bUpd = await pool.query(
+          `UPDATE broker_client_projects SET deleted_at = NOW()
+           WHERE id::text = $1 AND broker_id = $2 RETURNING id`,
+          [req.params.id, auth.userId]
+        ).catch(() => ({ rowCount: 0 }));
+        if (bUpd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+        return res.json({ ok: true });
+      }
       pushToWebsite(`/api/contractor-projects/${req.params.id}`, auth, {
         method: "DELETE"
       }).catch(() => {
@@ -6857,7 +6992,15 @@ async function registerRoutes(app2) {
          WHERE id = $1 AND contractor_id::text = $2 RETURNING *`,
         [req.params.id, auth.userId]
       );
-      if (upd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+      if (upd.rowCount === 0) {
+        const bUpd = await pool.query(
+          `UPDATE broker_client_projects SET deleted_at = NULL
+           WHERE id::text = $1 AND broker_id = $2 RETURNING id`,
+          [req.params.id, auth.userId]
+        ).catch(() => ({ rowCount: 0 }));
+        if (bUpd.rowCount === 0) return res.status(404).json({ message: "Project not found" });
+        return res.json({ ok: true });
+      }
       const p = upd.rows[0];
       (async () => {
         await pushToWebsite("/api/contractor-projects", auth, {
