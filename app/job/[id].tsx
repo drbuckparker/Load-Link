@@ -2920,11 +2920,11 @@ export default function JobDetailScreen() {
           </View>
         )}
 
-        {/* Job-management actions (complete / edit / archive) are contractor-only.
-            Trucking companies (fleet managers) and drivers do the work but never
-            manage the job posting — even the poster only sees these in the
-            contractor role view. */}
-        {isMyPostedJob && isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
+        {/* Job-management actions (complete / edit / archive) are for the poster:
+            contractors in their contractor role view, and brokers on their own
+            posted jobs. Trucking companies (fleet managers) and drivers do the
+            work but never manage the job posting. */}
+        {isMyPostedJob && (isContractor || isBrokerRole(user?.role || '')) && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (
           <View style={{ gap: 10, marginHorizontal: 16, marginTop: 10 }}>
             <Pressable
               style={({ pressed }) => [styles.completeJobBtn, pressed && { opacity: 0.85 }]}
