@@ -21,6 +21,9 @@ runtimeVersion is now a **fixed string** manually kept equal to `version` in app
 ## Android Google Maps key required in app.json (durable)
 The app uses `react-native-maps`, and on Android that ALWAYS renders Google Maps (even PROVIDER_DEFAULT) → the native SDK needs a Maps API key in `AndroidManifest.xml` or it throws `IllegalStateException: API key not found` and the app crashes the moment a map screen mounts (e.g. right after sign-in). Expo only writes that manifest meta-data from `app.json` → `expo.android.config.googleMaps.apiKey`. Static app.json can't read env vars (app.config.js is forbidden here), so the key lives literally in app.json (committed to the public GitHub repo). That's accepted practice: Android Maps keys are extractable from any APK, so the security boundary is GCP restriction (package `com.loadlink.app` + Play app-signing SHA‑1) + "Maps SDK for Android" enabled, NOT secrecy. iOS uses Apple Maps (PROVIDER_DEFAULT) and needs no key.
 
+## Publishing OTA updates from Replit (durable)
+Replit "publish" only updates the server/web deployment — it never updates the native app's JS. JS-only fixes reach installed phones via EAS Update: normally a GitHub App pushes `eas update` on GitHub pushes, but it can be run directly from the Replit shell with `npx -y eas-cli@latest update --branch production --message "..." --non-interactive` (EXPO_TOKEN in env authenticates; fingerprint step is slow but succeeds). Verified working Aug 2026. Users saying "I published but the app didn't change" almost always means the OTA step didn't run.
+
 ## OTA reachability (durable)
 An OTA (EAS Update) can ONLY reach an installed app that was built WITH the expo-updates config already embedded. Store binaries built before OTA was added cannot receive OTA and require a fresh native build. Google Play approval never recompiles — it publishes the exact uploaded `.aab`, so a fix only reaches the store via a newly built+uploaded binary.
 
