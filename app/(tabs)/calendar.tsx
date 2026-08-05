@@ -238,7 +238,9 @@ export default function CalendarScreen() {
   const [truckDetailModal, setTruckDetailModal] = useState<{ vehicle: any; status: string; jobName: string; contractorName?: string; pickup?: string; jobId?: string } | null>(null);
   const [togglingAvail, setTogglingAvail] = useState(false);
 
-  const isContractor = user?.role ? (isContractorRole(user.role) && user.role !== 'trucking_company') : false;
+  // Brokers post jobs like contractors do, so they get the poster calendar
+  // (their own postings + capacity), not the fleet/driver view.
+  const isContractor = user?.role ? ((isContractorRole(user.role) || user.role === 'broker') && user.role !== 'trucking_company') : false;
   const isFleetManager = user?.role === 'trucking_company';
 
   const vehiclesQuery = useQuery<any[]>({

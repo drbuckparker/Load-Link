@@ -5667,7 +5667,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const userId = auth.userId;
       const userRole = (auth.user?.role || '').toLowerCase();
-      const isContractorRole = userRole.includes('contractor') && userRole !== 'trucking_company';
+      // Brokers post jobs under their own contractor_id, so their calendar is
+      // the poster view (own postings), same as contractors.
+      const isContractorRole = (userRole.includes('contractor') || userRole === 'broker') && userRole !== 'trucking_company';
       // Fleet (trucking-company) view: the calendar is about THIS company's own trucks.
       // A job can carry assignments for trucks owned by other companies (e.g. a sub the
       // contractor hired); those must not appear as bookings in this fleet's calendar.
