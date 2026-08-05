@@ -1488,9 +1488,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       // Hide jobs from Find Jobs when they're no longer truly available to apply to.
       // Conditions for hiding:
-      //   a) Fully crewed: approved trucks >= trucks_needed — hidden from EVERYONE,
-      //      including the contractor who posted it. A fully-staffed job is no longer
-      //      "available", so it should drop out of Find Jobs for all viewers.
+      //   a) Fully crewed: approved trucks >= trucks_needed — hidden from everyone
+      //      EXCEPT the poster. The poster's own postings stay visible (their
+      //      project view relies on this route); other viewers see a fully-staffed
+      //      job as no longer "available", so it drops out of Find Jobs.
       //   b) (caller-only) Caller is already an approved truck on this job — it lives
       //      on their calendar now, not in Find Jobs.
       //   c) (caller-only) Application cap hit: (pending+approved) >= cap AND caller
@@ -1501,9 +1502,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       query += ` AND NOT (
         j.status::text IN ('open', 'accepted', 'pending')
         AND (
-          (SELECT COUNT(*) FROM job_assignments ja
+          ((SELECT COUNT(*) FROM job_assignments ja
             WHERE ja.job_id = j.id AND ja.status::text = 'approved')
           >= COALESCE(j.trucks_needed, 1)
+          -- Never hide the caller's OWN postings (project view relies on this)
+          AND j.contractor_id::text != $${paramIdx})
           OR (
             j.contractor_id::text != $${paramIdx}
             AND (
