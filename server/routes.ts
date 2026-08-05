@@ -558,11 +558,134 @@ function saveJsonMap<T>(filename: string, map: Map<string, T>) {
       map.clear();
       for (const [k, v] of trimmed) map.set(k, v);
     }
-    writeFileSync(join(DATA_DIR, filename), JSON.stringify([...map.entries()]), "utf-8");
+    // Sessions can carry a user object with a multi-MB base64 profile image;
+    // persisting that bloats the file to 100s of MB and overflows jsonb.
+    // Strip oversized string fields — /api/auth/me re-hydrates the user from
+    // the users table anyway, so nothing user-visible is lost.
+    const entries = [...map.entries()].map(([k, v]) =>
+      filename === "sessions.json" ? [k, slimSessionEntry(v)] : [k, v],
+    );
+    writeFileSync(join(DATA_DIR, filename), JSON.stringify(entries), "utf-8");
   } catch {}
+  // Sessions must survive deploy restarts (the deployed filesystem is
+  // ephemeral, so the JSON file alone gets wiped on every cold start and
+  // every signed-in user is logged out). Mirror the whole map to the DB.
+  if (filename === "sessions.json") {
+    void syncSessionsToDb(map as Map<string, any>);
+  }
 }
 
 const tokenToJwt = loadJsonMap<{ jwt: string; userId: string; user: any; originalRole?: string }>("sessions.json");
+
+// --- DB-backed session persistence (survives deploys/restarts) ---
+function slimSessionEntry(v: any): any {
+  try {
+    const user = v?.user;
+    if (!user || typeof user !== "object") return v;
+    let slim: any = null;
+    for (const [k, val] of Object.entries(user)) {
+      if (typeof val === "string" && val.length > 100_000) {
+        if (!slim) slim = { ...user };
+        delete slim[k];
+      }
+    }
+    return slim ? { ...v, user: slim } : v;
+  } catch {
+    return v;
+  }
+}
+
+let sessionDbReady = false;
+// Single-flight chain so overlapping saves can't interleave their DB writes.
+let sessionDbChain: Promise<void> = Promise.resolve();
+function queueSessionDbOp(op: () => Promise<void>) {
+  sessionDbChain = sessionDbChain.then(op).catch((e: any) => {
+    console.error("[Sessions] DB op failed:", e?.message);
+  });
+  return sessionDbChain;
+}
+
+// Upsert-only: NEVER delete rows this instance doesn't know about — with
+// multiple deployed instances, another instance's freshly minted sessions
+// wouldn't be in this instance's memory yet, and a global "delete missing"
+// would log those users out. Explicit deletes happen only on logout/account
+// deletion via deleteSessionsFromDb().
+async function syncSessionsToDb(map: Map<string, any>) {
+  if (!sessionDbReady) return;
+  const obj: Record<string, any> = {};
+  for (const [k, v] of map.entries()) obj[k] = slimSessionEntry(v);
+  await queueSessionDbOp(async () => {
+    await pool.query(
+      `INSERT INTO companion_sessions (token, entry, updated_at)
+       SELECT key, value, NOW() FROM jsonb_each($1::jsonb)
+       ON CONFLICT (token) DO UPDATE SET entry = EXCLUDED.entry, updated_at = NOW()`,
+      [JSON.stringify(obj)],
+    );
+  });
+}
+
+function deleteSessionsFromDb(tokens: string[]) {
+  if (!sessionDbReady || tokens.length === 0) return;
+  void queueSessionDbOp(async () => {
+    await pool.query(`DELETE FROM companion_sessions WHERE token = ANY($1::text[])`, [tokens]);
+  });
+}
+
+// Cross-instance revocation: a logout/account-deletion on one instance only
+// deletes DB rows — sibling instances still hold the token in memory. Every
+// 60s each instance evicts in-memory sessions whose DB row is gone, so a
+// revoked token stops working everywhere within a minute.
+function startSessionRevocationSweep() {
+  setInterval(() => {
+    if (!sessionDbReady || tokenToJwt.size === 0) return;
+    void queueSessionDbOp(async () => {
+      const tokens = [...tokenToJwt.keys()];
+      const { rows } = await pool.query(
+        `SELECT t AS token FROM unnest($1::text[]) AS t
+         WHERE NOT EXISTS (SELECT 1 FROM companion_sessions cs WHERE cs.token = t)`,
+        [tokens],
+      );
+      if (rows.length === 0) return;
+      for (const r of rows) tokenToJwt.delete(r.token);
+      console.log(`[Sessions] Evicted ${rows.length} revoked session(s) from memory`);
+      // Rewrite the local file only; skip the DB mirror (nothing to add).
+      try {
+        const entries = [...tokenToJwt.entries()].map(([k, v]) => [k, slimSessionEntry(v)]);
+        writeFileSync(join(DATA_DIR, "sessions.json"), JSON.stringify(entries), "utf-8");
+      } catch {}
+    });
+  }, 60_000);
+}
+
+async function initSessionDb() {
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS companion_sessions (
+         token TEXT PRIMARY KEY,
+         entry JSONB NOT NULL,
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+       )`,
+    );
+    // Expire long-dead sessions so upsert-only persistence can't grow forever.
+    await pool.query(`DELETE FROM companion_sessions WHERE updated_at < NOW() - INTERVAL '90 days'`);
+    const { rows } = await pool.query(`SELECT token, entry FROM companion_sessions`);
+    let restored = 0;
+    for (const row of rows) {
+      if (!tokenToJwt.has(row.token)) {
+        tokenToJwt.set(row.token, row.entry);
+        restored++;
+      }
+    }
+    sessionDbReady = true;
+    // Push any file-only sessions up so both stores agree.
+    await syncSessionsToDb(tokenToJwt);
+    startSessionRevocationSweep();
+    console.log(`[Sessions] DB persistence ready (${rows.length} in DB, ${restored} restored to memory)`);
+  } catch (e: any) {
+    console.error("[Sessions] DB init failed (sessions won't survive restarts):", e?.message);
+  }
+}
+void initSessionDb();
 
 // Returns the set of roles this user is authorized to switch between based on
 // their account's base role (e.g. a driver_contractor may switch between
@@ -1183,8 +1306,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/auth/logout", (req: Request, res: Response) => {
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith("Bearer ")) {
-      tokenToJwt.delete(authHeader.slice(7));
+      const token = authHeader.slice(7);
+      tokenToJwt.delete(token);
       saveJsonMap("sessions.json", tokenToJwt);
+      deleteSessionsFromDb([token]);
     }
     return res.json({ ok: true });
   });
@@ -1320,14 +1445,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await client.query("COMMIT");
 
       // Invalidate ALL local sessions for this user (in case of multiple devices)
-      let sessionsChanged = false;
+      const removedTokens: string[] = [];
       for (const [token, session] of tokenToJwt.entries()) {
         if (session.userId === userId) {
           tokenToJwt.delete(token);
-          sessionsChanged = true;
+          removedTokens.push(token);
         }
       }
-      if (sessionsChanged) saveJsonMap("sessions.json", tokenToJwt);
+      if (removedTokens.length) {
+        saveJsonMap("sessions.json", tokenToJwt);
+        deleteSessionsFromDb(removedTokens);
+      }
+      // Other instances may still hold this user's sessions in memory, so also
+      // clear by userId in the DB (their in-memory copies die at next restart,
+      // and upstream JWT rejection covers the interim).
+      void queueSessionDbOp(async () => {
+        await pool.query(`DELETE FROM companion_sessions WHERE entry->>'userId' = $1`, [userId]);
+      });
 
       return res.json({ ok: true });
     } catch (err: any) {
