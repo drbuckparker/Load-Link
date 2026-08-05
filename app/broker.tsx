@@ -306,11 +306,13 @@ export default function BrokerDashboardScreen() {
     .map((d: any) => d.driverId || d.driver_id || d.id)
     .filter(Boolean);
   const availabilityQuery = useQuery<Record<string, { unavailable: boolean; notes: string | null }>>({
-    queryKey: ['/api/broker/roster-availability', assignJobDate],
+    // excludeJobId: this job's own trucks must not read "unavailable" —
+    // they show as already-assigned (checked) instead.
+    queryKey: ['/api/broker/roster-availability', assignJobDate, assignJob?.id || ''],
     queryFn: async () => {
       const res = await apiRequest(
         'GET',
-        `/api/broker/roster-availability?date=${encodeURIComponent(assignJobDate)}`
+        `/api/broker/roster-availability?date=${encodeURIComponent(assignJobDate)}&excludeJobId=${encodeURIComponent(assignJob?.id || '')}`
       );
       return res.json();
     },
@@ -1091,9 +1093,12 @@ export default function BrokerDashboardScreen() {
                 const driverId = String(d.driverId || d.driver_id || d.id);
                 const already = assignedDriverIds.has(driverId);
                 const pendingInvite = d.status === 'pending';
-                const unavailable = !!availabilityMap[driverId]?.unavailable;
+                const unavailable = !already && !!availabilityMap[driverId]?.unavailable;
                 const selectable = !already && !pendingInvite && !unavailable;
-                const checked = selectedAssign.has(driverId);
+                // Already-assigned trucks show as checked+highlighted; tapping
+                // them (unchecking) offers to take the truck off the job so a
+                // different truck can be assigned in its place.
+                const checked = already || selectedAssign.has(driverId);
                 const driverName = d.name || d.driverName || d.driver_name || d.email || 'Driver';
                 const companyName = d.companyName || d.company_name || '';
                 const trucks: (RosterTruck | null)[] = (d.trucks && d.trucks.length > 0) ? d.trucks : [null];
@@ -1103,9 +1108,24 @@ export default function BrokerDashboardScreen() {
                     <Pressable
                       key={rowKey}
                       testID={`assign-truck-${rowKey}`}
-                      disabled={!selectable}
-                      style={[styles.assignRow, (unavailable || pendingInvite) && { opacity: 0.55 }]}
-                      onPress={() => toggleAssignSelect(driverId)}
+                      disabled={!selectable && !already}
+                      style={[
+                        styles.assignRow,
+                        (unavailable || pendingInvite) && { opacity: 0.55 },
+                        already && styles.assignRowAssigned,
+                      ]}
+                      onPress={() => {
+                        if (already) {
+                          const a = (assignJob?.assignments || []).find(
+                            x => x.driverId === driverId && x.status !== 'declined' && x.status !== 'withdrawn'
+                          );
+                          if (!a || removeAssignmentMutation.isPending) return;
+                          haptic();
+                          confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id));
+                          return;
+                        }
+                        toggleAssignSelect(driverId);
+                      }}
                     >
                       <Ionicons
                         name={checked ? 'checkbox' : 'square-outline'}
@@ -1440,6 +1460,11 @@ const styles = StyleSheet.create({
   assignRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  assignRowAssigned: {
+    backgroundColor: 'rgba(230, 160, 60, 0.10)',
+    borderWidth: 1, borderColor: Colors.primary, borderRadius: 10,
+    paddingHorizontal: 8, marginVertical: 2, borderBottomWidth: 1, borderBottomColor: Colors.primary,
   },
   inputLabel: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textMuted, letterSpacing: 0.5, marginTop: 12, marginBottom: 6 },
   input: {

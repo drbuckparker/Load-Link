@@ -2204,12 +2204,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [auth.userId]
       );
       const projMap = new Map(projRows.rows.map((r: any) => [String(r.id), r]));
+      // The website also omits the assignments array from its broker jobs
+      // list, so the assign sheet can't tell which trucks are already on a
+      // job (they'd wrongly show as just "unavailable"). Merge them in from
+      // the local job_assignments table.
+      const assignRows = await pool.query(
+        `SELECT ja.id, ja.job_id, ja.driver_id, ja.status, ja.sent_at
+           FROM job_assignments ja
+           JOIN jobs j ON j.id = ja.job_id
+          WHERE j.contractor_id = $1`,
+        [auth.userId]
+      );
+      const assignMap = new Map<string, any[]>();
+      for (const a of assignRows.rows) {
+        const key = String(a.job_id);
+        if (!assignMap.has(key)) assignMap.set(key, []);
+        assignMap.get(key)!.push({
+          id: a.id,
+          driverId: String(a.driver_id),
+          driver_id: String(a.driver_id),
+          status: a.status,
+          sentAt: a.sent_at,
+          sent_at: a.sent_at,
+        });
+      }
       const merged = jobs.map((j: any) => {
         const l = linkMap.get(String(j.id));
         const p = projMap.get(String(j.id));
-        if (!l && !p) return j;
+        const localAssigns = assignMap.get(String(j.id));
+        const needAssigns = !Array.isArray(j.assignments) || j.assignments.length === 0;
+        if (!l && !p && !(needAssigns && localAssigns)) return j;
         return {
           ...j,
+          ...(needAssigns && localAssigns ? { assignments: localAssigns } : {}),
           ...(l ? {
             clientName: l.client_name || j.clientName,
             clientEmail: l.client_email || j.clientEmail,
@@ -2431,6 +2458,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // computed the same way the app does (weekend-skipping continuation
       // days), so a Mon–Fri job leaves the weekend open.
       try {
+        // excludeJobId: when the assign sheet is open for a specific job, that
+        // job's own assignments must not mark its trucks "unavailable" — they
+        // show as already-assigned (checked) instead.
+        const excludeJobId = String(req.query.excludeJobId || req.query.exclude_job_id || "");
+        const params: any[] = [date, driverIds.map(String)];
+        let excludeClause = "";
+        if (excludeJobId) {
+          params.push(excludeJobId);
+          excludeClause = ` AND ja.job_id::text <> $3`;
+        }
         const booked = await pool.query(
           `SELECT DISTINCT ja.driver_id, j.scheduled_date, j.estimated_days,
                   j.includes_weekends, j.includes_saturday, j.includes_sunday
@@ -2441,8 +2478,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               AND j.status::text NOT IN ('completed','cancelled','expired')
               AND $1::date >= j.scheduled_date::date
               AND $1::date <= (j.scheduled_date::date
-                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) * 3) * INTERVAL '1 day')::date`,
-          [date, driverIds.map(String)]
+                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) * 3) * INTERVAL '1 day')::date${excludeClause}`,
+          params
         );
         for (const r of booked.rows) {
           const key = String(r.driver_id);
