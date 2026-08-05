@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, Platform, Modal, TextInput, ActivityIndicator, RefreshControl, KeyboardAvoidingView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
@@ -1359,6 +1359,7 @@ export default function CalendarScreen() {
         animationType="fade"
         onRequestClose={handleCancel}
       >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Pressable style={styles.modalOverlay} onPress={handleCancel}>
           <Pressable style={styles.modalContent} onPress={() => setShowTypeDropdown(false)}>
             <View style={styles.modalHeader}>
@@ -1479,6 +1480,7 @@ export default function CalendarScreen() {
             </View>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       </Modal>}
 
       <Modal

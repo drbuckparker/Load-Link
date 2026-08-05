@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TextInput, Pressable, FlatList, ScrollView, StyleSheet, Platform, ActivityIndicator, Modal, Alert, RefreshControl } from 'react-native';
+import { View, Text, TextInput, Pressable, FlatList, ScrollView, StyleSheet, Platform, ActivityIndicator, Modal, Alert, RefreshControl, KeyboardAvoidingView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1523,6 +1523,7 @@ export default function JobsBrowseScreen() {
         animationType="fade"
         onRequestClose={() => setShowInviteClient(false)}
       >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowInviteClient(false)}>
           <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
@@ -1612,6 +1613,7 @@ export default function JobsBrowseScreen() {
             </Pressable>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1620,6 +1622,7 @@ export default function JobsBrowseScreen() {
         animationType="fade"
         onRequestClose={() => setEditingClient(null)}
       >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Pressable style={styles.modalOverlay} onPress={() => setEditingClient(null)}>
           <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
@@ -1725,6 +1728,7 @@ export default function JobsBrowseScreen() {
             </Pressable>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1733,6 +1737,7 @@ export default function JobsBrowseScreen() {
         animationType="fade"
         onRequestClose={() => setShowCreateProject(false)}
       >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Pressable style={styles.modalOverlay} onPress={() => setShowCreateProject(false)}>
           <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
@@ -1828,6 +1833,7 @@ export default function JobsBrowseScreen() {
             </Pressable>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1836,6 +1842,7 @@ export default function JobsBrowseScreen() {
         animationType="fade"
         onRequestClose={() => setEditingProject(null)}
       >
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <Pressable style={styles.modalOverlay} onPress={() => setEditingProject(null)}>
           <Pressable style={[styles.modalContent, { maxHeight: '85%' }]} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
@@ -1960,6 +1967,7 @@ export default function JobsBrowseScreen() {
             </ScrollView>
           </Pressable>
         </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       <LocationPickerModal

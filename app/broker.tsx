@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, Pressable, FlatList, Platform, ActivityIndicator,
-  Modal, TextInput, Alert, ScrollView,
+  Modal, TextInput, Alert, ScrollView, KeyboardAvoidingView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -1251,6 +1251,7 @@ export default function BrokerDashboardScreen() {
       </Modal>
 
       <Modal visible={!!inviteVisible} transparent animationType="slide" onRequestClose={() => setInviteVisible(null)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.modalHeader}>
@@ -1301,6 +1302,7 @@ export default function BrokerDashboardScreen() {
             </Pressable>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );

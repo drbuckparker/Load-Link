@@ -491,6 +491,8 @@ export default function VehiclesScreen() {
         keyExtractor={item => String(item.id)}
         renderItem={renderVehicle}
         ListHeaderComponent={renderForm()}
+        automaticallyAdjustKeyboardInsets
+        keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] }); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles/archived'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
           isLoading ? (
