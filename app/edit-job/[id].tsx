@@ -559,7 +559,11 @@ export default function EditJobScreen() {
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ predicate: (q) => {
         const key = q.queryKey.join('/');
-        return key.includes('/api/jobs') || key.includes('/api/contractor/jobs');
+        // Broker home cards read /api/broker/jobs and /api/dashboard — they
+        // must refresh too or the old values linger after an edit.
+        return key.includes('/api/jobs') || key.includes('/api/contractor/jobs')
+          || key.includes('/api/broker/jobs') || key.includes('/api/dashboard')
+          || key.includes('/api/calendar');
       }});
 
       if (Platform.OS === 'web') {
