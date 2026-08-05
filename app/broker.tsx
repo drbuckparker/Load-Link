@@ -695,7 +695,18 @@ export default function BrokerDashboardScreen() {
     const key = clientKey(c);
     return (
       <View key={key} style={styles.clientCard} testID={`client-card-${key}`}>
-        <View style={styles.clientHeader}>
+        <Pressable
+          testID={`client-open-${key}`}
+          style={({ pressed }) => [styles.clientHeader, pressed && { opacity: 0.7 }]}
+          onPress={() => {
+            haptic();
+            const cid = String(c.clientUserId || (c as any).client_user_id || c.invitationId || (c as any).invitation_id || (c as any).id || '');
+            router.push({
+              pathname: '/jobs-browse',
+              params: { clientId: cid, ...(c.email ? { clientEmail: c.email } : {}) },
+            } as any);
+          }}
+        >
           <View style={styles.personAvatar}>
             <Ionicons name="business" size={18} color={Colors.primary} />
           </View>
@@ -706,7 +717,8 @@ export default function BrokerDashboardScreen() {
           <Text style={[styles.personStatus, status === 'pending' && { color: Colors.warning }]}>
             {status ? status.toUpperCase() : ''}
           </Text>
-        </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginLeft: 6 }} />
+        </Pressable>
 
         <View style={styles.clientBadgeRow}>
           <Pressable

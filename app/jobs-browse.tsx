@@ -99,7 +99,7 @@ export default function JobsBrowseScreen() {
   const { user } = useAuth();
   const isContractor = isContractorRole(user?.role);
   const isBroker = user?.role === 'broker';
-  const params = useLocalSearchParams<{ filter?: string; date?: string; tab?: string; projectId?: string }>();
+  const params = useLocalSearchParams<{ filter?: string; date?: string; tab?: string; projectId?: string; clientId?: string; clientEmail?: string }>();
   const queryClient = useQueryClient();
 
   // Brokers land on Clients (their tab lineup is Clients | Projects).
@@ -135,6 +135,11 @@ export default function JobsBrowseScreen() {
     if (params.tab === 'projects') setActiveTab('projects');
     if (params.projectId) setSelectedProjectFilter(params.projectId);
   }, [params.filter, params.date, params.tab, params.projectId]);
+
+  // Deep link from the broker dashboard: /jobs-browse?clientId=... (or
+  // clientEmail=...) opens that client's full-screen view once the client
+  // list loads. Only fires once per param so back-navigation still works.
+  const clientDeepLinkDone = useRef(false);
 
   const [search, setSearch] = useState('');
   const [showTruckFilter, setShowTruckFilter] = useState(false);
@@ -258,6 +263,37 @@ export default function JobsBrowseScreen() {
     enabled: !!user && isBroker && activeTab === 'clients',
   });
   const brokerJobs = Array.isArray(_brokerJobs) ? _brokerJobs : [];
+
+  useEffect(() => {
+    if (clientDeepLinkDone.current) return;
+    if (!params.clientId && !params.clientEmail) return;
+    if (!brokerClients.length) return;
+    const wantId = String(params.clientId || '');
+    const wantEmail = String(params.clientEmail || '').trim().toLowerCase();
+    const match = brokerClients.find((c: any) => {
+      const cid = String(c.clientUserId || c.client_user_id || c.invitationId || c.invitation_id || c.id || '');
+      if (wantId && cid && cid === wantId) return true;
+      const cEmail = String(c.email || '').trim().toLowerCase();
+      return !!wantEmail && !!cEmail && cEmail === wantEmail;
+    });
+    if (match) {
+      clientDeepLinkDone.current = true;
+      setActiveTab('clients');
+      setSelectedProjectFilter(null);
+      setSelectedClient(match);
+    }
+  }, [params.clientId, params.clientEmail, brokerClients]);
+
+  // Projects belonging to the selected client (broker projects carry
+  // client_user_id; contractor projects don't and are excluded here).
+  const selectedClientProjects = useMemo(() => {
+    if (!selectedClient) return [];
+    const cid = String(selectedClient.clientUserId || selectedClient.client_user_id || '');
+    if (!cid) return [];
+    return projects.filter((p: any) =>
+      !p.deleted_at && String(p.client_user_id || p.clientUserId || '') === cid
+    );
+  }, [selectedClient, projects]);
 
   const jobsForClient = (c: any): any[] => {
     const cUserId = c.clientUserId || c.client_user_id;
@@ -940,6 +976,13 @@ export default function JobsBrowseScreen() {
     <View style={[styles.container, { paddingTop: topPadding }]}>
       <View style={styles.header}>
         <Pressable onPress={() => {
+          if (selectedClient && selectedProjectFilter) {
+            // Drilled into a project from the client view — back returns to
+            // the client, not all the way out.
+            setSelectedProjectFilter(null);
+            setActiveTab('clients');
+            return;
+          }
           if (selectedClient) {
             setSelectedClient(null);
             setActiveTab('clients');
@@ -959,7 +1002,9 @@ export default function JobsBrowseScreen() {
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
         </Pressable>
         <Text style={styles.headerTitle}>
-          {selectedClient
+          {selectedProjectFilter && selectedProjectData
+            ? selectedProjectData.name.toUpperCase()
+            : selectedClient
             ? String(selectedClient.name || selectedClient.client_name || selectedClient.clientName || selectedClient.email || 'CLIENT').toUpperCase()
             : selectedProjectFilter && selectedProjectData
             ? selectedProjectData.name.toUpperCase()
@@ -1015,7 +1060,7 @@ export default function JobsBrowseScreen() {
         </View>
       )}
 
-      {selectedClient && (
+      {selectedClient && !selectedProjectFilter && (
         <View style={styles.projectBanner}>
           <Ionicons name="business" size={16} color={Colors.primary} />
           <Text style={styles.projectBannerText} numberOfLines={1}>
@@ -1221,8 +1266,24 @@ export default function JobsBrowseScreen() {
           contentContainerStyle={styles.listContent}
           ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
           showsVerticalScrollIndicator={false}
-          onRefresh={() => queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] })}
+          onRefresh={() => {
+            queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+            queryClient.invalidateQueries({ queryKey: [projectsQueryUrl] });
+          }}
           refreshing={false}
+          ListHeaderComponent={
+            selectedClientProjects.length > 0 ? (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={styles.clientSectionLabel}>PROJECTS</Text>
+                <View style={{ gap: 12 }}>
+                  {selectedClientProjects.map((p: any) => (
+                    <View key={String(p.id)}>{renderProjectCard({ item: p })}</View>
+                  ))}
+                </View>
+                <Text style={[styles.clientSectionLabel, { marginTop: 16 }]}>JOBS</Text>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
@@ -2402,6 +2463,13 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
+  },
+  clientSectionLabel: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    letterSpacing: 1,
+    marginBottom: 10,
   },
   projectCard: {
     backgroundColor: Colors.card,
