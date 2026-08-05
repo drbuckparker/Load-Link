@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import Colors from '@/constants/colors';
 import { Notification, timeAgo } from '@/lib/mock-data';
 import { apiRequest, queryClient } from '@/lib/query-client';
@@ -47,6 +47,28 @@ function getNotifColor(type: string): string {
   }
 }
 
+// Alert.alert buttons are a no-op on react-native-web, so use window.confirm there.
+function confirmDialog(title: string, msg: string, okLabel: string, onConfirm: () => void) {
+  if (Platform.OS === 'web') {
+    // eslint-disable-next-line no-alert
+    if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${msg}`)) onConfirm();
+    return;
+  }
+  Alert.alert(title, msg, [
+    { text: 'Not now', style: 'cancel' },
+    { text: okLabel, onPress: onConfirm },
+  ]);
+}
+
+function infoDialog(title: string, msg: string) {
+  if (Platform.OS === 'web') {
+    // eslint-disable-next-line no-alert
+    if (typeof window !== 'undefined') window.alert(`${title}\n\n${msg}`);
+    return;
+  }
+  Alert.alert(title, msg);
+}
+
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
@@ -57,6 +79,29 @@ export default function NotificationsScreen() {
 
   const notifications = (notifsData || []).map(mapNotification);
   const unreadCount = notifications.filter(n => !n.isRead).length;
+
+  // Pending roster invites — tapping a roster-invite notification lets the
+  // user accept right here. (The My Jobs invite banner is driver-only; company
+  // and broker accounts never see that tab, so the notification tap must work
+  // for every role.)
+  const pendingInvitesQuery = useQuery<any[]>({
+    queryKey: ['/api/invitations/pending', '?type=broker_roster'],
+    retry: false,
+  });
+  const pendingInvites = Array.isArray(pendingInvitesQuery.data) ? pendingInvitesQuery.data : [];
+
+  const acceptInviteMutation = useMutation({
+    mutationFn: async (inviteId: string) => apiRequest('POST', `/api/invitations/${inviteId}/accept`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/invitations/pending'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      infoDialog('Invite accepted', "You're on the roster now.");
+    },
+    onError: (e: any) => {
+      infoDialog('Could not accept invite', e?.message || 'Please try again.');
+    },
+  });
 
   // Keep the red app-icon badge in sync with the real unread count.
   useEffect(() => {
@@ -90,8 +135,62 @@ export default function NotificationsScreen() {
       return;
     }
     if (text.includes('roster') && text.includes('invit')) {
-      // Pending invite for you as a driver — accept it on My Jobs.
-      router.push('/(tabs)/my-jobs' as any);
+      // A roster invite for this account — offer to accept it right here.
+      // (Can't rely on the My Jobs banner: that tab is hidden for company
+      // and broker accounts.)
+      const inviteName = (inv: any) =>
+        inv.inviterName || inv.inviter_name || inv.brokerName || inv.broker_name || '';
+      // Match this notification to its invite by the inviter's name in the
+      // notification text, so we never accept the wrong one.
+      const matched = pendingInvites.filter(inv => {
+        const n = inviteName(inv).toLowerCase().trim();
+        return n.length > 0 && text.includes(n);
+      });
+      const candidates = matched.length > 0 ? matched : pendingInvites;
+      if (candidates.length === 1) {
+        const invite = candidates[0];
+        const from = inviteName(invite) || 'A broker';
+        confirmDialog(
+          'Roster Invite',
+          `${from} wants to add you to their roster. Accept?`,
+          'Accept',
+          () => {
+            if (!acceptInviteMutation.isPending) acceptInviteMutation.mutate(invite.id);
+          }
+        );
+      } else if (candidates.length > 1) {
+        // Ambiguous — let the user pick which invite this is.
+        if (Platform.OS === 'web') {
+          // Ask about each invite in turn so the user picks the right one.
+          if (typeof window !== 'undefined') {
+            for (const inv of candidates) {
+              // eslint-disable-next-line no-alert
+              if (window.confirm(`Accept roster invite from ${inviteName(inv) || 'a broker'}?`)) {
+                acceptInviteMutation.mutate(inv.id);
+                break;
+              }
+            }
+          }
+          return;
+        }
+        Alert.alert(
+          'Roster Invites',
+          'You have more than one pending roster invite. Which one do you want to accept?',
+          [
+            ...candidates.slice(0, 2).map((inv: any) => ({
+              text: `Accept ${inviteName(inv) || 'invite'}`,
+              onPress: () => {
+                if (!acceptInviteMutation.isPending) acceptInviteMutation.mutate(inv.id);
+              },
+            })),
+            { text: 'Not now', style: 'cancel' as const },
+          ]
+        );
+      } else if (pendingInvitesQuery.isLoading) {
+        infoDialog('One moment', 'Still loading your invites — try tapping again in a second.');
+      } else {
+        infoDialog('Roster Invite', 'This invite has already been handled — nothing left to accept.');
+      }
     }
   }
 

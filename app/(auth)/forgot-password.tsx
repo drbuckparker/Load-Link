@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -94,7 +95,13 @@ export default function ForgotPasswordScreen() {
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
 
-        <View style={styles.content}>
+        <KeyboardAwareScrollViewCompat
+          style={{ flex: 1 }}
+          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+          bottomOffset={24}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           <Text style={styles.heading}>ENTER RESET CODE</Text>
           <Text style={styles.subtitle}>
             We sent a 6-character code to {email}. Enter it below along with your new password.
@@ -171,7 +178,7 @@ export default function ForgotPasswordScreen() {
           <Pressable onPress={handleSendCode} style={styles.resendBtn}>
             <Text style={styles.resendText}>Didn't get the code? Resend</Text>
           </Pressable>
-        </View>
+        </KeyboardAwareScrollViewCompat>
       </View>
     );
   }
@@ -182,7 +189,13 @@ export default function ForgotPasswordScreen() {
         <Ionicons name="arrow-back" size={22} color={Colors.text} />
       </Pressable>
 
-      <View style={styles.content}>
+      <KeyboardAwareScrollViewCompat
+        style={{ flex: 1 }}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+        bottomOffset={24}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <Text style={styles.heading}>RESET PASSWORD</Text>
         <Text style={styles.subtitle}>
           Enter your email address and we'll send you a code to reset your password.
@@ -223,7 +236,7 @@ export default function ForgotPasswordScreen() {
             <Text style={styles.primaryBtnText}>SEND RESET CODE</Text>
           )}
         </Pressable>
-      </View>
+      </KeyboardAwareScrollViewCompat>
     </View>
   );
 }
@@ -242,7 +255,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   content: {
-    flex: 1,
+    // Grow to fill the screen so the form centers, but stay scrollable when
+    // the keyboard is open (was flex:1 + center, which the keyboard covered).
+    flexGrow: 1,
     justifyContent: 'center',
   },
   heading: {
