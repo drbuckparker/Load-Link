@@ -13,7 +13,8 @@ async function main() {
       error text,
       created_at timestamptz NOT NULL DEFAULT now(),
       tz_offset_min integer NOT NULL DEFAULT 0,
-      attempts integer NOT NULL DEFAULT 0
+      attempts integer NOT NULL DEFAULT 0,
+      claimed_at timestamptz
     )
   `);
 
@@ -26,6 +27,10 @@ async function main() {
   await pool.query(`
     ALTER TABLE broker_scheduled_sends
       ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE broker_scheduled_sends
+      ADD COLUMN IF NOT EXISTS claimed_at timestamptz
   `);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_bss_pending ON broker_scheduled_sends (status, send_at)`);

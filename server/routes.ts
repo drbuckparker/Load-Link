@@ -488,13 +488,49 @@ async function reacquireBrokerJwt(brokerId: string): Promise<string | null> {
 
 // Fires broker "send instructions at HH:MM" schedules: when one comes due,
 // send-all the held assignments on every job that broker has on that date.
+// Recover rows stuck in 'processing' after a crash/redeploy mid-send: the
+// claiming instance died, so they would otherwise never fire, never show as
+// failed, and the 30-day sweep would skip them forever. Anything claimed more
+// than 5 minutes ago is presumed orphaned (a live pass finishes a row in
+// seconds; FOR UPDATE SKIP LOCKED plus the age threshold keeps this from
+// racing an instance that is actively working). Retries respect the existing
+// attempts counter: under the cap the row goes back to 'pending' (send-all is
+// idempotent per job — already-sent assignments are naturally skipped, so a
+// partial fire before the crash cannot double-send); at the cap it is marked
+// 'failed' with a clear error.
+async function recoverStuckBrokerScheduledSends() {
+  try {
+    const r = await pool.query(
+      `UPDATE broker_scheduled_sends b
+       SET status = CASE WHEN b.attempts < 5 THEN 'pending' ELSE 'failed' END,
+           attempts = b.attempts + 1,
+           claimed_at = NULL,
+           error = CASE WHEN b.attempts < 5
+             THEN 'Recovered: send interrupted mid-processing (server restart); will retry'
+             ELSE 'Send interrupted mid-processing (server restart); gave up after retries' END
+       WHERE b.id IN (
+         SELECT id FROM broker_scheduled_sends
+         WHERE status = 'processing'
+           AND COALESCE(claimed_at, send_at) < NOW() - INTERVAL '5 minutes'
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING id, status`
+    );
+    for (const row of r.rows) {
+      console.log(`[BrokerSend] schedule ${row.id}: recovered stuck 'processing' row -> ${row.status}`);
+    }
+  } catch (e: any) {
+    console.error("[BrokerSend] stuck-row recovery error:", e?.message || e);
+  }
+}
+
 async function processDueBrokerScheduledSends() {
   let due: any[] = [];
   try {
     // Atomically claim due rows so overlapping runs (or multiple instances)
     // never fire the same schedule twice.
     const r = await pool.query(
-      `UPDATE broker_scheduled_sends SET status = 'processing'
+      `UPDATE broker_scheduled_sends SET status = 'processing', claimed_at = NOW()
        WHERE id IN (
          SELECT id FROM broker_scheduled_sends
          WHERE status = 'pending' AND send_at <= NOW()
@@ -535,7 +571,7 @@ async function processDueBrokerScheduledSends() {
     }
     if (!jwt) {
       await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1`,
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1 AND status = 'processing'`,
         [row.id]
       ).catch(() => {});
       continue;
@@ -566,18 +602,18 @@ async function processDueBrokerScheduledSends() {
         // unsent assignments (already-sent jobs are naturally skipped).
         await pool.query(
           `UPDATE broker_scheduled_sends SET status = 'pending', sent_jobs = $2,
-             attempts = attempts + 1, error = $3 WHERE id = $1`,
+             attempts = attempts + 1, error = $3 WHERE id = $1 AND status = 'processing'`,
           [row.id, sentJobs, `Retrying ${failedJobs.length} job(s): ${failedJobs.join(",").slice(0, 400)}`]
         );
       } else if (failedJobs.length > 0) {
         await pool.query(
           `UPDATE broker_scheduled_sends SET status = 'failed', sent_jobs = $2,
-             error = $3 WHERE id = $1`,
+             error = $3 WHERE id = $1 AND status = 'processing'`,
           [row.id, sentJobs, `Gave up after retries; failed job(s): ${failedJobs.join(",").slice(0, 400)}`]
         );
       } else {
         await pool.query(
-          `UPDATE broker_scheduled_sends SET status = 'sent', sent_jobs = $2, error = NULL WHERE id = $1`,
+          `UPDATE broker_scheduled_sends SET status = 'sent', sent_jobs = $2, error = NULL WHERE id = $1 AND status = 'processing'`,
           [row.id, sentJobs]
         );
       }
@@ -585,7 +621,7 @@ async function processDueBrokerScheduledSends() {
     } catch (e: any) {
       console.error("[BrokerSend] error:", e.message);
       await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1`,
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1 AND status = 'processing'`,
         [row.id, String(e.message || e).slice(0, 500)]
       ).catch(() => {});
     }
@@ -607,6 +643,15 @@ function sweepOldBrokerScheduledSends() {
 
 function startBrokerScheduledSendWorker() {
   sweepOldBrokerScheduledSends();
+  // Idempotent migration: older deployments' table predates claimed_at, and
+  // the claim/recovery queries below reference it.
+  pool.query(`ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS claimed_at timestamptz`)
+    .catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e))
+    // Startup recovery of rows orphaned in 'processing' by a crash (after the
+    // migration so claimed_at is guaranteed to exist).
+    .then(() => recoverStuckBrokerScheduledSends())
+    .catch(() => {});
+  setInterval(() => { recoverStuckBrokerScheduledSends().catch(() => {}); }, 5 * 60 * 1000);
   setInterval(() => { processDueBrokerScheduledSends().catch(() => {}); }, 60000);
   // Daily sweep so long-lived deployed instances stay bounded, not just fresh
   // restarts.
