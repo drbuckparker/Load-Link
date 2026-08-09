@@ -478,6 +478,11 @@ export default function BrokerDashboardScreen() {
   });
   const pendingSchedule = (scheduledSendQuery.data || []).find(s => s.status === 'pending');
   const failedSchedule = (scheduledSendQuery.data || []).find(s => s.status === 'failed');
+  // Most recent successfully-fired schedule for this day (server returns sent
+  // rows from the last 7 days) so the broker can confirm instructions went out.
+  const sentSchedule = (scheduledSendQuery.data || [])
+    .filter(s => s.status === 'sent')
+    .sort((a, b) => String(b.sendAt).localeCompare(String(a.sendAt)))[0];
 
   const scheduleMutation = useMutation({
     mutationFn: async (sendAtIso: string) => {
@@ -900,6 +905,15 @@ export default function BrokerDashboardScreen() {
                             <Text style={styles.failedDismissText}>DISMISS</Text>
                           </Pressable>
                         </View>
+                      </View>
+                    ) : null}
+                    {sentSchedule ? (
+                      <View style={styles.sentBanner} testID="sent-send-banner">
+                        <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+                        <Text style={styles.sentBannerText}>
+                          Instructions sent at {new Date(sentSchedule.sendAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                          {sentSchedule.sentJobs ? ` · ${sentSchedule.sentJobs} job${sentSchedule.sentJobs === 1 ? '' : 's'}` : ''}
+                        </Text>
                       </View>
                     ) : null}
                     {todayJobs.length > 0 && (
@@ -1387,6 +1401,8 @@ const styles = StyleSheet.create({
   failedRetryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.destructive, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
   failedRetryBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primaryForeground, letterSpacing: 0.5 },
   failedDismissText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.5 },
+  sentBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(34,197,94,0.1)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(34,197,94,0.3)' },
+  sentBannerText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
   scheduleBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,153,0,0.1)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
   scheduleBannerText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
   scheduleCancelText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.destructive, letterSpacing: 0.5 },

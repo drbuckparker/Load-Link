@@ -2566,9 +2566,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const date = String(req.query.date || "").slice(0, 10);
     try {
       const params: any[] = [auth.userId];
-      // Failed rows are returned too so the app can warn the broker instead of
-      // the schedule silently vanishing; 'sent' rows stay hidden.
-      let where = `broker_id = $1 AND status IN ('pending', 'failed')`;
+      // Pending rows always; sent and failed rows from the last 7 days so the
+      // broker can confirm a schedule actually fired (or see that it failed)
+      // instead of the row silently vanishing once the worker processes it.
+      let where = `broker_id = $1 AND (status = 'pending' OR (status IN ('sent', 'failed') AND send_at > NOW() - INTERVAL '7 days'))`;
       if (/^\d{4}-\d{2}-\d{2}$/.test(date)) { where += ` AND date = $2`; params.push(date); }
       const r = await pool.query(
         `SELECT id, date, send_at, status, error, sent_jobs, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,

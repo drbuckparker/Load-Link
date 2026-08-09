@@ -572,7 +572,7 @@ async function upsertRow(tableName, data, idField = "id") {
   const columns = await getCachedColumns(tableName);
   const normalized = normalizeToSnake(data);
   const filteredEntries = Object.entries(normalized).filter(
-    ([key, val]) => columns.has(key) && val !== void 0
+    ([key, val]) => columns.has(key) && val !== void 0 && !(tableName === "jobs" && key === "visibility")
   );
   if (filteredEntries.length === 0 || !normalized[idField]) return;
   const keys = filteredEntries.map(([k]) => k);
@@ -690,6 +690,14 @@ async function syncJobs(auth, prefetchedJobs) {
       console.log(`[syncJobs] dedup mappings:`, websiteIdToLocalId);
     }
     const count = await upsertMany("jobs", deduped);
+    try {
+      await pool.query(
+        `UPDATE jobs j SET visibility = 'private'
+         WHERE j.visibility IS NULL
+           AND EXISTS (SELECT 1 FROM users u WHERE u.id::text = j.contractor_id::text AND u.role::text = 'broker')`
+      );
+    } catch {
+    }
     try {
       const websiteIds = new Set(jobs2.map((j) => String(j.id)));
       const dedupedToOriginalIds = new Set(Object.values(websiteIdToLocalId));
@@ -1340,9 +1348,10 @@ async function getVisibilityFeatures(pool2) {
 function jobVisibilityPredicate(feats, userParamIdx, alias = "j") {
   if (!feats.jobsVisibility) return "";
   const a = alias;
+  const ownerIsBroker = `EXISTS (SELECT 1 FROM users _vo WHERE _vo.id::text = ${a}.contractor_id::text AND _vo.role::text = 'broker')`;
   const parts = [
-    `${a}.visibility IS NULL`,
-    `${a}.visibility::text <> 'private'`,
+    `(${a}.visibility IS NULL AND NOT ${ownerIsBroker})`,
+    `(${a}.visibility IS NOT NULL AND ${a}.visibility::text <> 'private')`,
     `${a}.contractor_id::text = $${userParamIdx}::text`,
     `${a}.driver_id::text = $${userParamIdx}::text`,
     // Broker "send-later" rule: on a job posted by a broker, a HELD assignment
@@ -1371,7 +1380,18 @@ function jobVisibilityPredicate(feats, userParamIdx, alias = "j") {
 async function canViewPrivateJob(pool2, feats, job, userId, alreadyParticipantOrAssigned) {
   if (!feats.jobsVisibility) return true;
   const vis = (job.visibility ?? "").toString();
-  if (vis !== "private") return true;
+  if (vis !== "private") {
+    if (vis !== "") return true;
+    try {
+      const r = await pool2.query(
+        `SELECT 1 FROM users WHERE id::text = $1::text AND role::text = 'broker' LIMIT 1`,
+        [String(job.contractor_id)]
+      );
+      if (r.rows.length === 0) return true;
+    } catch {
+      return true;
+    }
+  }
   if (alreadyParticipantOrAssigned) return true;
   if (String(job.contractor_id) === String(userId)) return true;
   if (job.driver_id && String(job.driver_id) === String(userId)) return true;
@@ -1542,9 +1562,14 @@ async function notifyNearbyDriversOfNewJob(job) {
     const visFeats = await getVisibilityFeatures(pool);
     if (visFeats.jobsVisibility && job?.id) {
       const cols = visFeats.publicPositionsRemaining ? `visibility::text AS vis, COALESCE(public_positions_remaining, 0)::int AS ppr` : `visibility::text AS vis, 0 AS ppr`;
-      const vr = await pool.query(`SELECT ${cols} FROM jobs WHERE id = $1`, [String(job.id)]);
+      const vr = await pool.query(
+        `SELECT ${cols},
+                EXISTS (SELECT 1 FROM users _vo WHERE _vo.id::text = jobs.contractor_id::text AND _vo.role::text = 'broker') AS owner_is_broker
+         FROM jobs WHERE id = $1`,
+        [String(job.id)]
+      );
       const row = vr.rows[0];
-      if (row && row.vis === "private" && Number(row.ppr) <= 0) {
+      if (row && (row.vis === "private" || row.vis == null && row.owner_is_broker) && Number(row.ppr) <= 0) {
         console.log(`[JobWatcher] Job ${job.id} is private \u2014 skipping nearby-driver broadcast`);
         return;
       }
@@ -1837,16 +1862,113 @@ function startBrokerScheduledSendWorker() {
 function saveJsonMap(filename, map) {
   try {
     if (map.size > 200) {
-      const entries = [...map.entries()];
-      const trimmed = entries.slice(entries.length - 200);
+      const entries2 = [...map.entries()];
+      const trimmed = entries2.slice(entries2.length - 200);
       map.clear();
       for (const [k, v] of trimmed) map.set(k, v);
     }
-    writeFileSync(join(DATA_DIR, filename), JSON.stringify([...map.entries()]), "utf-8");
+    const entries = [...map.entries()].map(
+      ([k, v]) => filename === "sessions.json" ? [k, slimSessionEntry(v)] : [k, v]
+    );
+    writeFileSync(join(DATA_DIR, filename), JSON.stringify(entries), "utf-8");
   } catch {
+  }
+  if (filename === "sessions.json") {
+    void syncSessionsToDb(map);
   }
 }
 var tokenToJwt = loadJsonMap("sessions.json");
+function slimSessionEntry(v) {
+  try {
+    const user = v?.user;
+    if (!user || typeof user !== "object") return v;
+    let slim = null;
+    for (const [k, val] of Object.entries(user)) {
+      if (typeof val === "string" && val.length > 1e5) {
+        if (!slim) slim = { ...user };
+        delete slim[k];
+      }
+    }
+    return slim ? { ...v, user: slim } : v;
+  } catch {
+    return v;
+  }
+}
+var sessionDbReady = false;
+var sessionDbChain = Promise.resolve();
+function queueSessionDbOp(op) {
+  sessionDbChain = sessionDbChain.then(op).catch((e) => {
+    console.error("[Sessions] DB op failed:", e?.message);
+  });
+  return sessionDbChain;
+}
+async function syncSessionsToDb(map) {
+  if (!sessionDbReady) return;
+  const obj = {};
+  for (const [k, v] of map.entries()) obj[k] = slimSessionEntry(v);
+  await queueSessionDbOp(async () => {
+    await pool.query(
+      `INSERT INTO companion_sessions (token, entry, updated_at)
+       SELECT key, value, NOW() FROM jsonb_each($1::jsonb)
+       ON CONFLICT (token) DO UPDATE SET entry = EXCLUDED.entry, updated_at = NOW()`,
+      [JSON.stringify(obj)]
+    );
+  });
+}
+function deleteSessionsFromDb(tokens) {
+  if (!sessionDbReady || tokens.length === 0) return;
+  void queueSessionDbOp(async () => {
+    await pool.query(`DELETE FROM companion_sessions WHERE token = ANY($1::text[])`, [tokens]);
+  });
+}
+function startSessionRevocationSweep() {
+  setInterval(() => {
+    if (!sessionDbReady || tokenToJwt.size === 0) return;
+    void queueSessionDbOp(async () => {
+      const tokens = [...tokenToJwt.keys()];
+      const { rows } = await pool.query(
+        `SELECT t AS token FROM unnest($1::text[]) AS t
+         WHERE NOT EXISTS (SELECT 1 FROM companion_sessions cs WHERE cs.token = t)`,
+        [tokens]
+      );
+      if (rows.length === 0) return;
+      for (const r of rows) tokenToJwt.delete(r.token);
+      console.log(`[Sessions] Evicted ${rows.length} revoked session(s) from memory`);
+      try {
+        const entries = [...tokenToJwt.entries()].map(([k, v]) => [k, slimSessionEntry(v)]);
+        writeFileSync(join(DATA_DIR, "sessions.json"), JSON.stringify(entries), "utf-8");
+      } catch {
+      }
+    });
+  }, 6e4);
+}
+async function initSessionDb() {
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS companion_sessions (
+         token TEXT PRIMARY KEY,
+         entry JSONB NOT NULL,
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+       )`
+    );
+    await pool.query(`DELETE FROM companion_sessions WHERE updated_at < NOW() - INTERVAL '90 days'`);
+    const { rows } = await pool.query(`SELECT token, entry FROM companion_sessions`);
+    let restored = 0;
+    for (const row of rows) {
+      if (!tokenToJwt.has(row.token)) {
+        tokenToJwt.set(row.token, row.entry);
+        restored++;
+      }
+    }
+    sessionDbReady = true;
+    await syncSessionsToDb(tokenToJwt);
+    startSessionRevocationSweep();
+    console.log(`[Sessions] DB persistence ready (${rows.length} in DB, ${restored} restored to memory)`);
+  } catch (e) {
+    console.error("[Sessions] DB init failed (sessions won't survive restarts):", e?.message);
+  }
+}
+void initSessionDb();
 function allowedRolesForUser(baseRole) {
   if (!baseRole) return [];
   const compound = {
@@ -2298,8 +2420,10 @@ async function registerRoutes(app2) {
   app2.post("/api/auth/logout", (req, res) => {
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith("Bearer ")) {
-      tokenToJwt.delete(authHeader.slice(7));
+      const token = authHeader.slice(7);
+      tokenToJwt.delete(token);
       saveJsonMap("sessions.json", tokenToJwt);
+      deleteSessionsFromDb([token]);
     }
     return res.json({ ok: true });
   });
@@ -2408,14 +2532,20 @@ async function registerRoutes(app2) {
         return res.status(404).json({ message: "Account not found" });
       }
       await client.query("COMMIT");
-      let sessionsChanged = false;
+      const removedTokens = [];
       for (const [token, session2] of tokenToJwt.entries()) {
         if (session2.userId === userId) {
           tokenToJwt.delete(token);
-          sessionsChanged = true;
+          removedTokens.push(token);
         }
       }
-      if (sessionsChanged) saveJsonMap("sessions.json", tokenToJwt);
+      if (removedTokens.length) {
+        saveJsonMap("sessions.json", tokenToJwt);
+        deleteSessionsFromDb(removedTokens);
+      }
+      void queueSessionDbOp(async () => {
+        await pool.query(`DELETE FROM companion_sessions WHERE entry->>'userId' = $1`, [userId]);
+      });
       return res.json({ ok: true });
     } catch (err) {
       try {
@@ -2564,9 +2694,11 @@ async function registerRoutes(app2) {
       query += ` AND NOT (
         j.status::text IN ('open', 'accepted', 'pending')
         AND (
-          (SELECT COUNT(*) FROM job_assignments ja
+          ((SELECT COUNT(*) FROM job_assignments ja
             WHERE ja.job_id = j.id AND ja.status::text = 'approved')
           >= COALESCE(j.trucks_needed, 1)
+          -- Never hide the caller's OWN postings (project view relies on this)
+          AND j.contractor_id::text != $${paramIdx})
           OR (
             j.contractor_id::text != $${paramIdx}
             AND (
@@ -2677,6 +2809,40 @@ async function registerRoutes(app2) {
     } catch (e) {
       console.error("Cancel job error:", e.message);
       return res.status(500).json({ message: "Failed to cancel job" });
+    }
+  });
+  app2.post("/api/jobs/:id/visibility", requireAuth, async (req, res) => {
+    try {
+      const auth = getWebsiteAuth(req);
+      const vis = String(req.body?.visibility || "");
+      if (vis !== "public" && vis !== "private") {
+        return res.status(400).json({ message: "visibility must be 'public' or 'private'" });
+      }
+      const client = await pool.connect();
+      let upd;
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL app.allow_visibility_change = '1'");
+        upd = await client.query(
+          `UPDATE jobs SET visibility = $1, updated_at = NOW()
+           WHERE id = $2 AND contractor_id::text = $3
+             AND EXISTS (SELECT 1 FROM users u WHERE u.id::text = $3::text AND u.role::text = 'broker')
+           RETURNING id, visibility`,
+          [vis, req.params.id, auth.userId]
+        );
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {
+        });
+        throw err;
+      } finally {
+        client.release();
+      }
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
+      return res.json({ ok: true, visibility: upd.rows[0].visibility });
+    } catch (e) {
+      console.error("Job visibility error:", e.message);
+      return res.status(500).json({ message: "Failed to update job visibility" });
     }
   });
   app2.post("/api/jobs/:id/archive", requireAuth, async (req, res) => {
@@ -2855,6 +3021,12 @@ async function registerRoutes(app2) {
           data = JSON.parse(text2);
         } catch {
           data = { message: text2 };
+        }
+        if (r.ok && data?.id) {
+          try {
+            await pool.query(`UPDATE jobs SET visibility = 'private' WHERE id = $1 AND visibility IS NULL`, [String(data.id)]);
+          } catch {
+          }
         }
         if (r.ok && data?.id && (req.body.clientName || req.body.clientEmail)) {
           try {
@@ -3089,7 +3261,7 @@ async function registerRoutes(app2) {
       );
       const linkMap = new Map(links.rows.map((l) => [String(l.job_id), l]));
       const projRows = await pool.query(
-        `SELECT j.id, j.project_id, COALESCE(bp.name, cp.name) AS project_name
+        `SELECT j.id, j.project_id, COALESCE(cp.name, bp.name) AS project_name
          FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id::text = j.project_id::text
          LEFT JOIN broker_client_projects bp ON bp.id::text = j.project_id::text
@@ -3097,12 +3269,35 @@ async function registerRoutes(app2) {
         [auth.userId]
       );
       const projMap = new Map(projRows.rows.map((r) => [String(r.id), r]));
+      const assignRows = await pool.query(
+        `SELECT ja.id, ja.job_id, ja.driver_id, ja.status, ja.sent_at
+           FROM job_assignments ja
+           JOIN jobs j ON j.id = ja.job_id
+          WHERE j.contractor_id = $1`,
+        [auth.userId]
+      );
+      const assignMap = /* @__PURE__ */ new Map();
+      for (const a of assignRows.rows) {
+        const key = String(a.job_id);
+        if (!assignMap.has(key)) assignMap.set(key, []);
+        assignMap.get(key).push({
+          id: a.id,
+          driverId: String(a.driver_id),
+          driver_id: String(a.driver_id),
+          status: a.status,
+          sentAt: a.sent_at,
+          sent_at: a.sent_at
+        });
+      }
       const merged = jobs2.map((j) => {
         const l = linkMap.get(String(j.id));
         const p = projMap.get(String(j.id));
-        if (!l && !p) return j;
+        const localAssigns = assignMap.get(String(j.id));
+        const needAssigns = !Array.isArray(j.assignments) || j.assignments.length === 0;
+        if (!l && !p && !(needAssigns && localAssigns)) return j;
         return {
           ...j,
+          ...needAssigns && localAssigns ? { assignments: localAssigns } : {},
           ...l ? {
             clientName: l.client_name || j.clientName,
             clientEmail: l.client_email || j.clientEmail,
@@ -3272,6 +3467,13 @@ async function registerRoutes(app2) {
         }
       }
       try {
+        const excludeJobId = String(req.query.excludeJobId || req.query.exclude_job_id || "");
+        const params = [date, driverIds.map(String)];
+        let excludeClause = "";
+        if (excludeJobId) {
+          params.push(excludeJobId);
+          excludeClause = ` AND ja.job_id::text <> $3`;
+        }
         const booked = await pool.query(
           `SELECT DISTINCT ja.driver_id, j.scheduled_date, j.estimated_days,
                   j.includes_weekends, j.includes_saturday, j.includes_sunday
@@ -3282,8 +3484,8 @@ async function registerRoutes(app2) {
               AND j.status::text NOT IN ('completed','cancelled','expired')
               AND $1::date >= j.scheduled_date::date
               AND $1::date <= (j.scheduled_date::date
-                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) * 3) * INTERVAL '1 day')::date`,
-          [date, driverIds.map(String)]
+                    + (GREATEST(CEIL(COALESCE(j.estimated_days,1)::numeric)::int, 1) * 3) * INTERVAL '1 day')::date${excludeClause}`,
+          params
         );
         for (const r of booked.rows) {
           const key = String(r.driver_id);
@@ -3313,7 +3515,7 @@ async function registerRoutes(app2) {
     const date = String(req.query.date || "").slice(0, 10);
     try {
       const params = [auth.userId];
-      let where = `broker_id = $1 AND status IN ('pending', 'failed')`;
+      let where = `broker_id = $1 AND (status = 'pending' OR (status IN ('sent', 'failed') AND send_at > NOW() - INTERVAL '7 days'))`;
       if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         where += ` AND date = $2`;
         params.push(date);
@@ -3751,16 +3953,48 @@ async function registerRoutes(app2) {
       return res.json({ ok: true });
     }
   });
+  async function privateJobApplicationBlock(jobId, userId) {
+    try {
+      const visFeats = await getVisibilityFeatures(pool);
+      if (!visFeats.jobsVisibility) return null;
+      const jr = await pool.query(
+        `SELECT id, contractor_id, driver_id, project_id, visibility::text AS visibility${visFeats.publicPositionsRemaining ? ", public_positions_remaining" : ""}
+         FROM jobs WHERE id = $1`,
+        [jobId]
+      );
+      const job = jr.rows[0];
+      if (!job) return null;
+      let participant = String(job.contractor_id) === String(userId);
+      if (!participant) {
+        const aChk = await pool.query(
+          `SELECT 1 FROM job_assignments ja WHERE ja.job_id = $1 AND ja.driver_id::text = $2
+           AND ja.status::text NOT IN ('rejected','withdrawn','cancelled','expired')
+           AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
+             SELECT 1 FROM users _bu WHERE _bu.id::text = $3::text AND _bu.role::text = 'broker'))
+           LIMIT 1`,
+          [jobId, userId, String(job.contractor_id)]
+        );
+        participant = aChk.rows.length > 0;
+      }
+      const allowed = await canViewPrivateJob(pool, visFeats, job, userId, participant);
+      return allowed ? null : "This job is private and not accepting public applications.";
+    } catch (e) {
+      console.error("privateJobApplicationBlock error:", e.message);
+      return null;
+    }
+  }
   app2.post("/api/jobs/:id/accept", requireAuth, async (req, res) => {
     try {
       const auth = getWebsiteAuth(req);
       const { vehicleIds } = req.body || {};
       const jobRow = await pool.query(
-        `SELECT contractor_id, COALESCE(trucks_needed, 1)::int AS trucks_needed FROM jobs WHERE id = $1`,
+        `SELECT id, contractor_id, driver_id, project_id, COALESCE(trucks_needed, 1)::int AS trucks_needed FROM jobs WHERE id = $1`,
         [req.params.id]
       );
       const contractorId = jobRow.rows[0]?.contractor_id;
       const trucksNeeded = Number(jobRow.rows[0]?.trucks_needed) || 1;
+      const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
+      if (privateBlock) return res.status(403).json({ message: privateBlock });
       let isAutoApprove = false;
       if (contractorId) {
         const userRow = await pool.query(`SELECT company FROM users WHERE id::text = $1`, [auth.userId]);
@@ -3992,6 +4226,8 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const { rate, note } = req.body;
+      const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
+      if (privateBlock) return res.status(403).json({ message: privateBlock });
       const id = crypto.randomUUID();
       await pool.query(
         `INSERT INTO job_assignments (id, job_id, driver_id, status, counter_bid_rate, counter_bid_note, created_at)
@@ -5519,7 +5755,7 @@ async function registerRoutes(app2) {
                     COALESCE(j.includes_sunday, true)    AS includes_sunday,
                     j.status::text AS job_status,
                     COALESCE(j.trucks_needed, 1)::int AS trucks_needed,
-                    cp.name AS project_name,
+                    COALESCE(cp.name, bcp.name) AS project_name,
                     (SELECT COUNT(*)::int FROM job_assignments ja
                        WHERE ja.job_id = j.id AND ja.status::text = 'approved') AS trucks_assigned,
                     (SELECT COUNT(*)::int FROM job_assignments ja
@@ -5586,12 +5822,13 @@ async function registerRoutes(app2) {
                j.material, j.status::text AS job_status, j.contractor_id,
                contractor.full_name AS contractor_name,
                contractor.company   AS contractor_company,
-               cp.name AS project_name
+               COALESCE(cp.name, bcp.name) AS project_name
              FROM job_assignments ja
              JOIN trucks t ON ja.vehicle_id = t.id
              JOIN jobs   j ON ja.job_id     = j.id
              LEFT JOIN users               contractor ON j.contractor_id = contractor.id
              LEFT JOIN contractor_projects cp         ON j.project_id    = cp.id
+             LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
              WHERE t.trucking_company_id = $1
                AND t.archived_at IS NULL
                AND ja.status::text = 'approved'
@@ -6230,7 +6467,7 @@ async function registerRoutes(app2) {
       const auth = getWebsiteAuth(req);
       const userId = auth.userId;
       const userRole = (auth.user?.role || "").toLowerCase();
-      const isContractorRole = userRole.includes("contractor") && userRole !== "trucking_company";
+      const isContractorRole = (userRole.includes("contractor") || userRole === "broker") && userRole !== "trucking_company";
       const isTruckingCompany = userRole === "trucking_company";
       const isDriverView = !isContractorRole && !isTruckingCompany;
       const allJobs = await getJobsForCalendar(auth, isContractorRole ? "contractor" : "driver");
@@ -6547,8 +6784,9 @@ async function registerRoutes(app2) {
     let jobsRes;
     if (isOpen) {
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+        `SELECT DISTINCT j.*, COALESCE(cp.name, bcp.name) AS project_name FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id = j.project_id
+         LEFT JOIN broker_client_projects bcp ON bcp.id::text = j.project_id
          LEFT JOIN job_runs jr ON jr.job_id = j.id
          WHERE j.invoice_id = $1
             OR (j.contractor_id = $2
@@ -6560,8 +6798,9 @@ async function registerRoutes(app2) {
       );
     } else {
       jobsRes = await pool.query(
-        `SELECT DISTINCT j.*, cp.name AS project_name FROM jobs j
+        `SELECT DISTINCT j.*, COALESCE(cp.name, bcp.name) AS project_name FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id = j.project_id
+         LEFT JOIN broker_client_projects bcp ON bcp.id::text = j.project_id
          WHERE j.invoice_id = $1`,
         [invoice.id]
       );
