@@ -592,8 +592,25 @@ async function processDueBrokerScheduledSends() {
   }
 }
 
+// Keep the scheduled-send history bounded: sent/failed rows are only shown
+// for 7 days, so anything older than 30 days is pure dead weight in the Day
+// Plan query. Pending rows are NEVER swept — they still need to fire.
+function sweepOldBrokerScheduledSends() {
+  pool.query(
+    `DELETE FROM broker_scheduled_sends
+     WHERE status IN ('sent', 'failed')
+       AND send_at < NOW() - INTERVAL '30 days'`
+  ).then((r) => {
+    if (r.rowCount) console.log(`[BrokerSend] swept ${r.rowCount} old sent/failed schedule row(s)`);
+  }).catch(() => {});
+}
+
 function startBrokerScheduledSendWorker() {
+  sweepOldBrokerScheduledSends();
   setInterval(() => { processDueBrokerScheduledSends().catch(() => {}); }, 60000);
+  // Daily sweep so long-lived deployed instances stay bounded, not just fresh
+  // restarts.
+  setInterval(sweepOldBrokerScheduledSends, 24 * 60 * 60 * 1000);
 }
 
 function saveJsonMap<T>(filename: string, map: Map<string, T>) {
