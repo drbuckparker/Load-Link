@@ -331,6 +331,10 @@ export default function JobDetailScreen() {
   const [loadingFleetData, setLoadingFleetData] = useState(false);
   const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string | null>(null);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  // Must be declared with the other hooks, BEFORE the isLoading/!job early
+  // returns below — a hook after a conditional return crashes the screen
+  // ("Rules of Hooks") the moment the job finishes loading.
+  const [togglingVisibility, setTogglingVisibility] = useState(false);
   const [editingRun, setEditingRun] = useState<any>(null);
   const [editStartHour, setEditStartHour] = useState(0);
   const [editStartMinute, setEditStartMinute] = useState(0);
@@ -731,7 +735,6 @@ export default function JobDetailScreen() {
     ]);
   }
 
-  const [togglingVisibility, setTogglingVisibility] = useState(false);
   async function handleToggleVisibility(makePublic: boolean) {
     const doToggle = async () => {
       setTogglingVisibility(true);
