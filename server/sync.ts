@@ -256,6 +256,29 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
       jobs = allJobs.filter((j: any) => j.id && !hiddenJobIds.has(j.id));
     }
 
+    // The website's /api/jobs does NOT always include a broker's own jobs
+    // (e.g. private jobs created directly on the website). Those jobs then
+    // never reach the local jobs table — the dashboard lists them (it reads
+    // the website's /api/broker/jobs live) but tapping one 404s at
+    // /api/jobs/:id, and the reconcile sweep below can even falsely cancel
+    // local copies that drop out of the /api/jobs payload. Merge the broker
+    // feed in so the local table stays complete. (upsertRow filters unknown
+    // fields like billing/assignmentStats to real columns and drops
+    // visibility, so the flat payload is safe to upsert as-is.)
+    if (String(auth.user?.role || '').includes('broker')) {
+      const brokerJobs = await websiteFetchSync("/api/broker/jobs", { jwt: auth.jwt });
+      if (Array.isArray(brokerJobs)) {
+        const seen = new Set(jobs.map((j: any) => String(j.id)));
+        const extras = brokerJobs.filter(
+          (j: any) => j?.id && !seen.has(String(j.id)) && !hiddenJobIds.has(j.id)
+        );
+        if (extras.length > 0) {
+          console.log(`[syncJobs] merging ${extras.length} broker-feed job(s) missing from /api/jobs:`, extras.map((j: any) => j.id));
+          jobs = [...jobs, ...extras];
+        }
+      }
+    }
+
     const localJobsResult = await pool.query(
       `SELECT id, material, contractor_id, scheduled_date, created_at FROM jobs WHERE archived_at IS NULL`
     );
