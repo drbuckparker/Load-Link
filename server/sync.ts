@@ -307,6 +307,57 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
 
     const count = await upsertMany("jobs", deduped);
 
+    // Resurrect false-positive cancellations. The reconcile sweep below can
+    // cancel+archive a local job when the website payload briefly misses it
+    // (partial/failed upstream fetch). Once cancelled, the terminal-status
+    // guard in upsertRow stops the website's 'open' from ever restoring it —
+    // the job stays live on the website but invisible locally, forever.
+    // If the website STILL reports the job as non-terminal well after the
+    // local cancellation, that cancellation was wrong: restore it to the
+    // website's status. Guards against undoing a GENUINE cancel:
+    //   - 15-min grace window on cancelled_at: a real cancel is pushed
+    //     upstream within that window, so every later (fresh) payload
+    //     reports it cancelled and it never enters this list. This closes
+    //     the stale-payload race where a cancel push succeeds after this
+    //     payload was fetched.
+    //   - jobs with any un-pushed queued operation are skipped entirely.
+    // Never resurrect 'completed' — completion is a companion-side terminal
+    // action the website doesn't know about.
+    try {
+      const ALLOWED_RESTORE = new Set(['open', 'accepted', 'pending', 'in_progress']);
+      const nonTerminal: [string, string][] = []; // [local id, website status]
+      for (const wj of jobs) {
+        const st = String(wj.status || '').toLowerCase();
+        if (!ALLOWED_RESTORE.has(st)) continue;
+        const lid = websiteIdToLocalId[String(wj.id)] || String(wj.id);
+        nonTerminal.push([lid, st]);
+      }
+      if (nonTerminal.length > 0) {
+        const res = await pool.query(
+          `UPDATE jobs j
+             SET status = w.status::job_status, cancelled_at = NULL, archived_at = NULL
+           FROM (SELECT unnest($1::varchar[]) AS id, unnest($2::text[]) AS status) w
+           WHERE j.id = w.id
+             AND j.status::text = 'cancelled'
+             AND COALESCE(j.cancelled_at, j.archived_at) < NOW() - INTERVAL '15 minutes'
+             AND j.id NOT IN (
+               SELECT (body->>'id')::text FROM sync_queue
+               WHERE user_id = $3 AND succeeded_at IS NULL AND body ? 'id'
+               UNION
+               SELECT regexp_replace(path, '^/api/jobs/([^/]+).*$', '\\1') FROM sync_queue
+               WHERE user_id = $3 AND succeeded_at IS NULL AND path ~ '^/api/jobs/[^/]+'
+             )
+           RETURNING j.id`,
+          [nonTerminal.map(([id]) => id), nonTerminal.map(([, st]) => st), auth.userId]
+        );
+        if (res.rows.length > 0) {
+          console.log(`[syncJobs resurrect] restored ${res.rows.length} falsely-cancelled local job(s):`, res.rows.map(r => r.id));
+        }
+      }
+    } catch (e: any) {
+      console.error("syncJobs resurrect error:", e.message);
+    }
+
     // Broker jobs are private by default: brokers distribute work to their own
     // roster, so a job must never appear in the public feed (or accept public
     // applications) unless the broker explicitly flips it public. NULL means
