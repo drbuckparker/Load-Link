@@ -8,6 +8,6 @@ Broker Day Plan tab stages held (sent_at NULL) assignments, then sends all held 
 **Why:** actual sending happens upstream on the website and requires the broker's *user* JWT — the server-to-server X-API-Key alone is not enough. The 60s worker (`processDueBrokerScheduledSends`) pulls the broker's latest non-dev JWT from the persisted `tokenToJwt` session map.
 
 **How to apply:**
-- If the broker has no persisted real login session when the timer fires, the schedule is marked `failed` ("No active login session at send time"). Any feature that acts later on a user's behalf has this same constraint.
+- If the broker has no persisted real login session when the timer fires, the worker re-acquires a JWT via the email-only companion login (API-key trust, same endpoint as the interactive login fallback) before failing; only if re-auth is also refused is the row marked `failed`. Any feature that acts later on a user's behalf can use the same re-auth pattern.
 - Worker claims rows atomically (`pending`→`processing` with FOR UPDATE SKIP LOCKED); partial per-job failures re-queue as `pending` up to 5 attempts, then `failed`.
 - Companion-only table in the shared website DB (per companion-db-topology); schema changes must be hand-applied there.

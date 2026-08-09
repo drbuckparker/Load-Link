@@ -456,6 +456,36 @@ function startNewJobWatcher() {
 }
 // ----------------------------------------------------------------------------
 
+// Re-acquire a fresh upstream JWT for a broker whose session is gone at
+// scheduled-send fire time. Looks up the account's email in the shared DB and
+// uses the email-only companion login (trusted via X-API-Key) — the same
+// upstream endpoint the interactive login fallback uses. Returns null when
+// the account can't be found or the website refuses the login.
+async function reacquireBrokerJwt(brokerId: string): Promise<string | null> {
+  try {
+    const r = await pool.query(
+      `SELECT email, is_suspended FROM users WHERE id::text = $1 LIMIT 1`,
+      [brokerId]
+    );
+    const dbUser = r.rows[0];
+    if (!dbUser?.email || dbUser.is_suspended) return null;
+    const loginRes = await websiteFetch("/api/companion/auth/login", {
+      method: "POST",
+      body: { email: dbUser.email },
+    });
+    if (!loginRes.ok) {
+      console.error(`[BrokerSend] re-auth refused for broker ${brokerId}: ${loginRes.status}`);
+      return null;
+    }
+    const data = await loginRes.json().catch(() => null);
+    const jwt = data?.token || data?.jwt || null;
+    return typeof jwt === "string" && jwt.length > 0 ? jwt : null;
+  } catch (e: any) {
+    console.error(`[BrokerSend] re-auth error for broker ${brokerId}:`, e.message);
+    return null;
+  }
+}
+
 // Fires broker "send instructions at HH:MM" schedules: when one comes due,
 // send-all the held assignments on every job that broker has on that date.
 async function processDueBrokerScheduledSends() {
@@ -493,8 +523,19 @@ async function processDueBrokerScheduledSends() {
       if (auth.userId === row.broker_id && auth.jwt && !auth.jwt.startsWith("dev-local:")) jwt = auth.jwt;
     }
     if (!jwt) {
+      // No live session (server restarted, session evicted, or JWT expired).
+      // Re-acquire one via the email-only companion login (API-key trust) —
+      // the same upstream endpoint the app-startup login fallback uses. This
+      // acts on the broker's behalf without a password because the schedule
+      // itself was created from an authenticated session.
+      jwt = await reacquireBrokerJwt(String(row.broker_id));
+      if (jwt) {
+        console.log(`[BrokerSend] schedule ${row.id}: re-authenticated broker ${row.broker_id} for scheduled send`);
+      }
+    }
+    if (!jwt) {
       await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time' WHERE id = $1`,
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1`,
         [row.id]
       ).catch(() => {});
       continue;

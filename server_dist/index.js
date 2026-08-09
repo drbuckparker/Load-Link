@@ -1765,6 +1765,30 @@ function startNewJobWatcher() {
     setInterval(() => pollForNewWebsiteJobs(false), 6e4);
   });
 }
+async function reacquireBrokerJwt(brokerId) {
+  try {
+    const r = await pool.query(
+      `SELECT email, is_suspended FROM users WHERE id::text = $1 LIMIT 1`,
+      [brokerId]
+    );
+    const dbUser = r.rows[0];
+    if (!dbUser?.email || dbUser.is_suspended) return null;
+    const loginRes = await websiteFetch("/api/companion/auth/login", {
+      method: "POST",
+      body: { email: dbUser.email }
+    });
+    if (!loginRes.ok) {
+      console.error(`[BrokerSend] re-auth refused for broker ${brokerId}: ${loginRes.status}`);
+      return null;
+    }
+    const data = await loginRes.json().catch(() => null);
+    const jwt = data?.token || data?.jwt || null;
+    return typeof jwt === "string" && jwt.length > 0 ? jwt : null;
+  } catch (e) {
+    console.error(`[BrokerSend] re-auth error for broker ${brokerId}:`, e.message);
+    return null;
+  }
+}
 async function processDueBrokerScheduledSends() {
   let due = [];
   try {
@@ -1797,8 +1821,14 @@ async function processDueBrokerScheduledSends() {
       if (auth.userId === row.broker_id && auth.jwt && !auth.jwt.startsWith("dev-local:")) jwt = auth.jwt;
     }
     if (!jwt) {
+      jwt = await reacquireBrokerJwt(String(row.broker_id));
+      if (jwt) {
+        console.log(`[BrokerSend] schedule ${row.id}: re-authenticated broker ${row.broker_id} for scheduled send`);
+      }
+    }
+    if (!jwt) {
       await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time' WHERE id = $1`,
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1`,
         [row.id]
       ).catch(() => {
       });
