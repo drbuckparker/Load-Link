@@ -1,11 +1,15 @@
 ---
 name: Private jobs visibility layer
-description: Dormant, feature-detected privacy enforcement for the website's upcoming Private Projects & Jobs schema.
+description: ACTIVE (Aug 2026) — companion-owned jobs.visibility, broker jobs private by default, DB trigger guards against clobber.
 ---
 
-The companion enforces the website's "Private Projects & Jobs with Public Overflow" feature via runtime schema detection (server/visibility.ts), not hardcoded columns.
+ACTIVATED Aug 2026: the companion itself added `jobs.visibility` (text, nullable) to the shared DB, so the feature-detected layer in server/visibility.ts is now live. `public_positions_remaining` and the project-invitations table still don't exist.
 
-**Why:** The website owns the shared schema and hadn't landed `jobs.visibility`, `public_positions_remaining`, or a project-invitations table as of July 2026. Hardcoding would break current queries; waiting would leave a leak window when the schema lands. Feature detection (information_schema, 5-min cache) means enforcement switches on automatically with no companion redeploy.
+**Why companion-owned:** the website never enforced privacy AND its /api/jobs payloads report `visibility:'public'` on every job — so any sync that accepts the website's value flips broker jobs public within ~60s. Sync (server/sync.ts upsertRow) drops `visibility` from every website jobs payload; a post-upsert sweep defaults NULL→'private' for broker-owned jobs.
+
+**Trigger guard (critical):** older deployed companion code (and the website itself) writes jobs rows directly, bypassing dev-code fixes. A `BEFORE INSERT OR UPDATE` trigger on jobs (`trg_protect_broker_job_visibility`) forces broker-job inserts private and blocks broker jobs going less-private, unless the session sets `SET LOCAL app.allow_visibility_change='1'` — done only by POST /api/jobs/:id/visibility (broker-owner-only toggle). Any new legitimate visibility writer must set that GUC in its transaction.
+
+**Fail-closed rule:** a broker-posted job with NULL visibility is treated as PRIVATE in jobVisibilityPredicate, canViewPrivateJob, and the new-job push watcher (NULL == public only for non-broker jobs). Application paths (accept AND counter-bid) share privateJobApplicationBlock().
 
 **How to apply:**
 - Rules once active: private jobs are listable/viewable only by owner, assigned/applied drivers, project invitees, or anyone if `public_positions_remaining > 0` (overflow is public). Detail route returns 403 "This project is private." Private jobs skip the nearby-driver new-job push broadcast (unless overflow > 0).

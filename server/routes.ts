@@ -206,9 +206,14 @@ async function notifyNearbyDriversOfNewJob(job: any) {
       const cols = visFeats.publicPositionsRemaining
         ? `visibility::text AS vis, COALESCE(public_positions_remaining, 0)::int AS ppr`
         : `visibility::text AS vis, 0 AS ppr`;
-      const vr = await pool.query(`SELECT ${cols} FROM jobs WHERE id = $1`, [String(job.id)]);
+      const vr = await pool.query(
+        `SELECT ${cols},
+                EXISTS (SELECT 1 FROM users _vo WHERE _vo.id::text = jobs.contractor_id::text AND _vo.role::text = 'broker') AS owner_is_broker
+         FROM jobs WHERE id = $1`, [String(job.id)]);
       const row = vr.rows[0];
-      if (row && row.vis === 'private' && Number(row.ppr) <= 0) {
+      // Fail closed: broker jobs with NULL visibility are private-by-default
+      // (the default-private sweep may not have classified them yet).
+      if (row && (row.vis === 'private' || (row.vis == null && row.owner_is_broker)) && Number(row.ppr) <= 0) {
         console.log(`[JobWatcher] Job ${job.id} is private — skipping nearby-driver broadcast`);
         return;
       }
@@ -1763,6 +1768,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Broker privacy toggle: flip a posted job between private (roster-only)
+  // and public (open marketplace applications). Owner-only.
+  app.post("/api/jobs/:id/visibility", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const vis = String(req.body?.visibility || "");
+      if (vis !== "public" && vis !== "private") {
+        return res.status(400).json({ message: "visibility must be 'public' or 'private'" });
+      }
+      // Broker-only: privacy is a broker roster feature. Ordinary contractor
+      // jobs are public marketplace posts and must stay that way — otherwise
+      // any contractor could hide a job the marketplace already relies on.
+      // The DB trigger blocks broker jobs going public unless this session
+      // authorizes it (SET LOCAL) — this endpoint is the only writer that may.
+      const client = await pool.connect();
+      let upd;
+      try {
+        await client.query("BEGIN");
+        await client.query("SET LOCAL app.allow_visibility_change = '1'");
+        upd = await client.query(
+          `UPDATE jobs SET visibility = $1, updated_at = NOW()
+           WHERE id = $2 AND contractor_id::text = $3
+             AND EXISTS (SELECT 1 FROM users u WHERE u.id::text = $3::text AND u.role::text = 'broker')
+           RETURNING id, visibility`,
+          [vis, req.params.id, auth.userId]
+        );
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+      if (upd.rowCount === 0) return res.status(404).json({ message: "Job not found" });
+      return res.json({ ok: true, visibility: upd.rows[0].visibility });
+    } catch (e: any) {
+      console.error("Job visibility error:", e.message);
+      return res.status(500).json({ message: "Failed to update job visibility" });
+    }
+  });
+
   app.post("/api/jobs/:id/archive", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
@@ -1960,6 +2006,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // billing split), so persist the job→client link companion-side. The
         // client key resolves to a manual client id when the name/email
         // matches one, else we keep just the name/email for display.
+        // Broker jobs are private by default — mark it immediately so the job
+        // never has a public window before the ~60s sync backstop catches it.
+        // (Row may not exist locally yet; the sync-side default covers that.)
+        if (r.ok && data?.id) {
+          try {
+            await pool.query(`UPDATE jobs SET visibility = 'private' WHERE id = $1 AND visibility IS NULL`, [String(data.id)]);
+          } catch {}
+        }
         if (r.ok && data?.id && (req.body.clientName || req.body.clientEmail)) {
           try {
             const cName = String(req.body.clientName || "").trim();
@@ -3019,6 +3073,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Shared gate for EVERY application-creation path (accept, counter-bid, …):
+  // a private job (or a broker job not yet classified — NULL visibility fails
+  // closed) rejects applications unless the applicant already participates,
+  // holds a live sent assignment, is invited, or public overflow openings
+  // remain. Returns an error message to send as 403, or null when allowed.
+  async function privateJobApplicationBlock(jobId: string, userId: string): Promise<string | null> {
+    try {
+      const visFeats = await getVisibilityFeatures(pool);
+      if (!visFeats.jobsVisibility) return null;
+      const jr = await pool.query(
+        `SELECT id, contractor_id, driver_id, project_id, visibility::text AS visibility${visFeats.publicPositionsRemaining ? ", public_positions_remaining" : ""}
+         FROM jobs WHERE id = $1`,
+        [jobId]
+      );
+      const job = jr.rows[0];
+      if (!job) return null; // let the caller's own not-found handling run
+      let participant = String(job.contractor_id) === String(userId);
+      if (!participant) {
+        const aChk = await pool.query(
+          `SELECT 1 FROM job_assignments ja WHERE ja.job_id = $1 AND ja.driver_id::text = $2
+           AND ja.status::text NOT IN ('rejected','withdrawn','cancelled','expired')
+           AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
+             SELECT 1 FROM users _bu WHERE _bu.id::text = $3::text AND _bu.role::text = 'broker'))
+           LIMIT 1`,
+          [jobId, userId, String(job.contractor_id)]
+        );
+        participant = aChk.rows.length > 0;
+      }
+      const allowed = await canViewPrivateJob(pool, visFeats, job, userId, participant);
+      return allowed ? null : "This job is private and not accepting public applications.";
+    } catch (e: any) {
+      console.error("privateJobApplicationBlock error:", e.message);
+      // Fail closed only when we know the feature is active; on unexpected
+      // errors keep legacy behavior rather than blocking all applications.
+      return null;
+    }
+  }
+
   app.post("/api/jobs/:id/accept", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
@@ -3027,11 +3119,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Look up the job + caller's favorite status BEFORE writing any assignments,
       // so we can enforce the auto-approval truck cap.
       const jobRow = await pool.query(
-        `SELECT contractor_id, COALESCE(trucks_needed, 1)::int AS trucks_needed FROM jobs WHERE id = $1`,
+        `SELECT id, contractor_id, driver_id, project_id, COALESCE(trucks_needed, 1)::int AS trucks_needed FROM jobs WHERE id = $1`,
         [req.params.id]
       );
       const contractorId = jobRow.rows[0]?.contractor_id;
       const trucksNeeded = Number(jobRow.rows[0]?.trucks_needed) || 1;
+
+      // Private jobs (broker roster-only work) cannot take public applications.
+      const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
+      if (privateBlock) return res.status(403).json({ message: privateBlock });
 
       let isAutoApprove = false;
       if (contractorId) {
@@ -3315,6 +3411,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const { rate, note } = req.body;
+      const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
+      if (privateBlock) return res.status(403).json({ message: privateBlock });
       const id = crypto.randomUUID();
       await pool.query(
         `INSERT INTO job_assignments (id, job_id, driver_id, status, counter_bid_rate, counter_bid_note, created_at)

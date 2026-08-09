@@ -141,6 +141,11 @@ async function upsertRow(tableName: string, data: Record<string, any>, idField =
 
   const filteredEntries = Object.entries(normalized).filter(
     ([key, val]) => columns.has(key) && val !== undefined
+      // jobs.visibility is companion-owned: the website reports 'public' on
+      // every job (it never actually enforces privacy), so accepting its value
+      // would flip broker jobs public ~60s after our default-private sweep.
+      // Drop it from every synced payload; local writes are the only source.
+      && !(tableName === "jobs" && key === "visibility")
   );
 
   if (filteredEntries.length === 0 || !normalized[idField]) return;
@@ -301,6 +306,18 @@ export async function syncJobs(auth: SyncAuth, prefetchedJobs?: any[]): Promise<
     }
 
     const count = await upsertMany("jobs", deduped);
+
+    // Broker jobs are private by default: brokers distribute work to their own
+    // roster, so a job must never appear in the public feed (or accept public
+    // applications) unless the broker explicitly flips it public. NULL means
+    // "never set" — an explicit 'public' from the toggle is left alone.
+    try {
+      await pool.query(
+        `UPDATE jobs j SET visibility = 'private'
+         WHERE j.visibility IS NULL
+           AND EXISTS (SELECT 1 FROM users u WHERE u.id::text = j.contractor_id::text AND u.role::text = 'broker')`
+      );
+    } catch {}
 
     try {
       const websiteIds = new Set<string>(jobs.map((j: any) => String(j.id)));

@@ -115,9 +115,14 @@ export function jobVisibilityPredicate(
 ): string {
   if (!feats.jobsVisibility) return "";
   const a = alias;
+  // Fail closed for broker jobs: a broker-posted job with NULL visibility is
+  // treated as private (the website doesn't set the column, so a just-created
+  // broker job is NULL until the companion's default-private sweep runs).
+  // Non-broker jobs keep NULL == public (the marketplace default).
+  const ownerIsBroker = `EXISTS (SELECT 1 FROM users _vo WHERE _vo.id::text = ${a}.contractor_id::text AND _vo.role::text = 'broker')`;
   const parts = [
-    `${a}.visibility IS NULL`,
-    `${a}.visibility::text <> 'private'`,
+    `(${a}.visibility IS NULL AND NOT ${ownerIsBroker})`,
+    `(${a}.visibility IS NOT NULL AND ${a}.visibility::text <> 'private')`,
     `${a}.contractor_id::text = $${userParamIdx}::text`,
     `${a}.driver_id::text = $${userParamIdx}::text`,
     // Broker "send-later" rule: on a job posted by a broker, a HELD assignment
@@ -158,7 +163,21 @@ export async function canViewPrivateJob(
 ): Promise<boolean> {
   if (!feats.jobsVisibility) return true;
   const vis = (job.visibility ?? "").toString();
-  if (vis !== "private") return true;
+  if (vis !== "private") {
+    // Fail closed: an unset visibility on a broker-posted job means private
+    // (the website's write doesn't set the column; the companion's
+    // default-private sweep may not have run yet).
+    if (vis !== "") return true;
+    try {
+      const r = await pool.query(
+        `SELECT 1 FROM users WHERE id::text = $1::text AND role::text = 'broker' LIMIT 1`,
+        [String(job.contractor_id)]
+      );
+      if (r.rows.length === 0) return true;
+    } catch {
+      return true;
+    }
+  }
   if (alreadyParticipantOrAssigned) return true;
   if (String(job.contractor_id) === String(userId)) return true;
   if (job.driver_id && String(job.driver_id) === String(userId)) return true;

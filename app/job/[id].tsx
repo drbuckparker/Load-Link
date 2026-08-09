@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking, Image, RefreshControl } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking, Image, RefreshControl, Switch } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -728,6 +728,36 @@ export default function JobDetailScreen() {
     Alert.alert('Mark Complete', 'Mark this job as completed? It will be moved to the completed section.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Mark Complete', onPress: doComplete },
+    ]);
+  }
+
+  const [togglingVisibility, setTogglingVisibility] = useState(false);
+  async function handleToggleVisibility(makePublic: boolean) {
+    const doToggle = async () => {
+      setTogglingVisibility(true);
+      try {
+        await apiRequest('POST', `/api/jobs/${id}/visibility`, { visibility: makePublic ? 'public' : 'private' });
+        if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+        queryClient.invalidateQueries({ predicate: (q) => {
+          const key = q.queryKey.join('/');
+          return key.includes('/api/jobs') || key.includes('/api/broker/jobs') || key.includes('/api/contractor');
+        }});
+      } catch (e: any) {
+        Alert.alert('Error', e.message || 'Failed to update job visibility');
+      } finally {
+        setTogglingVisibility(false);
+      }
+    };
+    if (!makePublic) { doToggle(); return; }
+    const msg = 'Open this job to the public? Any truck will be able to find it and apply. You can switch it back to private at any time.';
+    if (Platform.OS === 'web') {
+      if (window.confirm(msg)) doToggle();
+      return;
+    }
+    Alert.alert('Make Job Public', msg, [
+      { text: 'Keep Private', style: 'cancel' },
+      { text: 'Make Public', onPress: doToggle },
     ]);
   }
 
@@ -2924,6 +2954,40 @@ export default function JobDetailScreen() {
               <Ionicons name="close-circle" size={20} color={Colors.destructive} />
               <Text style={styles.cancelJobBtnText}>ARCHIVE JOB</Text>
             </Pressable>
+            {isBrokerRole(user?.role || '') && (
+              <View
+                testID="job-public-toggle"
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 12,
+                  backgroundColor: Colors.card, borderWidth: 1,
+                  borderColor: job.visibility === 'public' ? Colors.primary : Colors.border,
+                  borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12,
+                }}
+              >
+                <Ionicons
+                  name={job.visibility === 'public' ? 'earth' : 'lock-closed'}
+                  size={20}
+                  color={job.visibility === 'public' ? Colors.primary : Colors.textMuted}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: 'ChakraPetch_600SemiBold', fontSize: 13, color: Colors.text, letterSpacing: 0.5 }}>
+                    {job.visibility === 'public' ? 'JOB IS PUBLIC' : 'MAKE JOB PUBLIC'}
+                  </Text>
+                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: Colors.textMuted, marginTop: 2 }}>
+                    {job.visibility === 'public'
+                      ? 'Any truck can find and apply to this job'
+                      : 'Private — only trucks you assign can see it'}
+                  </Text>
+                </View>
+                <Switch
+                  value={job.visibility === 'public'}
+                  disabled={togglingVisibility}
+                  trackColor={{ false: Colors.border, true: Colors.primary }}
+                  thumbColor="#fff"
+                  onValueChange={(next) => handleToggleVisibility(next)}
+                />
+              </View>
+            )}
           </View>
         )}
 
