@@ -7,7 +7,18 @@ const nativeFetch = globalThis.fetch;
 const safeFetch = Platform.OS === 'web' ? nativeFetch : expoFetch;
 
 let _authToken: string | null = null;
-let _reloginInProgress: Promise<boolean> | null = null;
+let _reloginInProgress: Promise<ReloginResult> | null = null;
+
+type ReloginResult = 'ok' | 'invalid' | 'transient';
+
+// AuthContext registers a callback here so that when a request hits 401 and
+// the silent re-login is *definitively* rejected (bad/missing credentials —
+// not a network blip), the app signs the user out and shows the login screen
+// instead of rendering empty dashboards forever.
+let _onSessionLost: (() => void) | null = null;
+export function setOnSessionLost(cb: (() => void) | null) {
+  _onSessionLost = cb;
+}
 
 export function setAuthToken(token: string | null) {
   _authToken = token;
@@ -27,13 +38,15 @@ export function getApiUrl(): string {
   return url.href;
 }
 
-async function attemptSilentRelogin(): Promise<boolean> {
+async function attemptSilentRelogin(): Promise<ReloginResult> {
   if (_reloginInProgress) return _reloginInProgress;
-  _reloginInProgress = (async () => {
+  _reloginInProgress = (async (): Promise<ReloginResult> => {
     try {
       const email = await AsyncStorage.getItem('loadlink_email');
       const password = await AsyncStorage.getItem('loadlink_password');
-      if (!email) return false;
+      // No saved credentials at all: this session can never recover on its
+      // own — the user has to log in again.
+      if (!email) return 'invalid';
 
       const baseUrl = getApiUrl();
       const body: any = { email };
@@ -51,17 +64,31 @@ async function attemptSilentRelogin(): Promise<boolean> {
         if (data.token) {
           _authToken = data.token;
           await AsyncStorage.setItem('loadlink_token', data.token);
-          return true;
+          return 'ok';
         }
       }
-      return false;
+      // Only a definitive rejection means the stored credentials are bad;
+      // anything else (5xx, rate limit) is a hiccup worth retrying later.
+      if (res.status === 401 || res.status === 403) return 'invalid';
+      return 'transient';
     } catch {
-      return false;
+      return 'transient';
     } finally {
       _reloginInProgress = null;
     }
   })();
   return _reloginInProgress;
+}
+
+// Shared 401 recovery: try a silent re-login; if the credentials are
+// definitively rejected (or missing), tell AuthContext the session is lost.
+async function recoverFromUnauthorized(): Promise<boolean> {
+  const result = await attemptSilentRelogin();
+  if (result === 'ok') return true;
+  if (result === 'invalid' && _onSessionLost) {
+    try { _onSessionLost(); } catch {}
+  }
+  return false;
 }
 
 function getHeaders(includeContent?: boolean): Record<string, string> {
@@ -119,7 +146,7 @@ export async function apiRequest(
   });
 
   if (res.status === 401 && !route.includes('/api/auth/')) {
-    const reloginOk = await attemptSilentRelogin();
+    const reloginOk = await recoverFromUnauthorized();
     if (reloginOk) {
       res = await safeFetch(url.toString(), {
         method,
@@ -149,7 +176,7 @@ export const getQueryFn: <T>(options: {
     });
 
     if (res.status === 401) {
-      const reloginOk = await attemptSilentRelogin();
+      const reloginOk = await recoverFromUnauthorized();
       if (reloginOk) {
         res = await safeFetch(url.toString(), {
           headers: getHeaders(),

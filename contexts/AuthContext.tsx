@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiRequest, getApiUrl, setAuthToken, getAuthToken, queryClient } from '@/lib/query-client';
+import { apiRequest, getApiUrl, setAuthToken, getAuthToken, queryClient, setOnSessionLost } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
 import { registerForPushNotifications } from '@/lib/notifications';
 
@@ -94,6 +94,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     checkAuth();
+    // When any API request 401s and the silent re-login is definitively
+    // rejected (bad or missing saved credentials), sign out for real so the
+    // user sees the login screen instead of empty dashboards with (0) counts.
+    setOnSessionLost(() => {
+      void (async () => {
+        try {
+          await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']);
+        } catch {}
+        setAuthToken(null);
+        queryClient.clear();
+        setUser(null);
+      })();
+    });
+    return () => setOnSessionLost(null);
   }, []);
 
   async function safeStore(user: User) {
