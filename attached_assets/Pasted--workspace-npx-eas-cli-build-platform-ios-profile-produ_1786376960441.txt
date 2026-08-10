@@ -1,0 +1,42 @@
+~/workspace$ npx eas-cli build --platform ios --profile production
+
+⚠️ Detected that your app uses Expo Go for development, this is not recommended when building production apps.
+Learn more: https://expo.fyi/why-not-build-expo-go-for-production
+To suppress this warning, set EAS_BUILD_NO_EXPO_GO_WARNING=true.
+
+Resolved "production" environment for the build. Learn more: https://docs.expo.dev/eas/environment-variables/#setting-the-environment-for-your-builds
+No environment variables with visibility "Plain text" and "Sensitive" found for the "production" environment on EAS.
+
+✔ Incremented buildNumber from 4 to 5.
+
+
+✔ Using remote iOS credentials (Expo server)
+
+If you provide your Apple account credentials we will be able to generate all necessary build credentials and fully validate them.
+This is optional, but without Apple account access you will need to provide all the missing values manually and we can only run minimal validation on them.
+✔ Do you want to log in to your Apple account? … yes
+
+› Log in to your Apple Developer account to continue
+✔ Apple ID: … joey@loadlinklive.com
+› The password is only used to authenticate with Apple and never stored on EAS servers
+  Learn more: https://bit.ly/2VtGWhU
+✔ Password (for joey@loadlinklive.com): … **********
+› Saving Apple ID password to the local Keychain
+  Learn more: https://docs.expo.dev/distribution/security#keychain
+✔ Logged in, verify your Apple account to continue
+Two-factor Authentication (6 digit code) is enabled for joey@loadlinklive.com. Learn more: https://support.apple.com/en-us/HT204915
+
+✔ Please select a trusted phone number to send code to › +1 (•••) •••-••78
+✔ Please enter the 6 digit code you received at +1 (•••) •••-••78: … 291632
+✖ Invalid code
+Two-factor Authentication (6 digit code) is enabled for joey@loadlinklive.com. Learn more: https://support.apple.com/en-us/HT204915
+
+✔ Please select a trusted phone number to send code to › +1 (•••) •••-••78
+✔ Please enter the 6 digit code you received at +1 (•••) •••-••78: … 598843
+✔ Valid code
+✔ Logged in and verified
+› Team Load Link, Inc. (DA2568YFHY)
+› Provider Load Link, Inc. (128944929)
+✖ The bundle identifier com.loadlink.app is not available to team "Load Link, Inc. (Company/Organization)" (DA2568YFHY), change it in your app config and try again.
+An attribute in the provided entity has invalid value - An App ID with Identifier 'com.loadlink.app' is not available. Please enter a different string.
+    Error: build command failed.
