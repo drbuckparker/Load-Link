@@ -10,7 +10,8 @@ LoadLink's Android app is NOT built on Replit. Pipeline: code edited in Replit �
 ## Lockfile firewall gotcha (durable)
 Replit's `package-lock.json` pins dependency URLs to `http://package-firewall.replit.local/...`. Expo's EAS build servers cannot reach that internal mirror, so EAS install/build fails.
 **Fix:** on the build machine, delete `package-lock.json` + `node_modules`, run `npm install` against the public npm registry to regenerate a clean lockfile, then build.
-**Why:** applies any time the build leaves Replit (EAS, external CI). The Replit-mirror lockfile is not portable.
+**Simpler in-place fix (verified Aug 2026, iOS build):** the firewall URLs can be rewritten directly in the Replit workspace lockfile — `sed 's|http://package-firewall.replit.local/npm/|https://registry.npmjs.org/|g'` — path structure is identical and integrity hashes match the same tarballs (verify each rewritten URL with curl HEAD 200). Only a handful of entries are firewall-pinned; the rest already point at the public registry. Caveat: any later `npm install` on Replit re-pins new/changed entries to the firewall, so re-run the sed before shipping a build that uses this lockfile.
+**Why:** applies any time the build leaves Replit (EAS, external CI). The Replit-mirror lockfile is not portable. Note the iOS EAS build DID receive the workspace's gitignored lockfile (npm ci ran with it), so the upload includes it regardless of .gitignore — keep it clean.
 
 ## Versioning (durable)
 EAS manages the Android `versionCode` REMOTELY — a build from a commit whose app.json had no `android.versionCode` still produced a higher versionCode. Do NOT hardcode `android.versionCode` in app.json; it is ignored by this pipeline and only misleads. `version` (versionName) is still read from app.json.
