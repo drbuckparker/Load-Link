@@ -1,0 +1,18 @@
+LoadLink main app — recent additions the mobile/companion side should be aware of
+
+1. Accounting sync (QuickBooks Online + Xero) — new, web-only for now
+
+Invoice payees (the driver/contractor or broker who issues an invoice) can connect their own QuickBooks Online or Xero account via OAuth from web Settings → Billing. Each user connects their own books; tokens are stored encrypted server-side.
+When an invoice is issued, it's automatically pushed to the payee's connected accounting system. A background poller (every 15 min) checks payment status there; when fully paid, the invoice status changes to payment_received without any user action. Mobile must not assume invoice status only changes through in-app actions — always show the server's current status.
+New schema on monthly_invoices: qbo_* and xero_* columns (sync status, remote invoice ID, last sync error, synced-at). New tables: quickbooks_connections, quickbooks_customer_map, xero_connections, xero_contact_map. If the companion server selects * or mirrors invoice queries, re-verify them against the live DB (there's a known history of companion SQL referencing stale columns and failing silently).
+New API routes on the main server: /api/quickbooks/* and /api/xero/* (status, connect, callback, disconnect, sync-all) plus /api/invoices/:id/sync-qbo and /sync-xero. Auth rule: only the invoice payee may sync or see sync details. Nothing here may ever expose broker bill rates.
+Mobile does NOT need to implement OAuth connect flows. If mobile shows invoices, it may optionally display the sync badge/error from the new columns — read-only.
+2. Invoice financials (earlier phases, if not yet synced)
+
+Invoices lock at issue time; late job additions create supplemental invoices. All invoice math goes through the server's getInvoiceLineItems — never recompute totals client-side.
+3. Support contact changes
+
+The in-app contact form (POST /api/contact, authenticated) and suggestion form now email support@loadlinklive.com (previously two personal inboxes). If mobile has or adds a contact/support screen, use the same /api/contact endpoint via the companion proxy rather than hardcoding email addresses.
+4. Config
+
+New env secrets on the main server: QBO_CLIENT_ID/QBO_CLIENT_SECRET (production Intuit keys, live). Xero keys not yet provided — Xero endpoints return "not configured" gracefully. The companion server needs none of these.
