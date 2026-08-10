@@ -1,0 +1,58 @@
+Running "npm ci --include=dev" in /Users/expo/workingdir/build/ directory
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: expo-router@56.2.7
+npm warn Found: expo-constants@18.0.13
+npm warn node_modules/expo-constants
+npm warn   expo-constants@"~18.0.11" from the root project
+npm warn   5 more (expo, expo-asset, expo-auth-session, expo-linking, expo-router)
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer expo-constants@"^56.0.16" from expo-router@56.2.7
+npm warn node_modules/expo/node_modules/expo-router
+npm warn   peerOptional expo-router@"*" from @expo/cli@54.0.24
+npm warn   node_modules/expo/node_modules/@expo/cli
+npm warn
+npm warn Conflicting peer dependency: expo-constants@56.0.23
+npm warn node_modules/expo-constants
+npm warn   peer expo-constants@"^56.0.16" from expo-router@56.2.7
+npm warn   node_modules/expo/node_modules/expo-router
+npm warn     peerOptional expo-router@"*" from @expo/cli@54.0.24
+npm warn     node_modules/expo/node_modules/@expo/cli
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: react-native-screens@4.25.2
+npm warn Found: react-native@0.81.5
+npm warn node_modules/react-native
+npm warn   react-native@"0.81.5" from the root project
+npm warn   52 more (@expo/devtools, @expo/dom-webview, @expo/log-box, ...)
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer react-native@">=0.82.0" from react-native-screens@4.25.2
+npm warn node_modules/expo/node_modules/expo-router/node_modules/react-native-screens
+npm warn   react-native-screens@"^4.25.2" from expo-router@56.2.7
+npm warn   node_modules/expo/node_modules/expo-router
+npm warn
+npm warn Conflicting peer dependency: react-native@0.86.2
+npm warn node_modules/react-native
+npm warn   peer react-native@">=0.82.0" from react-native-screens@4.25.2
+npm warn   node_modules/expo/node_modules/expo-router/node_modules/react-native-screens
+npm warn     react-native-screens@"^4.25.2" from expo-router@56.2.7
+npm warn     node_modules/expo/node_modules/expo-router
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated @esbuild-kit/esm-loader@2.6.5: Merged into tsx: https://tsx.is
+npm warn deprecated @esbuild-kit/core-utils@3.3.2: Merged into tsx: https://tsx.is
+npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+npm error code ENOTFOUND
+npm error syscall getaddrinfo
+npm error errno ENOTFOUND
+npm error network request to http://package-firewall.replit.local/npm/expo-updates-interface/-/expo-updates-interface-2.0.0.tgz failed, reason: getaddrinfo ENOTFOUND package-firewall.replit.local
+npm error network This is a problem related to network connectivity.
+npm error network In most cases you are behind a proxy or have bad network settings.
+npm error network
+npm error network If you are behind a proxy, please make sure that the
+npm error network 'proxy' config is set properly.  See: 'npm help config'
+npm error A complete log of this run can be found in: /Users/expo/.npm/_logs/2026-08-10T14_19_48_284Z-debug-0.log
+npm ci --include=dev exited with non-zero code: 1
