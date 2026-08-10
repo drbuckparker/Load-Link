@@ -23,7 +23,10 @@
     "ios": {
       "supportsTablet": false,
       "requireFullScreen": true,
-      "bundleIdentifier": "com.loadlink.app"
+      "bundleIdentifier": "com.loadlink.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.loadlink.app",
