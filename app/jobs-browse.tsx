@@ -108,6 +108,7 @@ export default function JobsBrowseScreen() {
   );
   const [clientSearch, setClientSearch] = useState('');
   const [showInviteClient, setShowInviteClient] = useState(false);
+  const [showInactiveClients, setShowInactiveClients] = useState(false);
   const [inviteClientName, setInviteClientName] = useState('');
   const [inviteClientEmail, setInviteClientEmail] = useState('');
   const [inviteClientContact, setInviteClientContact] = useState('');
@@ -249,13 +250,16 @@ export default function JobsBrowseScreen() {
     enabled: !!user && isBroker,
   });
   const brokerClients = Array.isArray(_brokerClients) ? _brokerClients : [];
+  const activeClientCount = useMemo(() => brokerClients.filter((c: any) => !c.archived).length, [brokerClients]);
+  const inactiveClientCount = brokerClients.length - activeClientCount;
   const filteredClients = useMemo(() => {
+    let list = brokerClients.filter((c: any) => !!c.archived === showInactiveClients);
     const q = clientSearch.trim().toLowerCase();
-    if (!q) return brokerClients;
-    return brokerClients.filter((c: any) =>
+    if (!q) return list;
+    return list.filter((c: any) =>
       `${c.name || c.client_name || c.clientName || ''} ${c.email || ''}`.toLowerCase().includes(q)
     );
-  }, [brokerClients, clientSearch]);
+  }, [brokerClients, clientSearch, showInactiveClients]);
 
   // Broker jobs, used to list each client's jobs inline under their card.
   const { data: _brokerJobs } = useQuery<any[]>({
@@ -379,6 +383,45 @@ export default function JobsBrowseScreen() {
     setEditClientAddress(item.address || '');
     setEditClientNotes(item.notes || '');
   }, []);
+
+  const archiveClientMutation = useMutation({
+    mutationFn: async ({ key, archive }: { key: string; archive: boolean }) => {
+      const res = await apiRequest(archive ? 'POST' : 'DELETE', `/api/broker/clients/${encodeURIComponent(key)}/archive`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/broker/clients')) });
+      setEditingClient(null);
+    },
+    onError: (e: any) => {
+      Alert.alert('Could Not Update Client', e?.message || 'Please try again.');
+    },
+  });
+
+  // "..." on a client card: manual clients open the edit sheet (which has
+  // Archive inside); registered/invited clients get a simple action menu.
+  const openClientActions = useCallback((item: any) => {
+    const isManualClient = String(item.clientUserId || item.client_user_id || '').startsWith('manual-');
+    if (isManualClient) { openEditClient(item); return; }
+    const key = String(item.clientUserId || item.client_user_id || item.invitationId || item.invitation_id || item.id || item.email || '');
+    const cName = item.name || item.client_name || item.clientName || item.email || 'this client';
+    const archived = !!item.archived;
+    const doIt = () => archiveClientMutation.mutate({ key, archive: !archived });
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(archived ? `Move "${cName}" back to your active clients?` : `Mark "${cName}" as inactive? Their jobs and history are kept — they just move to the Inactive tab.`)) doIt();
+      return;
+    }
+    Alert.alert(
+      archived ? 'Restore Client' : 'Mark Client Inactive',
+      archived
+        ? `Move "${cName}" back to your active clients?`
+        : `Mark "${cName}" as inactive? Their jobs and history are kept — they just move to the Inactive tab.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: archived ? 'Restore' : 'Mark Inactive', onPress: doIt },
+      ]
+    );
+  }, [archiveClientMutation, openEditClient]);
 
   const handleDeleteClient = useCallback(() => {
     if (!editingClient) return;
@@ -1297,6 +1340,24 @@ export default function JobsBrowseScreen() {
 
       {activeTab === 'clients' && isBroker && !selectedClient && (
         <>
+          <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginBottom: 10 }}>
+            {([['Active', false, activeClientCount], ['Inactive', true, inactiveClientCount]] as [string, boolean, number][]).map(([label, val, n]) => (
+              <Pressable
+                key={label}
+                testID={`clients-tab-${label.toLowerCase()}`}
+                onPress={() => setShowInactiveClients(val)}
+                style={{
+                  flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 12,
+                  backgroundColor: showInactiveClients === val ? Colors.primary : Colors.card,
+                }}
+              >
+                <Text style={{
+                  fontFamily: 'Inter_600SemiBold', fontSize: 14,
+                  color: showInactiveClients === val ? Colors.primaryForeground : Colors.textMuted,
+                }}>{label} ({n})</Text>
+              </Pressable>
+            ))}
+          </View>
           <View style={styles.searchRow}>
             <View style={styles.searchBar}>
               <Ionicons name="search" size={18} color={Colors.textMuted} />
@@ -1323,11 +1384,11 @@ export default function JobsBrowseScreen() {
           ) : filteredClients.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="business-outline" size={48} color={Colors.textMuted} />
-              <Text style={styles.emptyTitle}>{clientSearch ? 'No matching clients' : 'No clients yet'}</Text>
+              <Text style={styles.emptyTitle}>{clientSearch ? 'No matching clients' : (showInactiveClients ? 'No inactive clients' : 'No clients yet')}</Text>
               <Text style={styles.emptySubtitle}>
-                {clientSearch ? 'Try a different search term' : 'Add a client so you can post and dispatch jobs for them'}
+                {clientSearch ? 'Try a different search term' : (showInactiveClients ? 'Clients you mark inactive will show up here' : 'Add a client so you can post and dispatch jobs for them')}
               </Text>
-              {!clientSearch && (
+              {!clientSearch && !showInactiveClients && (
                 <Pressable style={styles.emptyCreateBtn} onPress={() => setShowInviteClient(true)}>
                   <Ionicons name="add" size={18} color={Colors.primaryForeground} />
                   <Text style={styles.emptyCreateBtnText}>Add Client</Text>
@@ -1366,9 +1427,9 @@ export default function JobsBrowseScreen() {
                             </Text>
                           )}
                         </View>
-                        <View style={[styles.projectStatusBadge, { backgroundColor: pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
-                          <Text style={[styles.projectStatusText, { color: pending ? '#eab308' : '#22c55e' }]}>
-                            {pending ? 'PENDING' : 'ACTIVE'}
+                        <View style={[styles.projectStatusBadge, { backgroundColor: item.archived ? 'rgba(148,163,184,0.15)' : pending ? 'rgba(234,179,8,0.15)' : 'rgba(34,197,94,0.15)' }]}>
+                          <Text style={[styles.projectStatusText, { color: item.archived ? '#94a3b8' : pending ? '#eab308' : '#22c55e' }]}>
+                            {item.archived ? 'INACTIVE' : pending ? 'PENDING' : 'ACTIVE'}
                           </Text>
                         </View>
                       </View>
@@ -1378,11 +1439,9 @@ export default function JobsBrowseScreen() {
                           {activeJobs > 0 ? `${activeJobs} active job${activeJobs !== 1 ? 's' : ''}` : 'No active jobs'}
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginLeft: 'auto' }}>
-                          {isManualClient && (
-                            <Pressable onPress={() => openEditClient(item)} hitSlop={10} testID={`edit-client-${cKey}`}>
-                              <Ionicons name="ellipsis-horizontal" size={20} color={Colors.textMuted} />
-                            </Pressable>
-                          )}
+                          <Pressable onPress={() => openClientActions(item)} hitSlop={10} testID={`edit-client-${cKey}`}>
+                            <Ionicons name="ellipsis-horizontal" size={20} color={Colors.textMuted} />
+                          </Pressable>
                           <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} />
                         </View>
                       </View>
@@ -1709,6 +1768,27 @@ export default function JobsBrowseScreen() {
                 <ActivityIndicator size="small" color={Colors.primaryForeground} />
               ) : (
                 <Text style={styles.modalCreateBtnText}>Save Changes</Text>
+              )}
+            </Pressable>
+            <Pressable
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, marginTop: 4 }}
+              disabled={archiveClientMutation.isPending}
+              onPress={() => {
+                if (!editingClient) return;
+                const key = String(editingClient.clientUserId || editingClient.client_user_id || '');
+                archiveClientMutation.mutate({ key, archive: !editingClient.archived });
+              }}
+              testID="edit-client-archive"
+            >
+              {archiveClientMutation.isPending ? (
+                <ActivityIndicator size="small" color={Colors.textMuted} />
+              ) : (
+                <>
+                  <Ionicons name={editingClient?.archived ? 'refresh-outline' : 'archive-outline'} size={16} color={Colors.textMuted} />
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.textMuted }}>
+                    {editingClient?.archived ? 'Restore to Active' : 'Mark Inactive'}
+                  </Text>
+                </>
               )}
             </Pressable>
             <Pressable

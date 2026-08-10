@@ -2295,10 +2295,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (e: any) {
         console.error("[BrokerClients] job counts failed:", e.message);
       }
+      // Companion-side archive flags (works for manual AND registered clients).
+      const archivedSet = new Set<string>();
+      try {
+        const arch = await pool.query(
+          `SELECT client_key FROM broker_archived_clients WHERE broker_id = $1`,
+          [auth.userId]
+        );
+        for (const row of arch.rows) archivedSet.add(String(row.client_key));
+      } catch (e: any) {
+        console.error("[BrokerClients] archived flags failed:", e.message);
+      }
       const manual = local.rows.map((r: any) => {
         const key = `manual-${r.id}`;
         const n = countMap.get(key) || 0;
         return {
+          archived: archivedSet.has(key),
           clientUserId: key,
           client_user_id: key,
           name: r.name,
@@ -2317,9 +2329,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       });
       const upstreamWithCounts = upstream.map((c: any) => {
-        const key = String(c.clientUserId || c.client_user_id || "");
+        const key = String(c.clientUserId || c.client_user_id || c.invitationId || c.invitation_id || c.id || c.email || "");
         const n = countMap.get(key);
-        return n === undefined ? c : { ...c, activeJobsCount: n, active_jobs_count: n };
+        const base = n === undefined ? c : { ...c, activeJobsCount: n, active_jobs_count: n };
+        return { ...base, archived: archivedSet.has(key) };
       });
       return res.json([...manual, ...upstreamWithCounts]);
     } catch (e: any) {
@@ -2815,6 +2828,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Remove a manually added client. Scoped to the broker's own rows.
+  // Archive / unarchive a client (companion-side, works for manual and
+  // registered clients alike). Purely a view flag for this broker's own
+  // Clients tab — never touches the client record or their jobs.
+  app.post("/api/broker/clients/:id/archive", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const key = String(req.params.id || "").trim();
+    if (!key) return res.status(400).json({ message: "Missing client id" });
+    try {
+      await pool.query(
+        `INSERT INTO broker_archived_clients (broker_id, client_key) VALUES ($1, $2)
+         ON CONFLICT (broker_id, client_key) DO NOTHING`,
+        [auth.userId, key]
+      );
+      return res.json({ success: true, archived: true });
+    } catch (e: any) {
+      console.error("POST /api/broker/clients/:id/archive error:", e.message);
+      return res.status(500).json({ message: "Failed to archive client" });
+    }
+  });
+
+  app.delete("/api/broker/clients/:id/archive", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const key = String(req.params.id || "").trim();
+    if (!key) return res.status(400).json({ message: "Missing client id" });
+    try {
+      await pool.query(
+        `DELETE FROM broker_archived_clients WHERE broker_id = $1 AND client_key = $2`,
+        [auth.userId, key]
+      );
+      return res.json({ success: true, archived: false });
+    } catch (e: any) {
+      console.error("DELETE /api/broker/clients/:id/archive error:", e.message);
+      return res.status(500).json({ message: "Failed to restore client" });
+    }
+  });
+
   app.delete("/api/broker/clients/:id", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req)!;
     const rawId = String(req.params.id || "");
