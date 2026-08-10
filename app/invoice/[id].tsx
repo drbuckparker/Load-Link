@@ -96,6 +96,13 @@ export default function InvoiceDetailScreen() {
   const driverSnapshot = data.driver_snapshot || {};
   const contractorSnapshot = data.contractor_snapshot || {};
 
+  // Accounting sync (QuickBooks/Xero) — server only sends these fields to the
+  // invoice payee; read-only display, connect/sync happens on the website.
+  const accountingSyncs = [
+    { label: 'QuickBooks', status: data.qbo_sync_status || data.qboSyncStatus, error: data.qbo_sync_error || data.qboSyncError },
+    { label: 'Xero', status: data.xero_sync_status || data.xeroSyncStatus, error: data.xero_sync_error || data.xeroSyncError },
+  ].filter((s) => !!s.status);
+
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
@@ -125,6 +132,30 @@ export default function InvoiceDetailScreen() {
           <Text style={styles.amountValue}>${Number(data.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
           <Text style={styles.amountJobs}>{data.job_count} job{data.job_count !== 1 ? 's' : ''}</Text>
         </View>
+
+        {accountingSyncs.map(({ label, status, error }) => {
+          const s = String(status).toLowerCase();
+          const failed = s.includes('error') || s.includes('fail');
+          const synced = s === 'synced' || s === 'success' || s === 'paid';
+          const color = failed ? '#ef4444' : synced ? '#22c55e' : '#eab308';
+          const icon = failed ? 'alert-circle' : synced ? 'checkmark-circle' : 'time-outline';
+          const text = failed
+            ? `${label} sync failed`
+            : synced
+              ? `Synced to ${label}`
+              : `Syncing to ${label}…`;
+          return (
+            <View key={label} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: Colors.card, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 12 }} testID={`accounting-sync-${label.toLowerCase()}`}>
+              <Ionicons name={icon as any} size={16} color={color} style={{ marginTop: 1 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 13, color }}>{text}</Text>
+                {failed && !!error && (
+                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 2 }} numberOfLines={2}>{String(error)}</Text>
+                )}
+              </View>
+            </View>
+          );
+        })}
 
         <View style={styles.detailsCard}>
           <Text style={styles.sectionTitle}>DETAILS</Text>

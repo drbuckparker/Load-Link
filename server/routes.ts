@@ -855,6 +855,20 @@ function camelToSnake(str: string): string {
   return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 }
 
+// Accounting-sync (QuickBooks/Xero) details are payee-only: the invoice payee
+// is the driver/contractor who issues the invoice (driver_id side). Strip the
+// qbo_*/xero_* fields from responses when the viewer isn't the payee.
+const ACCOUNTING_SYNC_FIELDS = [
+  "qbo_invoice_id", "qbo_sync_status", "qbo_synced_at", "qbo_sync_error",
+  "xero_invoice_id", "xero_sync_status", "xero_synced_at", "xero_sync_error",
+];
+function stripAccountingSyncUnlessPayee(row: any, viewerId: string | number): any {
+  if (row && String(row.driver_id) !== String(viewerId)) {
+    for (const f of ACCOUNTING_SYNC_FIELDS) delete row[f];
+  }
+  return row;
+}
+
 function addDualKeys(obj: any): any {
   if (Array.isArray(obj)) return obj.map(addDualKeys);
   if (obj === null || typeof obj !== "object" || obj instanceof Date) return obj;
@@ -6600,7 +6614,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return row;
       }));
 
-      return res.json(recomputed.map(addDualKeys));
+      return res.json(recomputed.map((r) => addDualKeys(stripAccountingSyncUnlessPayee(r, auth.userId))));
     } catch (e: any) {
       console.error("GET /api/invoices error:", e.message);
       return res.json([]);
@@ -6638,7 +6652,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         invoice.jobs = calc.jobs.map(addDualKeys);
         invoice.total_amount = calc.total;
         invoice.job_count = calc.jobCount;
-        return res.json(addDualKeys(invoice));
+        return res.json(addDualKeys(stripAccountingSyncUnlessPayee(invoice, auth.userId)));
       }
       return res.status(404).json({ message: "Invoice not found" });
     } catch (e: any) {
@@ -6659,7 +6673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await pool.query(`UPDATE monthly_invoices SET status = $1, updated_at = NOW() WHERE id = $2`, [status, req.params.id]);
       pushToWebsite(`/api/invoices/${req.params.id}/status`, auth, { method: "POST", body: req.body }).catch(() => {});
       const result = await pool.query(`SELECT * FROM monthly_invoices WHERE id = $1`, [req.params.id]);
-      return res.json(addDualKeys(result.rows[0] || {}));
+      return res.json(addDualKeys(stripAccountingSyncUnlessPayee(result.rows[0] || {}, auth.userId)));
     } catch {
       return res.status(500).json({ message: "Failed to update invoice status" });
     }
