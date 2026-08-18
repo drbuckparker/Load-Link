@@ -34,6 +34,7 @@ export interface Job {
   totalTonsNeeded?: number;
   createdAt: string;
   projectName?: string;
+  clientName?: string;
   projectId?: string;
   pendingApplications?: number;
   approvedAssignments?: number;

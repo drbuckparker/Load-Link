@@ -1952,7 +1952,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 u.phone as contractor_phone,
                 u.email as contractor_email,
                 d.full_name as driver_name,
-                COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company
+                COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company,
+                (SELECT bjc.client_name FROM broker_job_clients bjc
+                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_name
          FROM jobs j
          LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          LEFT JOIN users u ON j.contractor_id::text = u.id::text
@@ -1963,6 +1965,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       if (result.rows.length > 0) {
         const job = result.rows[0];
+        // Client name is broker-side info: only the poster sees it.
+        if (String(job.contractor_id) !== auth.userId) {
+          delete job.client_name;
+        }
         const isParticipant = (
           String(job.contractor_id) === auth.userId ||
           String(job.driver_id) === auth.userId

@@ -223,6 +223,7 @@ function mapJob(j: any): Job {
     totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
     createdAt: j.created_at ?? j.createdAt ?? '',
     projectName: j.project_name ?? j.projectName,
+    clientName: j.client_name ?? j.clientName,
     visibility: j.visibility ?? undefined,
     publicPositionsRemaining: j.public_positions_remaining != null
       ? Number(j.public_positions_remaining)
@@ -1975,6 +1976,12 @@ export default function JobDetailScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <Ionicons name="business" size={18} color={Colors.primary} />
               <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 20, color: Colors.primary }}>{job.contractorName}</Text>
+            </View>
+          ) : null}
+          {job.clientName ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }} testID="client-name-detail">
+              <Ionicons name="briefcase-outline" size={14} color={Colors.textSecondary} />
+              <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.textSecondary }}>{job.clientName}</Text>
             </View>
           ) : null}
           {job.projectName && (
