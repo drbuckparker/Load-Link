@@ -1965,10 +1965,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       if (result.rows.length > 0) {
         const job = result.rows[0];
-        // Client name is broker-side info: only the poster sees it.
-        if (String(job.contractor_id) !== auth.userId) {
-          delete job.client_name;
-        }
+        // Client name is intentionally visible to everyone who can see the
+        // job (broker's request): drivers need to know who they're hauling
+        // for to find the right job.
         const isParticipant = (
           String(job.contractor_id) === auth.userId ||
           String(job.driver_id) === auth.userId
