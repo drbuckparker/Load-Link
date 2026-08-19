@@ -281,6 +281,43 @@ export default function BrokerDashboardScreen() {
     typeof params.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : localDateKey(new Date())
   );
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
+  // Roller time picker state for the "Send instructions at…" modal
+  const [schedHour, setSchedHour] = useState(6);
+  const [schedMinute, setSchedMinute] = useState(0);
+  const [schedAmPm, setSchedAmPm] = useState<'AM' | 'PM'>('AM');
+  const [schedDayOffset, setSchedDayOffset] = useState(0); // 0 = job day, -1 = night before
+  const schedHourRef = useRef<ScrollView>(null);
+  const schedMinuteRef = useRef<ScrollView>(null);
+
+  const openScheduleModal = () => {
+    // Default: 6:00 AM on the job day
+    setSchedHour(6);
+    setSchedMinute(0);
+    setSchedAmPm('AM');
+    setSchedDayOffset(0);
+    setScheduleModalVisible(true);
+    setTimeout(() => {
+      schedHourRef.current?.scrollTo({ y: (6 - 1) * 50, animated: false });
+      schedMinuteRef.current?.scrollTo({ y: 0, animated: false });
+    }, 150);
+  };
+
+  // Re-render every 15s while the schedule modal is open so the "time has
+  // passed" check can't go stale between interactions.
+  const [, setSchedTick] = useState(0);
+  useEffect(() => {
+    if (!scheduleModalVisible) return;
+    const id = setInterval(() => setSchedTick(t => t + 1), 15_000);
+    return () => clearInterval(id);
+  }, [scheduleModalVisible]);
+
+  const getSchedDate = (dateStr: string): Date => {
+    const base = new Date(`${dateStr}T12:00:00`);
+    base.setDate(base.getDate() + schedDayOffset);
+    const h24 = schedAmPm === 'AM' ? (schedHour === 12 ? 0 : schedHour) : (schedHour === 12 ? 12 : schedHour + 12);
+    base.setHours(h24, schedMinute, 0, 0);
+    return base;
+  };
 
   const soundEnabled = !!(user as any)?.confirmationSoundEnabled;
   const prevConfirmedRef = useRef<number | null>(null);
@@ -958,7 +995,7 @@ export default function BrokerDashboardScreen() {
                             <Pressable
                               testID="schedule-day-btn"
                               style={({ pressed }) => [styles.daySecondaryBtn, pressed && { opacity: 0.7 }]}
-                              onPress={() => { haptic(); setScheduleModalVisible(true); }}
+                              onPress={() => { haptic(); openScheduleModal(); }}
                             >
                               <Ionicons name="alarm-outline" size={16} color={Colors.primary} />
                               <Text style={styles.daySecondaryBtnText}>SEND AT…</Text>
@@ -1231,32 +1268,137 @@ export default function BrokerDashboardScreen() {
             <Text style={styles.modalSubtitle}>
               All held trucks on {new Date(`${selectedDate}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })} get their job instructions automatically at this time.
             </Text>
-            <View style={styles.timeChipWrap}>
-              {[
-                { label: '8:00 PM the night before', hour: 20, dayOffset: -1 },
-                { label: '4:00 AM', hour: 4, dayOffset: 0 },
-                { label: '5:00 AM', hour: 5, dayOffset: 0 },
-                { label: '6:00 AM', hour: 6, dayOffset: 0 },
-                { label: '7:00 AM', hour: 7, dayOffset: 0 },
-                { label: '8:00 AM', hour: 8, dayOffset: 0 },
-              ].map(opt => {
-                const t = new Date(`${selectedDate}T12:00:00`);
-                t.setDate(t.getDate() + opt.dayOffset);
-                t.setHours(opt.hour, 0, 0, 0);
-                const past = t.getTime() < Date.now() + 60_000;
-                return (
-                  <Pressable
-                    key={opt.label}
-                    disabled={past || scheduleMutation.isPending}
-                    style={({ pressed }) => [styles.timeChip, past && { opacity: 0.35 }, pressed && { opacity: 0.7 }]}
-                    onPress={() => { haptic(); scheduleMutation.mutate(t.toISOString()); }}
-                    testID={`schedule-time-${opt.hour}-${opt.dayOffset}`}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 16, marginBottom: 8 }}>
+              <View style={{ alignItems: 'center' }}>
+                <Text style={styles.wheelLabel}>HOUR</Text>
+                <View style={styles.wheelContainer}>
+                  <ScrollView
+                    ref={schedHourRef}
+                    style={styles.wheelScroller}
+                    contentContainerStyle={styles.wheelScrollContent}
+                    showsVerticalScrollIndicator={false}
+                    snapToInterval={50}
+                    decelerationRate="fast"
+                    onMomentumScrollEnd={(e) => {
+                      const idx = Math.round(e.nativeEvent.contentOffset.y / 50);
+                      setSchedHour(Math.max(1, Math.min(12, idx + 1)));
+                    }}
+                    onScrollEndDrag={(e) => {
+                      // A slow drag can settle without momentum — capture it too.
+                      const idx = Math.round(e.nativeEvent.contentOffset.y / 50);
+                      setSchedHour(Math.max(1, Math.min(12, idx + 1)));
+                    }}
                   >
-                    <Text style={styles.timeChipText}>{opt.label}</Text>
-                  </Pressable>
-                );
-              })}
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((num) => (
+                      <Pressable key={num} style={styles.wheelItem} onPress={() => { setSchedHour(num); schedHourRef.current?.scrollTo({ y: (num - 1) * 50, animated: true }); }}>
+                        <Text style={[styles.wheelItemText, num === schedHour && styles.wheelItemTextSelected]}>{num}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <View style={styles.wheelHighlight} pointerEvents="none" />
+                </View>
+              </View>
+              <Text style={{ fontSize: 28, color: Colors.text, fontFamily: 'ChakraPetch_700Bold', marginTop: 18 }}>:</Text>
+              <View style={{ alignItems: 'center' }}>
+                <Text style={styles.wheelLabel}>MIN</Text>
+                <View style={styles.wheelContainer}>
+                  <ScrollView
+                    ref={schedMinuteRef}
+                    style={styles.wheelScroller}
+                    contentContainerStyle={styles.wheelScrollContent}
+                    showsVerticalScrollIndicator={false}
+                    snapToInterval={50}
+                    decelerationRate="fast"
+                    onMomentumScrollEnd={(e) => {
+                      const idx = Math.round(e.nativeEvent.contentOffset.y / 50);
+                      setSchedMinute(Math.max(0, Math.min(59, idx)));
+                    }}
+                    onScrollEndDrag={(e) => {
+                      const idx = Math.round(e.nativeEvent.contentOffset.y / 50);
+                      setSchedMinute(Math.max(0, Math.min(59, idx)));
+                    }}
+                  >
+                    {Array.from({ length: 60 }, (_, i) => i).map((num) => (
+                      <Pressable key={num} style={styles.wheelItem} onPress={() => { setSchedMinute(num); schedMinuteRef.current?.scrollTo({ y: num * 50, animated: true }); }}>
+                        <Text style={[styles.wheelItemText, num === schedMinute && styles.wheelItemTextSelected]}>{String(num).padStart(2, '0')}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <View style={styles.wheelHighlight} pointerEvents="none" />
+                </View>
+              </View>
+              <View style={{ alignItems: 'center', marginLeft: 4 }}>
+                <Text style={styles.wheelLabel}> </Text>
+                <View style={{ gap: 6, marginTop: 18 }}>
+                  {(['AM', 'PM'] as const).map(v => (
+                    <Pressable
+                      key={v}
+                      style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, backgroundColor: schedAmPm === v ? Colors.primary : Colors.card, borderWidth: 1, borderColor: schedAmPm === v ? Colors.primary : Colors.border }}
+                      onPress={() => setSchedAmPm(v)}
+                      testID={`schedule-ampm-${v}`}
+                    >
+                      <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: schedAmPm === v ? '#fff' : Colors.textMuted }}>{v}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
             </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8 }}>
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.textMuted, letterSpacing: 0.5, marginRight: 4 }}>DATE</Text>
+              {[
+                { offset: -1, label: (() => { const d = new Date(`${selectedDate}T12:00:00`); d.setDate(d.getDate() - 1); return `Night before (${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`; })() },
+                { offset: 0, label: (() => { const d = new Date(`${selectedDate}T12:00:00`); return `Job day (${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`; })() },
+              ].map(item => (
+                <Pressable
+                  key={item.offset}
+                  onPress={() => setSchedDayOffset(item.offset)}
+                  testID={`schedule-day-offset-${item.offset}`}
+                  style={{
+                    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8,
+                    backgroundColor: schedDayOffset === item.offset ? Colors.primary : Colors.card,
+                    borderWidth: 1, borderColor: schedDayOffset === item.offset ? Colors.primary : Colors.border,
+                  }}
+                >
+                  <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: schedDayOffset === item.offset ? '#fff' : Colors.textMuted }}>{item.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            {(() => {
+              const t = getSchedDate(selectedDate);
+              const past = t.getTime() < Date.now() + 60_000;
+              return (
+                <>
+                  {past && (
+                    <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.warning, textAlign: 'center', marginTop: 10 }}>
+                      That time has already passed — pick a later time.
+                    </Text>
+                  )}
+                  <Pressable
+                    testID="schedule-send-at-time"
+                    disabled={past || scheduleMutation.isPending}
+                    style={({ pressed }) => [styles.sendAtTimeBtn, (past || scheduleMutation.isPending || pressed) && { opacity: 0.6 }]}
+                    onPress={() => {
+                      // Revalidate at press time — the render-time check can be stale.
+                      const fresh = getSchedDate(selectedDate);
+                      if (fresh.getTime() < Date.now() + 60_000) {
+                        setSchedTick(x => x + 1);
+                        return;
+                      }
+                      haptic();
+                      scheduleMutation.mutate(fresh.toISOString());
+                    }}
+                  >
+                    {scheduleMutation.isPending
+                      ? <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                      : (
+                        <Text style={styles.sendAtTimeBtnText}>
+                          SEND AT {t.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}{schedDayOffset === -1 ? ' (NIGHT BEFORE)' : ''}
+                        </Text>
+                      )}
+                  </Pressable>
+                </>
+              );
+            })()}
             <Text style={styles.scheduleNote}>
               Trucks you assign with SEND LATER stay invisible to drivers until this time. You can cancel the timer any time before it fires.
             </Text>
@@ -1411,9 +1553,16 @@ const styles = StyleSheet.create({
   dayPrimaryBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primaryForeground, letterSpacing: 0.5 },
   daySecondaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, height: 44, paddingHorizontal: 14, borderWidth: 1, borderColor: Colors.primary },
   daySecondaryBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primary, letterSpacing: 0.5 },
-  timeChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
-  timeChip: { borderRadius: 10, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.background, paddingHorizontal: 14, height: 42, alignItems: 'center', justifyContent: 'center' },
-  timeChipText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.text, letterSpacing: 0.5 },
+  wheelLabel: { color: Colors.textMuted, fontSize: 10, fontFamily: 'ChakraPetch_700Bold', letterSpacing: 0.5, marginBottom: 4 },
+  wheelContainer: { height: 150, width: 70, borderRadius: 12, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.05)', position: 'relative' },
+  wheelScroller: { height: 150, width: 70 },
+  wheelScrollContent: { paddingVertical: 50 },
+  wheelItem: { height: 50, justifyContent: 'center', alignItems: 'center' },
+  wheelItemText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 24, color: '#666' },
+  wheelItemTextSelected: { fontSize: 32, color: Colors.primary },
+  wheelHighlight: { position: 'absolute', top: 50, left: 0, right: 0, height: 50, borderTopWidth: 2, borderBottomWidth: 2, borderColor: Colors.primary },
+  sendAtTimeBtn: { marginTop: 14, borderRadius: 12, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', paddingVertical: 14 },
+  sendAtTimeBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.primaryForeground, letterSpacing: 0.5 },
   scheduleNote: { fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 14, lineHeight: 17 },
   jobActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   assignBtn: {
