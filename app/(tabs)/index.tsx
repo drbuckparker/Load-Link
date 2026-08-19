@@ -506,10 +506,19 @@ export default function DashboardScreen() {
               };
               const heldRows = days.filter(d => (d.held || 0) > 0).map(d => (
                 <View key={`held-${d.date}`} style={styles.confirmRow}>
-                  <Ionicons name="paper-plane-outline" size={20} color={Colors.warning} />
-                  <Text style={[styles.confirmRowText, { flex: 1 }]}>
-                    You have instructions to send to {d.held} truck{d.held === 1 ? '' : 's'} for {dayLabel(d.date)}
-                  </Text>
+                  <Pressable
+                    style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }, pressed && { opacity: 0.7 }]}
+                    testID={`held-row-${d.date}`}
+                    onPress={() => {
+                      if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      router.push({ pathname: '/broker-day', params: { date: d.date } } as any);
+                    }}
+                  >
+                    <Ionicons name="paper-plane-outline" size={20} color={Colors.warning} />
+                    <Text style={[styles.confirmRowText, { flex: 1 }]}>
+                      You have instructions to send to {d.held} truck{d.held === 1 ? '' : 's'} for {dayLabel(d.date)}
+                    </Text>
+                  </Pressable>
                   <Pressable
                     disabled={sendingHeldDate === d.date}
                     style={({ pressed }) => [styles.sendHeldBtn, (pressed || sendingHeldDate === d.date) && { opacity: 0.6 }]}

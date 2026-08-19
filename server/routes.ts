@@ -3032,6 +3032,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Swap two truck assignments between two of the broker's jobs, with
+  // upstream compensation: the website owns assignments, so this sequences
+  // delete/assign calls and restores the originals on any failure so a
+  // truck is never left off both jobs. Registered BEFORE the wildcard proxy.
+  app.post("/api/broker/assignments/swap", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+      return res.status(400).json({ message: "This feature requires a live website account." });
+    }
+    const { assignmentIdA, assignmentIdB } = req.body || {};
+    if (!assignmentIdA || !assignmentIdB || assignmentIdA === assignmentIdB) {
+      return res.status(400).json({ message: "Two different assignment ids are required" });
+    }
+    try {
+      const rows = await pool.query(
+        `SELECT ja.id, ja.job_id, ja.driver_id, ja.sent_at, ja.status, j.contractor_id
+           FROM job_assignments ja JOIN jobs j ON j.id = ja.job_id
+          WHERE ja.id::text = ANY($1)`,
+        [[String(assignmentIdA), String(assignmentIdB)]]
+      );
+      const a = rows.rows.find((r: any) => String(r.id) === String(assignmentIdA));
+      const b = rows.rows.find((r: any) => String(r.id) === String(assignmentIdB));
+      if (!a || !b) return res.status(404).json({ message: "Assignment not found" });
+      if (String(a.contractor_id) !== auth.userId || String(b.contractor_id) !== auth.userId) {
+        return res.status(403).json({ message: "You can only switch trucks on your own jobs" });
+      }
+      if (String(a.job_id) === String(b.job_id)) {
+        return res.status(400).json({ message: "These trucks are on the same job" });
+      }
+      const activeStatuses = ["pending", "accepted", "approved"];
+      if (!activeStatuses.includes(String(a.status)) || !activeStatuses.includes(String(b.status))) {
+        return res.status(400).json({ message: "Only active assignments can be switched" });
+      }
+
+      const ws = async (method: string, path: string, body?: any) => {
+        const r = await websiteFetch(path, { method, body, jwt: auth.jwt });
+        const text = await r.text();
+        let data: any; try { data = JSON.parse(text); } catch { data = { message: text }; }
+        return { ok: r.ok, status: r.status, data };
+      };
+      const del = (id: string) => ws("DELETE", `/api/broker/assignments/${id}`);
+      const assign = (jobId: string, driverId: string, sendNow: boolean) =>
+        ws("POST", `/api/broker/jobs/${jobId}/assign`, { driverId, sendNow });
+      const newId = (d: any): string | null =>
+        d?.assignment?.id ? String(d.assignment.id) : (d?.id ? String(d.id) : null);
+      // Deterministic fallback: locate an assignment upstream by job+driver
+      // (the assign response shape isn't guaranteed to include an id).
+      const findUpstream = async (jobId: string, driverId: string): Promise<string | null> => {
+        try {
+          const r = await ws("GET", "/api/assignments");
+          const list = Array.isArray(r.data) ? r.data : [];
+          const hit = list.find((x: any) =>
+            String(x.jobId ?? x.job_id) === jobId &&
+            String(x.driverId ?? x.driver_id) === driverId &&
+            !["rejected", "withdrawn", "cancelled", "expired"].includes(String(x.status || "").toLowerCase()));
+          return hit?.id ? String(hit.id) : null;
+        } catch { return null; }
+      };
+
+      const sentA = !!a.sent_at, sentB = !!b.sent_at;
+      const dA = String(a.driver_id), dB = String(b.driver_id);
+      const jobA = String(a.job_id), jobB = String(b.job_id);
+
+      // 1. Remove truck A (nothing changed on failure).
+      const r1 = await del(String(a.id));
+      if (!r1.ok) return res.status(502).json({ message: r1.data?.message || "Could not remove the first truck" });
+      // 2. Remove truck B; on failure put A back.
+      const r2 = await del(String(b.id));
+      if (!r2.ok) {
+        const backA = await assign(jobA, dA, sentA);
+        return res.status(502).json({
+          message: (r2.data?.message || "Could not remove the second truck.") +
+            (backA.ok ? " Nothing was switched." : " Check both jobs — a truck may need to be re-assigned."),
+        });
+      }
+      // 3. Assign A's driver to B's job; on failure restore both originals.
+      const r3 = await assign(jobB, dA, sentA);
+      if (!r3.ok) {
+        const back1 = await assign(jobA, dA, sentA);
+        const back2 = await assign(jobB, dB, sentB);
+        const restored = back1.ok && back2.ok;
+        return res.status(r3.status === 409 ? 409 : 502).json({
+          message: (r3.data?.message || "Could not move the first truck.") +
+            (restored ? " Both trucks were put back on their original jobs." : " Check both jobs — a truck may need to be re-assigned."),
+        });
+      }
+      // 4. Assign B's driver to A's job; on failure undo step 3 and restore.
+      const r4 = await assign(jobA, dB, sentB);
+      if (!r4.ok) {
+        // Undo step 3 deterministically: find the just-created assignment
+        // (response id, else upstream lookup). Only re-add driver A to the
+        // original job if the moved assignment was actually removed —
+        // otherwise a blind re-add would double-book the driver.
+        const created = newId(r3.data) || (await findUpstream(jobB, dA));
+        const movedRemoved = created ? (await del(created)).ok : false;
+        const backB = await assign(jobB, dB, sentB);
+        const backA = movedRemoved ? await assign(jobA, dA, sentA) : { ok: false };
+        const restored = movedRemoved && backA.ok && backB.ok;
+        return res.status(r4.status === 409 ? 409 : 502).json({
+          message: (r4.data?.message || "Could not move the second truck.") +
+            (restored ? " Both trucks were put back on their original jobs." : " Check both jobs — a truck may need to be re-assigned."),
+        });
+      }
+
+      // Best-effort local mirror so the app shows the swap immediately
+      // (the ~60s down-sync reconciles the authoritative rows/ids).
+      try {
+        const idA2 = newId(r3.data), idB2 = newId(r4.data);
+        await pool.query(
+          `UPDATE job_assignments SET id = COALESCE($2, id), job_id = $3, sent_at = $4 WHERE id::text = $1`,
+          [String(a.id), idA2, jobB, sentA ? new Date() : null]
+        );
+        await pool.query(
+          `UPDATE job_assignments SET id = COALESCE($2, id), job_id = $3, sent_at = $4 WHERE id::text = $1`,
+          [String(b.id), idB2, jobA, sentB ? new Date() : null]
+        );
+      } catch (e: any) {
+        console.error("[assignments/swap] local mirror failed:", e.message);
+      }
+
+      return res.json({ success: true });
+    } catch (e: any) {
+      console.error("POST /api/broker/assignments/swap error:", e.message);
+      return res.status(500).json({ message: "Failed to switch trucks" });
+    }
+  });
+
   // Broker dashboard data + actions (broker-only enforcement is upstream).
   app.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
   // Driver thumbs up/down on a sent broker assignment. Proxies upstream, then
