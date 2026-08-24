@@ -2,7 +2,7 @@
 name: Broker manual clients
 description: Companion-local clients brokers add without inviting them to LoadLink
 ---
-Brokers can add clients without a LoadLink invite. These live in the companion-only table `broker_manual_clients` (hand-added to the shared website DB; the website never syncs/clobbers it because it's companion-only).
+Brokers can add clients without a LoadLink invite. These live in `broker_manual_clients` in the shared website DB. As of Aug 2026 the WEBSITE also reads/writes these same tables (manual clients, broker_client_projects, broker_job_clients) — website-created clients/projects show up in the companion automatically, so the merged client list must dedupe by clientUserId (local row wins), and the companion backfills broker_job_clients from the upstream jobs payload for website-posted jobs.
 
 **Rules:**
 - Merged into the client list by a companion-local `GET /api/broker/clients` registered BEFORE the `/api/broker/.*` proxy wildcard; manual entries get ids prefixed `manual-` and `isManual: true`.

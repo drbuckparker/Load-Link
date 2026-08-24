@@ -648,6 +648,19 @@ async function syncJobs(auth, prefetchedJobs) {
       if (!Array.isArray(allJobs)) return 0;
       jobs2 = allJobs.filter((j) => j.id && !hiddenJobIds.has(j.id));
     }
+    if (String(auth.user?.role || "").includes("broker")) {
+      const brokerJobs = await websiteFetchSync("/api/broker/jobs", { jwt: auth.jwt });
+      if (Array.isArray(brokerJobs)) {
+        const seen = new Set(jobs2.map((j) => String(j.id)));
+        const extras = brokerJobs.filter(
+          (j) => j?.id && !seen.has(String(j.id)) && !hiddenJobIds.has(j.id)
+        );
+        if (extras.length > 0) {
+          console.log(`[syncJobs] merging ${extras.length} broker-feed job(s) missing from /api/jobs:`, extras.map((j) => j.id));
+          jobs2 = [...jobs2, ...extras];
+        }
+      }
+    }
     const localJobsResult = await pool.query(
       `SELECT id, material, contractor_id, scheduled_date, created_at FROM jobs WHERE archived_at IS NULL`
     );
@@ -690,6 +703,40 @@ async function syncJobs(auth, prefetchedJobs) {
       console.log(`[syncJobs] dedup mappings:`, websiteIdToLocalId);
     }
     const count = await upsertMany("jobs", deduped);
+    try {
+      const ALLOWED_RESTORE = /* @__PURE__ */ new Set(["open", "accepted", "pending", "in_progress"]);
+      const nonTerminal = [];
+      for (const wj of jobs2) {
+        const st = String(wj.status || "").toLowerCase();
+        if (!ALLOWED_RESTORE.has(st)) continue;
+        const lid = websiteIdToLocalId[String(wj.id)] || String(wj.id);
+        nonTerminal.push([lid, st]);
+      }
+      if (nonTerminal.length > 0) {
+        const res = await pool.query(
+          `UPDATE jobs j
+             SET status = w.status::job_status, cancelled_at = NULL, archived_at = NULL
+           FROM (SELECT unnest($1::varchar[]) AS id, unnest($2::text[]) AS status) w
+           WHERE j.id = w.id
+             AND j.status::text = 'cancelled'
+             AND COALESCE(j.cancelled_at, j.archived_at) < NOW() - INTERVAL '15 minutes'
+             AND j.id NOT IN (
+               SELECT (body->>'id')::text FROM sync_queue
+               WHERE user_id = $3 AND succeeded_at IS NULL AND body ? 'id'
+               UNION
+               SELECT regexp_replace(path, '^/api/jobs/([^/]+).*$', '\\1') FROM sync_queue
+               WHERE user_id = $3 AND succeeded_at IS NULL AND path ~ '^/api/jobs/[^/]+'
+             )
+           RETURNING j.id`,
+          [nonTerminal.map(([id]) => id), nonTerminal.map(([, st]) => st), auth.userId]
+        );
+        if (res.rows.length > 0) {
+          console.log(`[syncJobs resurrect] restored ${res.rows.length} falsely-cancelled local job(s):`, res.rows.map((r) => r.id));
+        }
+      }
+    } catch (e) {
+      console.error("syncJobs resurrect error:", e.message);
+    }
     try {
       await pool.query(
         `UPDATE jobs j SET visibility = 'private'
@@ -1789,11 +1836,36 @@ async function reacquireBrokerJwt(brokerId) {
     return null;
   }
 }
+async function recoverStuckBrokerScheduledSends() {
+  try {
+    const r = await pool.query(
+      `UPDATE broker_scheduled_sends b
+       SET status = CASE WHEN b.attempts < 5 THEN 'pending' ELSE 'failed' END,
+           attempts = b.attempts + 1,
+           claimed_at = NULL,
+           error = CASE WHEN b.attempts < 5
+             THEN 'Recovered: send interrupted mid-processing (server restart); will retry'
+             ELSE 'Send interrupted mid-processing (server restart); gave up after retries' END
+       WHERE b.id IN (
+         SELECT id FROM broker_scheduled_sends
+         WHERE status = 'processing'
+           AND COALESCE(claimed_at, send_at) < NOW() - INTERVAL '5 minutes'
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING id, status`
+    );
+    for (const row of r.rows) {
+      console.log(`[BrokerSend] schedule ${row.id}: recovered stuck 'processing' row -> ${row.status}`);
+    }
+  } catch (e) {
+    console.error("[BrokerSend] stuck-row recovery error:", e?.message || e);
+  }
+}
 async function processDueBrokerScheduledSends() {
   let due = [];
   try {
     const r = await pool.query(
-      `UPDATE broker_scheduled_sends SET status = 'processing'
+      `UPDATE broker_scheduled_sends SET status = 'processing', claimed_at = NOW()
        WHERE id IN (
          SELECT id FROM broker_scheduled_sends
          WHERE status = 'pending' AND send_at <= NOW()
@@ -1828,7 +1900,7 @@ async function processDueBrokerScheduledSends() {
     }
     if (!jwt) {
       await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1`,
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1 AND status = 'processing'`,
         [row.id]
       ).catch(() => {
       });
@@ -1857,18 +1929,18 @@ async function processDueBrokerScheduledSends() {
       if (failedJobs.length > 0 && Number(row.attempts) < 5) {
         await pool.query(
           `UPDATE broker_scheduled_sends SET status = 'pending', sent_jobs = $2,
-             attempts = attempts + 1, error = $3 WHERE id = $1`,
+             attempts = attempts + 1, error = $3 WHERE id = $1 AND status = 'processing'`,
           [row.id, sentJobs, `Retrying ${failedJobs.length} job(s): ${failedJobs.join(",").slice(0, 400)}`]
         );
       } else if (failedJobs.length > 0) {
         await pool.query(
           `UPDATE broker_scheduled_sends SET status = 'failed', sent_jobs = $2,
-             error = $3 WHERE id = $1`,
+             error = $3 WHERE id = $1 AND status = 'processing'`,
           [row.id, sentJobs, `Gave up after retries; failed job(s): ${failedJobs.join(",").slice(0, 400)}`]
         );
       } else {
         await pool.query(
-          `UPDATE broker_scheduled_sends SET status = 'sent', sent_jobs = $2, error = NULL WHERE id = $1`,
+          `UPDATE broker_scheduled_sends SET status = 'sent', sent_jobs = $2, error = NULL WHERE id = $1 AND status = 'processing'`,
           [row.id, sentJobs]
         );
       }
@@ -1876,18 +1948,36 @@ async function processDueBrokerScheduledSends() {
     } catch (e) {
       console.error("[BrokerSend] error:", e.message);
       await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1`,
+        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1 AND status = 'processing'`,
         [row.id, String(e.message || e).slice(0, 500)]
       ).catch(() => {
       });
     }
   }
 }
+function sweepOldBrokerScheduledSends() {
+  pool.query(
+    `DELETE FROM broker_scheduled_sends
+     WHERE status IN ('sent', 'failed')
+       AND send_at < NOW() - INTERVAL '30 days'`
+  ).then((r) => {
+    if (r.rowCount) console.log(`[BrokerSend] swept ${r.rowCount} old sent/failed schedule row(s)`);
+  }).catch(() => {
+  });
+}
 function startBrokerScheduledSendWorker() {
+  sweepOldBrokerScheduledSends();
+  pool.query(`ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS claimed_at timestamptz`).catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e)).then(() => recoverStuckBrokerScheduledSends()).catch(() => {
+  });
+  setInterval(() => {
+    recoverStuckBrokerScheduledSends().catch(() => {
+    });
+  }, 5 * 60 * 1e3);
   setInterval(() => {
     processDueBrokerScheduledSends().catch(() => {
     });
   }, 6e4);
+  setInterval(sweepOldBrokerScheduledSends, 24 * 60 * 60 * 1e3);
 }
 function saveJsonMap(filename, map) {
   try {
@@ -3256,7 +3346,8 @@ async function registerRoutes(app2) {
           active_jobs_count: n
         };
       });
-      const upstreamWithCounts = upstream.map((c) => {
+      const manualKeys = new Set(manual.map((m) => m.clientUserId));
+      const upstreamWithCounts = upstream.filter((c) => !manualKeys.has(String(c.clientUserId || c.client_user_id || ""))).map((c) => {
         const key = String(c.clientUserId || c.client_user_id || "");
         const n = countMap.get(key);
         return n === void 0 ? c : { ...c, activeJobsCount: n, active_jobs_count: n };
@@ -3318,6 +3409,23 @@ async function registerRoutes(app2) {
           sentAt: a.sent_at,
           sent_at: a.sent_at
         });
+      }
+      for (const j of jobs2) {
+        const jid = String(j.id || "");
+        const cKey = String(j.clientUserId || j.client_user_id || "");
+        const cName = String(j.clientName || j.client_name || "").trim();
+        const cEmail = String(j.clientEmail || j.client_email || "").trim().toLowerCase();
+        if (!jid || linkMap.has(jid) || !cKey && !cName && !cEmail) continue;
+        try {
+          await pool.query(
+            `INSERT INTO broker_job_clients (job_id, broker_id, client_key, client_name, client_email)
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`,
+            [jid, auth.userId, cKey, cName, cEmail]
+          );
+          linkMap.set(jid, { job_id: jid, client_key: cKey, client_name: cName, client_email: cEmail });
+        } catch (e) {
+          console.error("[JobClientLink] backfill failed:", e.message);
+        }
       }
       const merged = jobs2.map((j) => {
         const l = linkMap.get(String(j.id));
