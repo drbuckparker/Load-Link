@@ -551,9 +551,16 @@ export default function JobDetailScreen() {
   const statusColor = getStatusColor(displayStatus);
   const jobTypeColor = getJobTypeColor(job.jobType);
   const isMyJob = job.driverId === user?.id || (myAssignment && myAssignment.status === 'approved');
-  // Never offer ACCEPT JOB / COUNTER OFFER on a job you posted yourself —
-  // brokers/contractors put their own truck on via the assign flow instead.
-  const canAccept = (jobStatus === 'open' || jobStatus === 'pending' || jobStatus === 'accepted') && !hasApplied && !isContractor && !isMyPostedJob;
+  // Public broker jobs can be applied for with the broker's own fleet trucks,
+  // just like any other public listing. Private self-posted jobs continue to use
+  // the roster assignment flow and never expose public application controls.
+  const canApplyOwnPublicBrokerJob =
+    isMyPostedJob && isBrokerRole(user?.role || '') && job.visibility === 'public';
+  const canAccept =
+    (jobStatus === 'open' || jobStatus === 'pending' || jobStatus === 'accepted') &&
+    !hasApplied &&
+    (!isContractor || canApplyOwnPublicBrokerJob) &&
+    (!isMyPostedJob || canApplyOwnPublicBrokerJob);
   // Clock-in is a driver/fleet action — never expose it while the user is in
   // contractor mode, even if they happen to also be the approved driver on
   // the job (self-apply scenario where the same company posted and applied).
@@ -3147,18 +3154,20 @@ export default function JobDetailScreen() {
 
         {canAccept && (
           <View style={styles.acceptRow}>
-            <Pressable
-              style={({ pressed }) => [styles.counterBidBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-              onPress={() => {
-                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setCounterBidRate(job.rate?.toString() || '');
-                setCounterBidNote('');
-                setCounterBidVisible(true);
-              }}
-            >
-              <Ionicons name="swap-horizontal" size={20} color={Colors.primary} />
-              <Text style={styles.counterBidBtnText}>COUNTER OFFER</Text>
-            </Pressable>
+            {!canApplyOwnPublicBrokerJob && (
+              <Pressable
+                style={({ pressed }) => [styles.counterBidBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setCounterBidRate(job.rate?.toString() || '');
+                  setCounterBidNote('');
+                  setCounterBidVisible(true);
+                }}
+              >
+                <Ionicons name="swap-horizontal" size={20} color={Colors.primary} />
+                <Text style={styles.counterBidBtnText}>COUNTER OFFER</Text>
+              </Pressable>
+            )}
             <Pressable
               style={({ pressed }) => [styles.acceptBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
               onPress={handleAccept}

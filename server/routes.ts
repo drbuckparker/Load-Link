@@ -3495,16 +3495,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Look up the job + caller's favorite status BEFORE writing any assignments,
       // so we can enforce the auto-approval truck cap.
+      const acceptVisibilityFeatures = await getVisibilityFeatures(pool);
+      const visibilitySelect = acceptVisibilityFeatures.jobsVisibility
+        ? `, visibility`
+        : `, NULL::text AS visibility`;
       const jobRow = await pool.query(
-        `SELECT id, contractor_id, driver_id, project_id, COALESCE(trucks_needed, 1)::int AS trucks_needed FROM jobs WHERE id = $1`,
+        `SELECT id, contractor_id, driver_id, project_id${visibilitySelect},
+                COALESCE(trucks_needed, 1)::int AS trucks_needed
+         FROM jobs WHERE id = $1`,
         [req.params.id]
       );
+      if (!jobRow.rows[0]) return res.status(404).json({ message: "Job not found" });
       const contractorId = jobRow.rows[0]?.contractor_id;
       const trucksNeeded = Number(jobRow.rows[0]?.trucks_needed) || 1;
+      const isOwnPostedJob = String(contractorId) === auth.userId;
+
+      // Self-application is a special broker-fleet feature. Enforce it here,
+      // not just in the UI: private/NULL broker jobs remain roster-only.
+      if (isOwnPostedJob) {
+        const brokerRole = await pool.query(
+          `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'broker' LIMIT 1`,
+          [auth.userId]
+        );
+        if (!brokerRole.rows[0] || jobRow.rows[0].visibility !== 'public') {
+          return res.status(403).json({ message: "Make this broker job public before applying a truck" });
+        }
+        if (!Array.isArray(vehicleIds) || vehicleIds.length === 0) {
+          return res.status(400).json({ message: "Select at least one truck" });
+        }
+      }
 
       // Private jobs (broker roster-only work) cannot take public applications.
       const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
       if (privateBlock) return res.status(403).json({ message: privateBlock });
+
+      // Never trust vehicle ids supplied by the client. Every selected truck
+      // must be active and belong to this account (owned fleet truck or a truck
+      // assigned directly to this driver).
+      if (Array.isArray(vehicleIds) && vehicleIds.length > 0) {
+        const uniqueVehicleIds = [...new Set(vehicleIds.map((v: any) => String(v)))];
+        if (uniqueVehicleIds.length !== vehicleIds.length) {
+          return res.status(400).json({ message: "Select each truck only once" });
+        }
+        const ownedVehicles = await pool.query(
+          `SELECT id::text AS id FROM trucks
+           WHERE id::text = ANY($1::text[])
+             AND (trucking_company_id::text = $2 OR assigned_driver_id::text = $2)
+             AND COALESCE(is_active, true) = true
+             AND archived_at IS NULL`,
+          [uniqueVehicleIds, auth.userId]
+        );
+        if (ownedVehicles.rows.length !== uniqueVehicleIds.length) {
+          return res.status(403).json({ message: "One or more selected trucks do not belong to your account" });
+        }
+      }
 
       let isAutoApprove = false;
       if (contractorId) {
@@ -3788,6 +3832,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const { rate, note } = req.body;
+      // A poster cannot bid against their own job. Public broker self-application
+      // must use /accept with an active owned truck; private jobs remain roster-only.
+      const ownerCheck = await pool.query(
+        `SELECT contractor_id FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      if (!ownerCheck.rows[0]) return res.status(404).json({ message: "Job not found" });
+      if (String(ownerCheck.rows[0].contractor_id) === auth.userId) {
+        return res.status(403).json({ message: "You cannot counteroffer on your own job" });
+      }
       const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
       if (privateBlock) return res.status(403).json({ message: privateBlock });
       const id = crypto.randomUUID();
