@@ -551,16 +551,16 @@ export default function JobDetailScreen() {
   const statusColor = getStatusColor(displayStatus);
   const jobTypeColor = getJobTypeColor(job.jobType);
   const isMyJob = job.driverId === user?.id || (myAssignment && myAssignment.status === 'approved');
-  // Public broker jobs can be applied for with the broker's own fleet trucks,
-  // just like any other public listing. Private self-posted jobs continue to use
-  // the roster assignment flow and never expose public application controls.
-  const canApplyOwnPublicBrokerJob =
-    isMyPostedJob && isBrokerRole(user?.role || '') && job.visibility === 'public';
+  // A public job posted by this same account can be applied for with its fleet
+  // trucks only while the account is actively in Trucking Company mode. Broker
+  // mode manages the posting and uses the roster assignment flow instead.
+  const canApplyOwnPublicFleetJob =
+    isMyPostedJob && user?.role === 'trucking_company' && job.visibility === 'public';
   const canAccept =
     (jobStatus === 'open' || jobStatus === 'pending' || jobStatus === 'accepted') &&
     !hasApplied &&
-    (!isContractor || canApplyOwnPublicBrokerJob) &&
-    (!isMyPostedJob || canApplyOwnPublicBrokerJob);
+    (!isContractor || canApplyOwnPublicFleetJob) &&
+    (!isMyPostedJob || canApplyOwnPublicFleetJob);
   // Clock-in is a driver/fleet action — never expose it while the user is in
   // contractor mode, even if they happen to also be the approved driver on
   // the job (self-apply scenario where the same company posted and applied).
@@ -3154,7 +3154,7 @@ export default function JobDetailScreen() {
 
         {canAccept && (
           <View style={styles.acceptRow}>
-            {!canApplyOwnPublicBrokerJob && (
+            {!canApplyOwnPublicFleetJob && (
               <Pressable
                 style={({ pressed }) => [styles.counterBidBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
                 onPress={() => {

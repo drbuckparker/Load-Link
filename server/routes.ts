@@ -3510,15 +3510,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const trucksNeeded = Number(jobRow.rows[0]?.trucks_needed) || 1;
       const isOwnPostedJob = String(contractorId) === auth.userId;
 
-      // Self-application is a special broker-fleet feature. Enforce it here,
-      // not just in the UI: private/NULL broker jobs remain roster-only.
+      // Self-application is allowed only while the account is actively acting
+      // as a trucking company. Broker mode manages its own posting through the
+      // roster assignment flow. Private/NULL jobs remain roster-only.
       if (isOwnPostedJob) {
-        const brokerRole = await pool.query(
-          `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'broker' LIMIT 1`,
+        const fleetRole = await pool.query(
+          `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'trucking_company' LIMIT 1`,
           [auth.userId]
         );
-        if (!brokerRole.rows[0] || jobRow.rows[0].visibility !== 'public') {
-          return res.status(403).json({ message: "Make this broker job public before applying a truck" });
+        if (!fleetRole.rows[0] || jobRow.rows[0].visibility !== 'public') {
+          return res.status(403).json({ message: "Switch to Trucking Company mode and make this job public before applying a truck" });
         }
         if (!Array.isArray(vehicleIds) || vehicleIds.length === 0) {
           return res.status(400).json({ message: "Select at least one truck" });
