@@ -1954,7 +1954,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 d.full_name as driver_name,
                 COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company,
                 (SELECT bjc.client_name FROM broker_job_clients bjc
-                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_name
+                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_name,
+                (SELECT bjc.client_email FROM broker_job_clients bjc
+                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_email,
+                (SELECT bjc.client_key FROM broker_job_clients bjc
+                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_key
          FROM jobs j
          LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          LEFT JOIN users u ON j.contractor_id::text = u.id::text
@@ -2098,6 +2102,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error("GET /api/jobs/:id broker annotate error:", e.message);
         }
 
+        // Client name is driver-visible by product choice, but the client's
+        // email and internal key are only needed by the broker editing the job.
+        if (String(job.contractor_id) !== auth.userId) {
+          delete job.client_email;
+          delete job.client_key;
+        }
         return res.json(addDualKeys(job));
       }
       return res.status(404).json({ message: "Job not found" });
@@ -3262,11 +3272,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "You do not have permission to update this job" });
       }
 
+      // Client attribution is companion-owned because the website strips these
+      // fields from broker jobs. Handle it separately from the jobs UPDATE.
+      const clientName = req.body.clientName ?? req.body.client_name;
+      const clientEmail = req.body.clientEmail ?? req.body.client_email ?? '';
+      const clientUserId = req.body.clientUserId ?? req.body.client_user_id ?? '';
+      const companionEditKeys = new Set(['clientName', 'client_name', 'clientEmail', 'client_email', 'clientUserId', 'client_user_id']);
+      const roleRow = await pool.query(
+        `SELECT role::text AS role FROM users WHERE id::text = $1 LIMIT 1`,
+        [auth.userId]
+      );
+      const isBroker = roleRow.rows[0]?.role === 'broker';
+      if (clientName !== undefined) {
+        if (!isBroker) return res.status(403).json({ message: "Broker access required to change a job's client" });
+        const clientKey = String(clientUserId || '').trim();
+        if (!clientKey) return res.status(400).json({ message: "Choose a client from your client list" });
+        const clientErr = await verifyBrokerClient(auth, clientKey);
+        if (clientErr) return res.status(clientErr.status).json({ message: clientErr.message });
+      }
+
+      // Validate project ownership before allowing a job to be relinked. Broker
+      // projects must belong to this broker and the job's selected/current
+      // client; contractor projects must belong to the editing contractor.
+      const requestedProjectId = req.body.projectId ?? req.body.project_id;
+      if (requestedProjectId !== undefined && requestedProjectId !== null && String(requestedProjectId)) {
+        if (isBroker) {
+          let clientKey = String(clientUserId || '').trim();
+          if (!clientKey) {
+            const currentLink = await pool.query(
+              `SELECT client_key FROM broker_job_clients WHERE job_id::text = $1 AND broker_id = $2 LIMIT 1`,
+              [req.params.id, auth.userId]
+            );
+            clientKey = String(currentLink.rows[0]?.client_key || '');
+          }
+          if (!clientKey) return res.status(400).json({ message: "Choose a client before changing the job name" });
+          const permitted = await pool.query(
+            `SELECT 1 FROM broker_client_projects
+               WHERE id::text = $1 AND broker_id = $2 AND client_user_id = $3 AND deleted_at IS NULL
+             UNION ALL
+             SELECT 1 FROM contractor_projects
+               WHERE id::text = $1 AND contractor_id::text = $3 AND deleted_at IS NULL
+             LIMIT 1`,
+            [String(requestedProjectId), auth.userId, clientKey]
+          );
+          if (!permitted.rows[0]) return res.status(403).json({ message: "That job name does not belong to the selected client" });
+        } else {
+          const permitted = await pool.query(
+            `SELECT 1 FROM contractor_projects WHERE id::text = $1 AND contractor_id::text = $2 AND deleted_at IS NULL LIMIT 1`,
+            [String(requestedProjectId), auth.userId]
+          );
+          if (!permitted.rows[0]) return res.status(403).json({ message: "That project does not belong to your account" });
+        }
+      }
+
       const updates: string[] = [];
       const values: any[] = [];
       let idx = 1;
       for (const [k, v] of Object.entries(req.body)) {
-        if (v !== undefined) {
+        if (v !== undefined && !companionEditKeys.has(k)) {
           const col = camelToSnake(k);
           updates.push(`${col} = $${idx}`);
           values.push(v);
@@ -3277,6 +3340,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         updates.push(`updated_at = NOW()`);
         values.push(req.params.id);
         await pool.query(`UPDATE jobs SET ${updates.join(', ')} WHERE id = $${idx}`, values);
+      }
+      // Persist client attribution only after the job update succeeds, so a
+      // malformed job edit cannot leave the client changed on its own.
+      if (clientName !== undefined) {
+        await pool.query(
+          `INSERT INTO broker_job_clients (job_id, broker_id, client_key, client_name, client_email)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (job_id) DO UPDATE SET
+             broker_id = EXCLUDED.broker_id,
+             client_key = EXCLUDED.client_key,
+             client_name = EXCLUDED.client_name,
+             client_email = EXCLUDED.client_email`,
+          [req.params.id, auth.userId, String(clientUserId).trim(), String(clientName).trim(), String(clientEmail || '').trim()]
+        );
       }
 
       const newDateRaw = req.body?.scheduledDate ?? req.body?.scheduled_date;
@@ -3338,6 +3415,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const pushBody: Record<string, any> = {};
         for (const k of Object.keys(req.body)) {
           if (req.body[k] === undefined) continue;
+          if (companionEditKeys.has(k)) continue;
           // Companion-only return-leg fields: the website doesn't know them and
           // its strict validation would 400 the whole push, reverting the edit.
           if (COMPANION_ONLY_JOB_KEYS.has(k)) continue;

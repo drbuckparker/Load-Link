@@ -21,6 +21,7 @@ import { apiRequest, queryClient, getApiUrl, getAuthToken } from '@/lib/query-cl
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { fetch } from 'expo/fetch';
 import MapPickerView from '@/components/MapPickerView';
+import { useAuth } from '@/contexts/AuthContext';
 
 const JOB_TYPES = [
   { label: 'Single Load', value: 'single_load' },
@@ -43,11 +44,20 @@ const RATE_TYPES = [
 
 export default function EditJobScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { user } = useAuth();
+  const isBroker = user?.role === 'broker';
   const insets = useSafeAreaInsets();
   const [submitting, setSubmitting] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   const [material, setMaterial] = useState('');
+  const [jobName, setJobName] = useState('');
+  const [originalProjectId, setOriginalProjectId] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
+  const [clientUserId, setClientUserId] = useState('');
+  const [originalClientKey, setOriginalClientKey] = useState('');
+  const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [showMaterialDropdown, setShowMaterialDropdown] = useState(false);
   const [jobType, setJobType] = useState('full_day');
   const [truckType, setTruckType] = useState('end_dump');
@@ -112,6 +122,12 @@ export default function EditJobScreen() {
   const { data: rawMaterials } = useQuery<any[]>({
     queryKey: ['/api/materials'],
   });
+  const { data: rawBrokerClients } = useQuery<any[]>({
+    queryKey: ['/api/broker/clients'],
+    enabled: isBroker,
+    retry: false,
+  });
+  const brokerClients = Array.isArray(rawBrokerClients) ? rawBrokerClients : [];
   const pastMaterials = (rawMaterials || []).map((m: any) => typeof m === 'string' ? m : (m.name || m.normalizedName || String(m)));
 
   useEffect(() => {
@@ -138,6 +154,22 @@ export default function EditJobScreen() {
 
   useEffect(() => {
     if (jobData && !loaded) {
+      setJobName(jobData.project_name || jobData.projectName || '');
+      setOriginalProjectId(String(jobData.project_id || jobData.projectId || ''));
+      setClientName(jobData.client_name || jobData.clientName || '');
+      setClientEmail(jobData.client_email || jobData.clientEmail || '');
+      setOriginalClientKey(String(jobData.client_key || jobData.clientKey || ''));
+      setClientUserId(String(jobData.client_key || jobData.clientKey || ''));
+      const matchedClient = brokerClients.find((c: any) => {
+        const jobEmail = String(jobData.client_email || jobData.clientEmail || '').trim().toLowerCase();
+        const jobClientName = String(jobData.client_name || jobData.clientName || '').trim().toLowerCase();
+        const candidateEmail = String(c.email || '').trim().toLowerCase();
+        const candidateName = String(c.name || c.client_name || c.clientName || '').trim().toLowerCase();
+        return (jobEmail && candidateEmail === jobEmail) || (jobClientName && candidateName === jobClientName);
+      });
+      if (!jobData.client_key && !jobData.clientKey) {
+        setClientUserId(String(matchedClient?.clientUserId || matchedClient?.client_user_id || ''));
+      }
       setMaterial(jobData.material || '');
       setJobType(jobData.job_type || 'full_day');
       setTruckType(jobData.truck_type || 'end_dump');
@@ -184,7 +216,22 @@ export default function EditJobScreen() {
       setReturnDestLng(jobData.return_destination_lng ? Number(jobData.return_destination_lng) : null);
       setLoaded(true);
     }
-  }, [jobData, loaded]);
+  }, [jobData, loaded, brokerClients]);
+
+  // The job can finish loading before the broker's client list. Resolve the
+  // stored client again when that list arrives so changing the job name has the
+  // client id required to create/link its replacement project.
+  useEffect(() => {
+    if (!loaded || clientUserId || brokerClients.length === 0) return;
+    const email = clientEmail.trim().toLowerCase();
+    const name = clientName.trim().toLowerCase();
+    const match = brokerClients.find((c: any) => {
+      const candidateEmail = String(c.email || '').trim().toLowerCase();
+      const candidateName = String(c.name || c.client_name || c.clientName || '').trim().toLowerCase();
+      return (email && candidateEmail === email) || (name && candidateName === name);
+    });
+    if (match) setClientUserId(String(match.clientUserId || match.client_user_id || ''));
+  }, [loaded, clientUserId, clientEmail, clientName, brokerClients]);
 
   async function fetchRouteInfo(oLat: number, oLng: number, dLat: number, dLng: number) {
     try {
@@ -486,6 +533,49 @@ export default function EditJobScreen() {
         urgent,
       };
 
+      if (isBroker) {
+        // A broker's visible job name is its project name. Preserve the existing
+        // project when unchanged; create/link a project when the name or client
+        // changes so a project from the old client is never carried across.
+        const oldName = String(jobData?.project_name || jobData?.projectName || '').trim();
+        const clientSelectionChanged = !!clientUserId && clientUserId !== originalClientKey;
+        if (jobName.trim() && (jobName.trim() !== oldName || clientSelectionChanged)) {
+          if (!clientUserId) throw new Error('Select a client before changing the job name.');
+          // Reuse an existing same-named project for the newly selected client;
+          // otherwise create it. This avoids duplicate project names.
+          const projectsResponse = await apiRequest(
+            'GET',
+            `/api/broker/client-projects?clientUserId=${encodeURIComponent(clientUserId)}`,
+          );
+          const clientProjects = await projectsResponse.json();
+          const existing = Array.isArray(clientProjects)
+            ? clientProjects.find((p: any) => String(p.name || '').trim().toLowerCase() === jobName.trim().toLowerCase())
+            : null;
+          if (existing?.id) {
+            body.project_id = String(existing.id);
+          } else {
+            const projectResponse = await apiRequest('POST', '/api/broker/client-projects', {
+              name: jobName.trim(),
+              clientUserId,
+            });
+            const createdProject = await projectResponse.json();
+            body.project_id = String(createdProject.id);
+          }
+        } else if (originalProjectId) {
+          body.project_id = originalProjectId;
+        }
+      }
+      const clientChanged = isBroker && clientUserId && (
+        clientUserId !== originalClientKey ||
+        clientName.trim() !== String(jobData?.client_name || jobData?.clientName || '').trim() ||
+        clientEmail.trim() !== String(jobData?.client_email || jobData?.clientEmail || '').trim()
+      );
+      if (clientChanged) {
+        body.clientName = clientName.trim();
+        body.clientEmail = clientEmail.trim();
+        body.clientUserId = clientUserId;
+      }
+
       if (oLat) body.origin_lat = oLat;
       if (oLng) body.origin_lng = oLng;
       if (dLat) body.destination_lat = dLat;
@@ -627,8 +717,64 @@ export default function EditJobScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         bottomOffset={80}
-        onScrollBeginDrag={() => { setShowMaterialDropdown(false); setShowCalendar(false); setShowOriginSuggestions(false); setShowDestSuggestions(false); }}
+        onScrollBeginDrag={() => { setShowMaterialDropdown(false); setShowClientDropdown(false); setShowCalendar(false); setShowOriginSuggestions(false); setShowDestSuggestions(false); }}
       >
+        {isBroker && <View style={styles.section}>
+          <Text style={styles.sectionTitle}>JOB & CLIENT</Text>
+          <View style={[styles.sectionCard, { zIndex: 20 }]}>
+            <Text style={styles.label}>Job Name</Text>
+            <TextInput
+              testID="edit-job-name"
+              style={styles.input}
+              value={jobName}
+              onChangeText={setJobName}
+              placeholder="Enter a job name"
+              placeholderTextColor={Colors.textMuted}
+            />
+            {(clientName || brokerClients.length > 0) && (
+              <View style={{ marginTop: 14, zIndex: 25 }}>
+                <Text style={styles.label}>Client</Text>
+                <Pressable
+                  testID="edit-job-client"
+                  style={styles.addressRow}
+                  onPress={() => setShowClientDropdown(v => !v)}
+                >
+                  <Ionicons name="business-outline" size={18} color={Colors.primary} />
+                  <Text style={[styles.input, { flex: 1, borderWidth: 0 }]} numberOfLines={1}>
+                    {clientName || 'Select a client'}
+                  </Text>
+                  <Ionicons name={showClientDropdown ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.textSecondary} />
+                </Pressable>
+                {showClientDropdown && (
+                  <View style={styles.materialDropdown}>
+                    <ScrollView nestedScrollEnabled style={{ maxHeight: 220 }}>
+                      {brokerClients.map((c: any, i: number) => {
+                        const name = c.name || c.client_name || c.clientName || c.email || 'Client';
+                        return (
+                          <Pressable
+                            key={c.invitationId || c.invitation_id || c.id || c.email || i}
+                            style={styles.materialDropdownItem}
+                            onPress={() => {
+                              setClientName(name);
+                              setClientEmail(c.email || '');
+                              setClientUserId(String(c.clientUserId || c.client_user_id || ''));
+                              setShowClientDropdown(false);
+                            }}
+                          >
+                            <Ionicons name="business" size={17} color={Colors.primary} />
+                            <Text style={[styles.materialDropdownText, { flex: 1 }]}>{name}</Text>
+                            {name === clientName && <Ionicons name="checkmark" size={17} color={Colors.primary} />}
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+        </View>}
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>MATERIAL & TYPE</Text>
           <View style={styles.sectionCard}>
