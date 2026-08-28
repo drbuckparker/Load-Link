@@ -36,4 +36,5 @@
 - [Broker client job overviews](broker-client-job-overviews.md) — attribute project jobs through project ownership when direct links drift; client lists must skip costly assignment enrichment.
 - [Broker role rules](broker-role-rules.md) — bill rate never driver-facing; held (sent_at NULL) broker assignments invisible until sent (check poster role='broker'); broker jobs are project-less.
 - [Companion session persistence](session-persistence.md) — sessions live in companion_sessions DB table; on 401 the client silent-relogins and only signs out (to login screen) on a definitive 401/403 or missing saved email — never on transient failures.
+- [Persistent authenticated navigation](persistent-auth-navigation.md) — deep app routes keep the five quick actions visible; auth screens do not, tab routes must not render a duplicate, and the dock yields to the keyboard.
 - [Clock-in timing rule](clock-in-time-window.md) — NO time-of-day clock-in window (pickup_time is informational, 24/7 on the job day); the old 15-min/tz_offset guard was removed as fragile & against intent; only a lenient day-level server backstop + the 15-mile geofence gate clock-in.

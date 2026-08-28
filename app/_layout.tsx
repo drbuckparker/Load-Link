@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Stack, router } from "expo-router";
+import { Stack, router, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { Platform, View, StyleSheet, useWindowDimensions } from "react-native";
@@ -14,6 +14,8 @@ import { useFonts, ChakraPetch_600SemiBold, ChakraPetch_700Bold } from "@expo-go
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
 import { playNotificationSound, playTruckHornSound, playCashRegisterSound } from "@/lib/sounds";
 import { resumeClockOutMonitor } from "@/lib/clockout-monitor";
+import PersistentQuickActions from "@/components/PersistentQuickActions";
+import { useAuth } from "@/contexts/AuthContext";
 
 if (Platform.OS === 'web' && typeof window !== 'undefined') {
   window.addEventListener('unhandledrejection', (event) => {
@@ -42,57 +44,42 @@ const APP_MAX_WIDTH = 520;
 
 function RootLayoutNav() {
   const { width } = useWindowDimensions();
+  const segments = useSegments();
+  const { isAuthenticated, isLoading } = useAuth();
   const isWide = width > APP_MAX_WIDTH;
+  const rootSegment = segments[0];
+  const showQuickActions = !isLoading
+    && isAuthenticated
+    && rootSegment !== '(tabs)'
+    && rootSegment !== '(auth)';
 
   const stack = (
-    <Stack screenOptions={{ headerBackTitle: "Back" }}>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen
-        name="(auth)"
-        options={{
-          presentation: "modal",
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
-        name="job/[id]"
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
-        name="chat/[jobId]"
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
-        name="notifications"
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
-        name="create-job"
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
-        name="vehicles"
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen name="earnings" options={{ headerShown: false }} />
-      <Stack.Screen name="jobs-browse" options={{ headerShown: false }} />
-      <Stack.Screen name="edit-job/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="invoice/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="review" options={{ headerShown: false, presentation: 'modal' }} />
-      <Stack.Screen name="vehicle-jobs/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="invite" options={{ headerShown: false }} />
-      <Stack.Screen name="broker" options={{ headerShown: false }} />
-    </Stack>
+    <View style={styles.appShell}>
+      <Stack screenOptions={{ headerBackTitle: "Back" }}>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="(auth)"
+          options={{
+            presentation: "modal",
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen name="job/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="chat/[jobId]" options={{ headerShown: false }} />
+        <Stack.Screen name="notifications" options={{ headerShown: false }} />
+        <Stack.Screen name="create-job" options={{ headerShown: false }} />
+        <Stack.Screen name="vehicles" options={{ headerShown: false }} />
+        <Stack.Screen name="earnings" options={{ headerShown: false }} />
+        <Stack.Screen name="jobs-browse" options={{ headerShown: false }} />
+        <Stack.Screen name="edit-job/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="invoice/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="review" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen name="vehicle-jobs/[id]" options={{ headerShown: false }} />
+        <Stack.Screen name="invite" options={{ headerShown: false }} />
+        <Stack.Screen name="broker" options={{ headerShown: false }} />
+      </Stack>
+      {showQuickActions && <PersistentQuickActions />}
+    </View>
   );
 
   if (!isWide) return stack;
@@ -190,6 +177,10 @@ export default function RootLayout() {
 }
 
 const styles = StyleSheet.create({
+  appShell: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
   wideRoot: {
     flex: 1,
     backgroundColor: Colors.background,
