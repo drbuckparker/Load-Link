@@ -524,8 +524,11 @@ export default function BrokerDashboardScreen() {
   };
 
   const removeAssignmentMutation = useMutation({
-    mutationFn: async (assignmentId: string) => {
-      return apiRequest('DELETE', `/api/broker/assignments/${assignmentId}`);
+    mutationFn: async ({ assignmentId, jobId }: { assignmentId: string; jobId: string }) => {
+      return apiRequest(
+        'DELETE',
+        `/api/broker/assignments/${assignmentId}?jobId=${encodeURIComponent(jobId)}`
+      );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
@@ -764,7 +767,10 @@ export default function BrokerDashboardScreen() {
                   testID={`remove-assignment-${a.id}`}
                   disabled={removeAssignmentMutation.isPending}
                   style={({ pressed }) => [(pressed || removeAssignmentMutation.isPending) && { opacity: 0.6 }, { padding: 4 }]}
-                  onPress={() => { haptic(); confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id)); }}
+                  onPress={() => {
+                    haptic();
+                    confirmRemoveTruck(() => removeAssignmentMutation.mutate({ assignmentId: a.id, jobId: item.id }));
+                  }}
                 >
                   <Ionicons name="trash-outline" size={16} color={Colors.destructive} />
                 </Pressable>
@@ -1281,7 +1287,10 @@ export default function BrokerDashboardScreen() {
                           );
                           if (!a || removeAssignmentMutation.isPending) return;
                           haptic();
-                          confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id));
+                          confirmRemoveTruck(() => removeAssignmentMutation.mutate({
+                            assignmentId: a.id,
+                            jobId: String(assignJob?.id || ''),
+                          }));
                           return;
                         }
                         toggleAssignSelect(driverId);
@@ -1333,10 +1342,13 @@ export default function BrokerDashboardScreen() {
                             );
                             if (!a) return;
                             haptic();
-                            confirmRemoveTruck(() => removeAssignmentMutation.mutate(a.id));
+                            confirmRemoveTruck(() => removeAssignmentMutation.mutate({
+                              assignmentId: a.id,
+                              jobId: String(assignJob?.id || ''),
+                            }));
                           }}
                         >
-                          <Text style={styles.holdBtnText}>REMOVE</Text>
+                          <Text style={styles.holdBtnText}>REMOVE FROM JOB</Text>
                         </Pressable>
                       )}
                     </Pressable>

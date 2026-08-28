@@ -132,7 +132,11 @@ export default function BrokerDayScreen() {
   };
 
   const removeMutation = useMutation({
-    mutationFn: async (assignmentId: string) => apiRequest('DELETE', `/api/broker/assignments/${assignmentId}`),
+    mutationFn: async ({ assignmentId, jobId }: { assignmentId: string; jobId: string }) =>
+      apiRequest(
+        'DELETE',
+        `/api/broker/assignments/${assignmentId}?jobId=${encodeURIComponent(jobId)}`
+      ),
     onSuccess: refresh,
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to remove truck'),
   });
@@ -145,7 +149,10 @@ export default function BrokerDayScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Remove', style: 'destructive',
-          onPress: () => { setSelected(null); removeMutation.mutate(a.id); },
+          onPress: () => {
+            setSelected(null);
+            removeMutation.mutate({ assignmentId: a.id, jobId: job.id });
+          },
         },
       ]
     );
@@ -163,6 +170,8 @@ export default function BrokerDayScreen() {
       await apiRequest('POST', '/api/broker/assignments/swap', {
         assignmentIdA: from.a.id,
         assignmentIdB: to.a.id,
+        jobIdA: from.job.id,
+        jobIdB: to.job.id,
       });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e: any) {

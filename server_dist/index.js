@@ -2006,6 +2006,37 @@ async function sendBrokerJobInstructions(jobId, brokerId, jwt, assignmentId) {
   }
   return response;
 }
+async function sendBrokerAssignmentChangePush(driverId, jobId, change) {
+  const result = await pool.query(
+    `SELECT material, scheduled_date, origin_address, destination_address
+       FROM jobs
+      WHERE id::text = $1
+      LIMIT 1`,
+    [jobId]
+  );
+  const job = result.rows[0] || {};
+  const rawDate = job.scheduled_date instanceof Date ? job.scheduled_date.toISOString() : String(job.scheduled_date || "");
+  const dateKey = rawDate.slice(0, 10);
+  const dayLabel = dateKey ? (/* @__PURE__ */ new Date(`${dateKey}T12:00:00Z`)).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC"
+  }) : "an upcoming date";
+  const material = job.material || "job";
+  const pickup = String(job.origin_address || "").trim();
+  const destination = String(job.destination_address || "").trim();
+  const route = [
+    pickup ? `Pickup: ${pickup}.` : "",
+    destination ? `Deliver to: ${destination}.` : ""
+  ].filter(Boolean).join(" ");
+  const title = change === "reassigned" ? "You have been reassigned" : "You have been removed from this job";
+  const body = change === "reassigned" ? `New instructions: ${material} on ${dayLabel}. ${route}`.trim() : `You are no longer assigned to ${material} on ${dayLabel}. ${route}`.trim();
+  await sendPushNotification(driverId, title, body, {
+    type: change === "reassigned" ? "broker_assignment_reassigned" : "broker_assignment_removed",
+    jobId
+  }, "default", `${change}-broker-assignment-${jobId}-${driverId}`);
+}
 async function recoverStuckBrokerScheduledSends() {
   try {
     const r = await pool.query(
@@ -3589,6 +3620,44 @@ async function registerRoutes(app2) {
       }
       const jobs2 = await jr.json().catch(() => []);
       if (!Array.isArray(jobs2)) return res.json(addDualKeys(jobs2));
+      const upstreamAssignMap = /* @__PURE__ */ new Map();
+      const jobsWithAssignments = jobs2.filter((j) => {
+        const stats = j.assignmentStats || {};
+        return (Number(stats.assigned ?? stats.assignedCount) || 0) > 0;
+      });
+      for (let i = 0; i < jobsWithAssignments.length; i += 8) {
+        await Promise.all(jobsWithAssignments.slice(i, i + 8).map(async (j) => {
+          const jobId = String(j.id || "");
+          if (!jobId) return;
+          try {
+            const ar = await websiteFetch(`/api/broker/jobs/${encodeURIComponent(jobId)}/assignments`, {
+              method: "GET",
+              jwt: auth.jwt
+            });
+            if (!ar.ok) return;
+            const rows = await ar.json().catch(() => []);
+            if (!Array.isArray(rows)) return;
+            upstreamAssignMap.set(jobId, rows.map((a) => {
+              const truck = a.truck && Object.keys(a.truck).length > 0 ? a.truck : null;
+              return {
+                ...a,
+                id: String(a.id || a.assignmentId || a.assignment_id || ""),
+                driverId: String(a.driverId || a.driver_id || a.driver?.id || ""),
+                driver_id: String(a.driverId || a.driver_id || a.driver?.id || ""),
+                driverName: a.driverName || a.driver_name || a.driver?.fullName,
+                driver_name: a.driverName || a.driver_name || a.driver?.fullName,
+                vehicleId: a.vehicleId || a.vehicle_id || truck?.id,
+                vehicle_id: a.vehicleId || a.vehicle_id || truck?.id,
+                ...truck ? { truck } : {},
+                sentAt: Object.prototype.hasOwnProperty.call(a, "sentAt") ? a.sentAt : a.sent_at,
+                sent_at: Object.prototype.hasOwnProperty.call(a, "sentAt") ? a.sentAt : a.sent_at
+              };
+            }));
+          } catch (e) {
+            console.error(`[broker/jobs] assignment detail fetch failed for ${jobId}:`, e.message);
+          }
+        }));
+      }
       const links = await pool.query(
         `SELECT job_id, client_key, client_name, client_email FROM broker_job_clients WHERE broker_id = $1`,
         [auth.userId]
@@ -3650,7 +3719,10 @@ async function registerRoutes(app2) {
         const l = linkMap.get(String(j.id));
         const p = projMap.get(String(j.id));
         const localAssigns = assignMap.get(String(j.id)) || [];
-        const upstreamAssigns = Array.isArray(j.assignments) ? j.assignments : [];
+        const upstreamAssigns = [
+          ...Array.isArray(j.assignments) ? j.assignments : [],
+          ...upstreamAssignMap.get(String(j.id)) || []
+        ];
         const assignmentById = /* @__PURE__ */ new Map();
         const mergeAssignment = (a, existing = {}, authoritative = false) => {
           const id = String(a.id || a.assignmentId || a.assignment_id || "");
@@ -4202,27 +4274,40 @@ async function registerRoutes(app2) {
     if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
       return res.status(400).json({ message: "This feature requires a live website account." });
     }
-    const { assignmentIdA, assignmentIdB } = req.body || {};
-    if (!assignmentIdA || !assignmentIdB || assignmentIdA === assignmentIdB) {
-      return res.status(400).json({ message: "Two different assignment ids are required" });
+    const { assignmentIdA, assignmentIdB, jobIdA, jobIdB } = req.body || {};
+    if (!assignmentIdA || !assignmentIdB || !jobIdA || !jobIdB || assignmentIdA === assignmentIdB || jobIdA === jobIdB) {
+      return res.status(400).json({ message: "Two different job assignments are required" });
     }
     try {
-      const rows = await pool.query(
-        `SELECT ja.id, ja.job_id, ja.driver_id, ja.sent_at, ja.status, j.contractor_id
-           FROM job_assignments ja JOIN jobs j ON j.id = ja.job_id
-          WHERE ja.id::text = ANY($1)`,
-        [[String(assignmentIdA), String(assignmentIdB)]]
-      );
-      const a = rows.rows.find((r) => String(r.id) === String(assignmentIdA));
-      const b = rows.rows.find((r) => String(r.id) === String(assignmentIdB));
+      const readAuthoritativeAssignment = async (jobId, assignmentId) => {
+        const response = await websiteFetch(
+          `/api/broker/jobs/${encodeURIComponent(jobId)}/assignments`,
+          { method: "GET", jwt: auth.jwt }
+        );
+        if (!response.ok) return null;
+        const rows = await response.json().catch(() => []);
+        const row = Array.isArray(rows) ? rows.find((x) => String(x.id || x.assignmentId || x.assignment_id) === assignmentId) : null;
+        if (!row) return null;
+        return {
+          id: assignmentId,
+          job_id: jobId,
+          driver_id: String(row.driverId || row.driver_id || row.driver?.id || ""),
+          sent_at: Object.prototype.hasOwnProperty.call(row, "sentAt") ? row.sentAt : row.sent_at,
+          status: String(row.status || "").toLowerCase()
+        };
+      };
+      const [a, b] = await Promise.all([
+        readAuthoritativeAssignment(String(jobIdA), String(assignmentIdA)),
+        readAuthoritativeAssignment(String(jobIdB), String(assignmentIdB))
+      ]);
       if (!a || !b) return res.status(404).json({ message: "Assignment not found" });
-      if (String(a.contractor_id) !== auth.userId || String(b.contractor_id) !== auth.userId) {
-        return res.status(403).json({ message: "You can only switch trucks on your own jobs" });
-      }
       if (String(a.job_id) === String(b.job_id)) {
         return res.status(400).json({ message: "These trucks are on the same job" });
       }
-      const activeStatuses = ["pending", "accepted", "approved"];
+      if (!a.driver_id || !b.driver_id) {
+        return res.status(409).json({ message: "One of these assignments has no driver" });
+      }
+      const activeStatuses = ["pending", "accepted", "approved", "confirmed", "assigned"];
       if (!activeStatuses.includes(String(a.status)) || !activeStatuses.includes(String(b.status))) {
         return res.status(400).json({ message: "Only active assignments can be switched" });
       }
@@ -4295,6 +4380,10 @@ async function registerRoutes(app2) {
       } catch (e) {
         console.error("[assignments/swap] local mirror failed:", e.message);
       }
+      await Promise.all([
+        sentA ? sendBrokerAssignmentChangePush(dA, jobB, "reassigned").catch((e) => console.error("[assignments/swap] reassignment push A failed:", e.message)) : Promise.resolve(),
+        sentB ? sendBrokerAssignmentChangePush(dB, jobA, "reassigned").catch((e) => console.error("[assignments/swap] reassignment push B failed:", e.message)) : Promise.resolve()
+      ]);
       return res.json({ success: true });
     } catch (e) {
       console.error("POST /api/broker/assignments/swap error:", e.message);
@@ -4414,6 +4503,54 @@ async function registerRoutes(app2) {
     } catch (e) {
       console.error("POST /api/broker/jobs/:id/assign error:", e.message);
       return res.status(e.status || 502).json({ message: e.message || "Failed to assign driver" });
+    }
+  });
+  app2.delete("/api/broker/assignments/:id", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const assignmentId = String(req.params.id || "").trim();
+    const jobId = String(req.query.jobId || req.body?.jobId || "").trim();
+    if (!assignmentId || !jobId) {
+      return res.status(400).json({ message: "Assignment and job are required" });
+    }
+    try {
+      const detailsResponse = await websiteFetch(
+        `/api/broker/jobs/${encodeURIComponent(jobId)}/assignments`,
+        { method: "GET", jwt: auth.jwt }
+      );
+      const details = detailsResponse.ok ? await detailsResponse.json().catch(() => []) : [];
+      const assignment = Array.isArray(details) ? details.find((a) => String(a.id || a.assignmentId || a.assignment_id) === assignmentId) : null;
+      if (!assignment) {
+        return res.status(detailsResponse.ok ? 404 : detailsResponse.status).json({
+          message: detailsResponse.ok ? "Assignment not found" : "Could not verify this assignment"
+        });
+      }
+      const driverId = String(
+        assignment.driverId || assignment.driver_id || assignment.driver?.id || ""
+      );
+      const wasSent = !!(assignment.sentAt ?? assignment.sent_at);
+      const removed = await websiteFetch(`/api/broker/assignments/${encodeURIComponent(assignmentId)}`, {
+        method: "DELETE",
+        jwt: auth.jwt
+      });
+      const text2 = await removed.text();
+      let data;
+      try {
+        data = JSON.parse(text2);
+      } catch {
+        data = { message: text2 };
+      }
+      if (!removed.ok) return res.status(removed.status).json(data);
+      await pool.query(`DELETE FROM job_assignments WHERE id::text = $1`, [assignmentId]).catch(() => {
+      });
+      if (wasSent && driverId) {
+        await sendBrokerAssignmentChangePush(driverId, jobId, "removed").catch(
+          (e) => console.error("[broker/assignments] removal push failed:", e.message)
+        );
+      }
+      return res.status(removed.status).json(addDualKeys(data));
+    } catch (e) {
+      console.error("DELETE /api/broker/assignments/:id error:", e.message);
+      return res.status(502).json({ message: "Failed to remove truck" });
     }
   });
   app2.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
