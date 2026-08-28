@@ -315,10 +315,9 @@ export default function JobsBrowseScreen() {
 
   const selectedClientJobs = useMemo<Job[]>(() => {
     if (!selectedClient) return [];
-    const list = jobsForClient(selectedClient).map(mapDbJob);
-    const completed = list.filter(j => String(j.status).toLowerCase() === 'completed');
-    const active = list.filter(j => String(j.status).toLowerCase() !== 'completed');
-    return [...active, ...completed];
+    return jobsForClient(selectedClient)
+      .map(mapDbJob)
+      .filter(j => !['completed', 'cancelled', 'canceled'].includes(String(j.status || '').toLowerCase()));
   }, [selectedClient, brokerJobs]);
 
   const inviteClientMutation = useMutation({
