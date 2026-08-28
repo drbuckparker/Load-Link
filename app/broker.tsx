@@ -57,6 +57,7 @@ interface BrokerJob {
   assignments?: {
     id: string;
     driverId?: string;
+    driver_id?: string;
     driverName?: string;
     driver_name?: string;
     status?: string;
@@ -64,6 +65,11 @@ interface BrokerJob {
     sent_at?: string | null;
     confirmedAt?: string | null;
     confirmed_at?: string | null;
+    vehicleId?: string;
+    vehicle_id?: string;
+    fleetTruckId?: string;
+    fleet_truck_id?: string;
+    truck?: RosterTruck;
   }[];
 }
 
@@ -228,6 +234,35 @@ function isPastJob(j: BrokerJob, todayKey: string): boolean {
   return !!lastKey && lastKey < todayKey;
 }
 
+function jobsOverlap(a: BrokerJob, b: BrokerJob): boolean {
+  const aStart = (a.scheduledDate || a.scheduled_date || '').slice(0, 10);
+  const bStart = (b.scheduledDate || b.scheduled_date || '').slice(0, 10);
+  if (!aStart || !bStart) return false;
+  const aEnd = jobLastDayKey(a) || aStart;
+  const bEnd = jobLastDayKey(b) || bStart;
+  const start = aStart > bStart ? aStart : bStart;
+  const end = aEnd < bEnd ? aEnd : bEnd;
+  if (start > end) return false;
+  const day = new Date(`${start}T12:00:00`);
+  for (let i = 0; i < 400; i++) {
+    const key = localDateKey(day);
+    if (key > end) return false;
+    if (jobCoversDay(a, key) && jobCoversDay(b, key)) return true;
+    day.setDate(day.getDate() + 1);
+  }
+  return false;
+}
+
+function isActiveAssignment(a: NonNullable<BrokerJob['assignments']>[number]): boolean {
+  return !['declined', 'withdrawn', 'rejected', 'cancelled', 'expired'].includes(
+    String(a.status || '').toLowerCase()
+  );
+}
+
+function assignmentDriverId(a: NonNullable<BrokerJob['assignments']>[number]): string {
+  return String(a.driverId || a.driver_id || '');
+}
+
 // Alert.alert buttons are a no-op on react-native-web, so use window.confirm there.
 function confirmRemoveTruck(onConfirm: () => void) {
   const title = 'Remove truck from job?';
@@ -364,6 +399,14 @@ export default function BrokerDashboardScreen() {
     const s: any = j.assignmentStats || {};
     return {
       ...j,
+      assignments: (Array.isArray(j.assignments) ? j.assignments : []).map((a: any) => ({
+        ...a,
+        id: String(a.id || a.assignmentId || a.assignment_id || ''),
+        driverId: String(a.driverId || a.driver_id || ''),
+        driver_id: String(a.driverId || a.driver_id || ''),
+        sentAt: a.sentAt ?? a.sent_at ?? null,
+        sent_at: a.sentAt ?? a.sent_at ?? null,
+      })).filter((a: any) => a.id && a.driverId),
       assignmentStats: {
         assigned: Number(s.assigned ?? s.assignedCount) || 0,
         sent: Number(s.sent ?? s.sentCount) || 0,
@@ -380,6 +423,15 @@ export default function BrokerDashboardScreen() {
   const todayJobs = jobs.filter(j => jobCoversDay(j, selectedDate));
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
+
+  // Keep the open sheet on the latest job record after assigning/removing.
+  // Without this, the list behind the modal refreshes but checked rows remain
+  // stale until the broker closes and reopens the sheet.
+  useEffect(() => {
+    if (!assignJob) return;
+    const latest = jobs.find(j => String(j.id) === String(assignJob.id));
+    if (latest && latest !== assignJob) setAssignJob(latest);
+  }, [jobsQuery.data]);
 
   useEffect(() => {
     const dateParam = typeof params.date === 'string' ? params.date : undefined;
@@ -423,8 +475,8 @@ export default function BrokerDashboardScreen() {
     mutationFn: async ({ jobId, driverId, sendNow }: { jobId: string; driverId: string; sendNow: boolean }) => {
       return apiRequest('POST', `/api/broker/jobs/${jobId}/assign`, { driverId, sendNow });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+    onSuccess: async () => {
+      await queryClient.refetchQueries({ queryKey: ['/api/broker/jobs'] });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to assign driver'),
@@ -598,9 +650,7 @@ export default function BrokerDashboardScreen() {
   function renderJob({ item }: { item: BrokerJob }) {
     const stats = item.assignmentStats || {};
     const held = stats.held || 0;
-    const heldAssignments = (item.assignments || []).filter(
-      a => (a.sentAt ?? a.sent_at) == null && a.status !== 'declined' && a.status !== 'withdrawn'
-    );
+    const activeAssignments = (item.assignments || []).filter(isActiveAssignment);
     return (
       <Pressable
         style={({ pressed }) => [styles.jobCard, pressed && { opacity: 0.85 }]}
@@ -655,20 +705,61 @@ export default function BrokerDashboardScreen() {
           {(stats.declined ?? 0) > 0 ? <Text style={[styles.statChip, { color: Colors.destructive }]}>Declined {stats.declined}</Text> : null}
         </View>
 
-        {heldAssignments.length > 0 && (
+        {activeAssignments.length > 0 && (
           <View style={{ gap: 6, marginTop: 8 }}>
-            {heldAssignments.map(a => (
+            <Text style={styles.assignedListLabel}>ASSIGNED TRUCKS</Text>
+            {activeAssignments.map(a => {
+              const isHeld = (a.sentAt ?? a.sent_at) == null;
+              const driverId = assignmentDriverId(a);
+              const rosterDriver = roster.find((d: RosterDriver) =>
+                String(d.driverId || d.driver_id || d.id) === driverId
+              );
+              const driverLabel = a.driverName || a.driver_name ||
+                rosterDriver?.name || rosterDriver?.driverName || rosterDriver?.driver_name ||
+                rosterDriver?.companyName || rosterDriver?.company_name || 'Assigned truck';
+              const assignedTruckId = String(
+                a.vehicleId || a.vehicle_id || a.fleetTruckId || a.fleet_truck_id || a.truck?.id || ''
+              );
+              const assignedTruck = (rosterDriver?.trucks || []).find(
+                (truck: RosterTruck) => String(truck.id) === assignedTruckId
+              ) || a.truck;
+              const truckLabel = assignedTruck ? truckTitle(assignedTruck) : driverLabel;
+              const truckDetails = assignedTruck
+                ? [
+                    assignedTruck.truckNumber ? `#${assignedTruck.truckNumber}` : '',
+                    assignedTruck.licensePlate ? `Plate ${assignedTruck.licensePlate}` : '',
+                    driverLabel,
+                  ].filter(Boolean).join(' · ')
+                : 'Vehicle details not provided';
+              const assignmentStatus = isHeld
+                ? 'SEND LATER'
+                : String(a.status || '').toLowerCase() === 'pending'
+                  ? 'AWAITING CONFIRMATION'
+                  : 'CONFIRMED';
+              return (
               <View key={a.id} style={styles.heldRow}>
-                <Ionicons name="pause-circle-outline" size={16} color={Colors.info} />
-                <Text style={styles.heldName} numberOfLines={1}>{a.driverName || a.driver_name || 'Driver'}</Text>
-                <Pressable
-                  testID={`send-assignment-${a.id}`}
-                  disabled={sendMutation.isPending}
-                  style={({ pressed }) => [styles.smallBtn, (pressed || sendMutation.isPending) && { opacity: 0.7 }]}
-                  onPress={() => { haptic(); sendMutation.mutate({ jobId: item.id, assignmentId: a.id }); }}
-                >
-                  <Text style={styles.smallBtnText}>SEND</Text>
-                </Pressable>
+                <Ionicons
+                  name={isHeld ? 'pause-circle-outline' : 'checkmark-circle-outline'}
+                  size={16}
+                  color={isHeld ? Colors.info : Colors.success}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.heldName} numberOfLines={1}>{truckLabel}</Text>
+                  <Text style={styles.personEmail} numberOfLines={1}>{truckDetails}</Text>
+                  <Text style={[styles.assignedStatus, { color: isHeld ? Colors.info : Colors.success }]}>
+                    {assignmentStatus}
+                  </Text>
+                </View>
+                {isHeld ? (
+                  <Pressable
+                    testID={`send-assignment-${a.id}`}
+                    disabled={sendMutation.isPending}
+                    style={({ pressed }) => [styles.smallBtn, (pressed || sendMutation.isPending) && { opacity: 0.7 }]}
+                    onPress={() => { haptic(); sendMutation.mutate({ jobId: item.id, assignmentId: a.id }); }}
+                  >
+                    <Text style={styles.smallBtnText}>SEND</Text>
+                  </Pressable>
+                ) : null}
                 <Pressable
                   testID={`remove-assignment-${a.id}`}
                   disabled={removeAssignmentMutation.isPending}
@@ -678,7 +769,8 @@ export default function BrokerDashboardScreen() {
                   <Ionicons name="trash-outline" size={16} color={Colors.destructive} />
                 </Pressable>
               </View>
-            ))}
+              );
+            })}
           </View>
         )}
 
@@ -800,10 +892,23 @@ export default function BrokerDashboardScreen() {
 
   const assignedDriverIds = new Set(
     (assignJob?.assignments || [])
-      .filter(a => a.status !== 'declined' && a.status !== 'withdrawn')
-      .map(a => a.driverId)
+      .filter(isActiveAssignment)
+      .map(assignmentDriverId)
       .filter(Boolean)
   );
+  const occupiedByDriver = new Map<string, {
+    job: BrokerJob;
+    assignment: NonNullable<BrokerJob['assignments']>[number];
+  }>();
+  for (const job of activeJobs) {
+    if (!assignJob || String(job.id) === String(assignJob.id) || !jobsOverlap(job, assignJob)) continue;
+    for (const assignment of job.assignments || []) {
+      const driverId = assignmentDriverId(assignment);
+      if (driverId && isActiveAssignment(assignment) && !occupiedByDriver.has(driverId)) {
+        occupiedByDriver.set(driverId, { job, assignment });
+      }
+    }
+  }
 
   return (
     <View style={styles.container}>
@@ -1113,7 +1218,7 @@ export default function BrokerDashboardScreen() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>ASSIGN TRUCKS FROM YOUR ROSTER</Text>
+              <Text style={styles.modalTitle}>ASSIGN OR REMOVE TRUCKS</Text>
               <Pressable onPress={() => { setAssignJob(null); setSelectedAssign(new Set()); }} style={styles.modalClose} testID="assign-modal-close">
                 <Ionicons name="close" size={22} color={Colors.text} />
               </Pressable>
@@ -1143,9 +1248,13 @@ export default function BrokerDashboardScreen() {
               ) : roster.flatMap(d => {
                 const driverId = String(d.driverId || d.driver_id || d.id);
                 const already = assignedDriverIds.has(driverId);
+                const occupied = occupiedByDriver.get(driverId);
+                const onOtherJob = occupied && String(occupied.job.id) !== String(assignJob?.id)
+                  ? occupied
+                  : undefined;
                 const pendingInvite = d.status === 'pending';
-                const unavailable = !already && !!availabilityMap[driverId]?.unavailable;
-                const selectable = !already && !pendingInvite && !unavailable;
+                const unavailable = !already && !onOtherJob && !!availabilityMap[driverId]?.unavailable;
+                const selectable = !already && !onOtherJob && !pendingInvite && !unavailable;
                 // Already-assigned trucks show as checked+highlighted; tapping
                 // them (unchecking) offers to take the truck off the job so a
                 // different truck can be assigned in its place.
@@ -1162,13 +1271,13 @@ export default function BrokerDashboardScreen() {
                       disabled={!selectable && !already}
                       style={[
                         styles.assignRow,
-                        (unavailable || pendingInvite) && { opacity: 0.55 },
+                        (unavailable || pendingInvite || onOtherJob) && { opacity: 0.55 },
                         already && styles.assignRowAssigned,
                       ]}
                       onPress={() => {
                         if (already) {
                           const a = (assignJob?.assignments || []).find(
-                            x => x.driverId === driverId && x.status !== 'declined' && x.status !== 'withdrawn'
+                            x => assignmentDriverId(x) === driverId && isActiveAssignment(x)
                           );
                           if (!a || removeAssignmentMutation.isPending) return;
                           haptic();
@@ -1201,6 +1310,11 @@ export default function BrokerDashboardScreen() {
                           </Text>
                         ) : null}
                         {already ? <Text style={[styles.personEmail, { color: Colors.success }]}>On this job — every day until removed</Text> :
+                         onOtherJob ? (
+                           <Text style={[styles.personEmail, { color: Colors.warning }]} numberOfLines={2}>
+                             Assigned to {onOtherJob.job.material || 'another job'} on {(onOtherJob.job.scheduledDate || onOtherJob.job.scheduled_date || '').slice(0, 10)}
+                           </Text>
+                         ) :
                          pendingInvite ? <Text style={[styles.personEmail, { color: Colors.warning }]}>Invite pending</Text> :
                          unavailable ? (
                           <Text style={[styles.personEmail, { color: Colors.destructive }]}>
@@ -1215,7 +1329,7 @@ export default function BrokerDashboardScreen() {
                           style={({ pressed }) => [styles.holdBtn, (pressed || removeAssignmentMutation.isPending) && { opacity: 0.7 }]}
                           onPress={() => {
                             const a = (assignJob?.assignments || []).find(
-                              x => x.driverId === driverId && x.status !== 'declined' && x.status !== 'withdrawn'
+                              x => assignmentDriverId(x) === driverId && isActiveAssignment(x)
                             );
                             if (!a) return;
                             haptic();
@@ -1514,6 +1628,13 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(59,130,246,0.25)',
   },
   heldName: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
+  assignedListLabel: {
+    fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.textMuted,
+    letterSpacing: 0.7, marginBottom: 1,
+  },
+  assignedStatus: {
+    fontFamily: 'ChakraPetch_700Bold', fontSize: 9, letterSpacing: 0.4, marginTop: 1,
+  },
   smallBtn: {
     backgroundColor: Colors.primary, borderRadius: 8, paddingHorizontal: 12,
     minHeight: 36, alignItems: 'center', justifyContent: 'center',

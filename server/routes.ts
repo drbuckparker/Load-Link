@@ -2613,9 +2613,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // job (they'd wrongly show as just "unavailable"). Merge them in from
       // the local job_assignments table.
       const assignRows = await pool.query(
-        `SELECT ja.id, ja.job_id, ja.driver_id, ja.status, ja.sent_at
+        `SELECT ja.id, ja.job_id, ja.driver_id, ja.vehicle_id, ja.fleet_truck_id,
+                ja.status, ja.sent_at,
+                COALESCE(d.company, d.full_name, d.email, 'Driver') AS driver_name,
+                v.id AS resolved_truck_id, v.truck_number, v.year AS truck_year,
+                v.make AS truck_make, v.model AS truck_model,
+                v.license_plate AS truck_license_plate, v.truck_type AS truck_type
            FROM job_assignments ja
            JOIN jobs j ON j.id = ja.job_id
+           LEFT JOIN users d ON d.id::text = ja.driver_id::text
+           LEFT JOIN driver_vehicles v
+             ON v.id::text = COALESCE(ja.vehicle_id::text, ja.fleet_truck_id::text)
           WHERE j.contractor_id = $1`,
         [auth.userId]
       );
@@ -2627,6 +2635,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           id: a.id,
           driverId: String(a.driver_id),
           driver_id: String(a.driver_id),
+          driverName: a.driver_name,
+          driver_name: a.driver_name,
+          vehicleId: a.vehicle_id ? String(a.vehicle_id) : undefined,
+          vehicle_id: a.vehicle_id ? String(a.vehicle_id) : undefined,
+          fleetTruckId: a.fleet_truck_id ? String(a.fleet_truck_id) : undefined,
+          fleet_truck_id: a.fleet_truck_id ? String(a.fleet_truck_id) : undefined,
+          truck: a.resolved_truck_id ? {
+            id: String(a.resolved_truck_id),
+            truckNumber: a.truck_number,
+            year: a.truck_year,
+            make: a.truck_make,
+            model: a.truck_model,
+            licensePlate: a.truck_license_plate,
+            truckType: a.truck_type,
+          } : undefined,
           status: a.status,
           sentAt: a.sent_at,
           sent_at: a.sent_at,
@@ -2635,12 +2658,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const merged = jobs.map((j: any) => {
         const l = linkMap.get(String(j.id));
         const p = projMap.get(String(j.id));
-        const localAssigns = assignMap.get(String(j.id));
-        const needAssigns = !Array.isArray(j.assignments) || j.assignments.length === 0;
-        if (!l && !p && !(needAssigns && localAssigns)) return j;
+        const localAssigns = assignMap.get(String(j.id)) || [];
+        const upstreamAssigns = Array.isArray(j.assignments) ? j.assignments : [];
+        const assignmentById = new Map<string, any>();
+        const mergeAssignment = (a: any, existing: any = {}, authoritative = false) => {
+          const id = String(a.id || a.assignmentId || a.assignment_id || "");
+          if (!id) return;
+          const authoritativeSentAt = Object.prototype.hasOwnProperty.call(a, "sentAt")
+            ? a.sentAt
+            : Object.prototype.hasOwnProperty.call(a, "sent_at")
+              ? a.sent_at
+              : existing.sentAt ?? existing.sent_at ?? null;
+          const sentAt = authoritative
+            ? authoritativeSentAt
+            : a.sentAt ?? a.sent_at ?? existing.sentAt ?? existing.sent_at ?? null;
+          assignmentById.set(id, {
+            ...existing,
+            ...a,
+            id,
+            driverId: String(a.driverId || a.driver_id || existing.driverId || existing.driver_id || ""),
+            driver_id: String(a.driverId || a.driver_id || existing.driverId || existing.driver_id || ""),
+            vehicleId: a.vehicleId || a.vehicle_id || existing.vehicleId || existing.vehicle_id,
+            vehicle_id: a.vehicleId || a.vehicle_id || existing.vehicleId || existing.vehicle_id,
+            fleetTruckId: a.fleetTruckId || a.fleet_truck_id || existing.fleetTruckId || existing.fleet_truck_id,
+            fleet_truck_id: a.fleetTruckId || a.fleet_truck_id || existing.fleetTruckId || existing.fleet_truck_id,
+            sentAt,
+            sent_at: sentAt,
+          });
+        };
+        // Local rows fill fields the website omits (truck/name), but upstream
+        // state wins when both sources contain the same assignment.
+        for (const a of localAssigns) mergeAssignment(a);
+        for (const a of upstreamAssigns) {
+          const id = String(a.id || a.assignmentId || a.assignment_id || "");
+          mergeAssignment(a, assignmentById.get(id), true);
+        }
+        const assignments = Array.from(assignmentById.values());
+        if (!l && !p && assignments.length === 0) return j;
         return {
           ...j,
-          ...(needAssigns && localAssigns ? { assignments: localAssigns } : {}),
+          ...(assignments.length > 0 ? { assignments } : {}),
           ...(l ? {
             clientName: l.client_name || j.clientName,
             clientEmail: l.client_email || j.clientEmail,
