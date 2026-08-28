@@ -170,6 +170,26 @@ function jobDateKey(j: BrokerJob): string {
   return raw.slice(0, 10);
 }
 
+function formatJobDate(j: BrokerJob): string {
+  const key = jobDateKey(j);
+  if (!key) return 'Date not set';
+  return new Date(`${key}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function compareJobsByDate(a: BrokerJob, b: BrokerJob): number {
+  const aDate = jobDateKey(a);
+  const bDate = jobDateKey(b);
+  if (!aDate && !bDate) return 0;
+  if (!aDate) return 1;
+  if (!bDate) return -1;
+  return aDate.localeCompare(bDate);
+}
+
 // A multi-day job works on `dateKey` if it falls inside the job's working-day
 // span: estimated_days consecutive working days from scheduled_date, skipping
 // weekend days the job excludes. Mirrors the server's getJobDateRange used by
@@ -418,9 +438,9 @@ export default function BrokerDashboardScreen() {
     };
   });
   const todayKey = localDateKey(new Date());
-  const activeJobs = jobs.filter(j => !isPastJob(j, todayKey));
-  const pastJobs = jobs.filter(j => isPastJob(j, todayKey));
-  const todayJobs = jobs.filter(j => jobCoversDay(j, selectedDate));
+  const activeJobs = jobs.filter(j => !isPastJob(j, todayKey)).sort(compareJobsByDate);
+  const pastJobs = jobs.filter(j => isPastJob(j, todayKey)).sort((a, b) => compareJobsByDate(b, a));
+  const todayJobs = jobs.filter(j => jobCoversDay(j, selectedDate)).sort(compareJobsByDate);
   const roster = Array.isArray(rosterQuery.data) ? rosterQuery.data : [];
   const clients = Array.isArray(clientsQuery.data) ? clientsQuery.data : [];
 
@@ -683,6 +703,12 @@ export default function BrokerDashboardScreen() {
             <Text style={styles.infoText}>{item.clientName || item.client_name}</Text>
           </View>
         ) : null}
+        <View style={styles.infoRow} testID={`broker-job-date-${item.id}`}>
+          <Ionicons name="calendar-outline" size={14} color={Colors.primary} />
+          <Text style={[styles.infoText, { color: Colors.primary, fontWeight: '700' }]}>
+            {formatJobDate(item)}
+          </Text>
+        </View>
         {(item.originAddress || item.origin_address) ? (
           <View style={styles.infoRow}>
             <Ionicons name="location" size={14} color={Colors.success} />
