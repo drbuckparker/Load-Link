@@ -2718,7 +2718,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const auth = getWebsiteAuth(req)!;
     try {
       if (!auth.jwt || auth.jwt.startsWith("dev-local:")) return res.json([]);
-      const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+      const includeAssignmentDetails = String(req.query.include_assignments ?? "true") !== "false";
+      const forwardedParams = new URL(req.originalUrl, "http://localhost").searchParams;
+      forwardedParams.delete("include_assignments");
+      const qs = forwardedParams.size ? `?${forwardedParams.toString()}` : "";
       const jr = await websiteFetch(`/api/broker/jobs${qs}`, { method: "GET", jwt: auth.jwt });
       if (!jr.ok) {
         const text = await jr.text();
@@ -2734,14 +2737,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const assignmentCutoff = new Date();
       assignmentCutoff.setUTCDate(assignmentCutoff.getUTCDate() - 7);
       const assignmentCutoffKey = assignmentCutoff.toISOString().slice(0, 10);
-      const jobsWithAssignments = jobs.filter((j: any) => {
+      const jobsWithAssignments = includeAssignmentDetails ? jobs.filter((j: any) => {
         const stats = j.assignmentStats || {};
         const status = String(j.status || "").toLowerCase();
         const dateKey = String(j.scheduledDate || j.scheduled_date || "").slice(0, 10);
         return (Number(stats.assigned ?? stats.assignedCount) || 0) > 0 &&
           !["completed", "cancelled", "canceled", "expired"].includes(status) &&
           (!dateKey || dateKey >= assignmentCutoffKey);
-      });
+      }) : [];
       for (let i = 0; i < jobsWithAssignments.length; i += 8) {
         await Promise.all(jobsWithAssignments.slice(i, i + 8).map(async (j: any) => {
           const jobId = String(j.id || "");
@@ -2784,7 +2787,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // table keeps project_id; resolve names from both project tables so the
       // app can show "which project is this job under".
       const projRows = await pool.query(
-        `SELECT j.id, j.project_id, COALESCE(cp.name, bp.name) AS project_name
+        `SELECT j.id, j.project_id, COALESCE(cp.name, bp.name) AS project_name,
+                bp.client_user_id AS project_client_user_id
          FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id::text = j.project_id::text
          LEFT JOIN broker_client_projects bp ON bp.id::text = j.project_id::text
@@ -2796,21 +2800,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // list, so the assign sheet can't tell which trucks are already on a
       // job (they'd wrongly show as just "unavailable"). Merge them in from
       // the local job_assignments table.
-      const assignRows = await pool.query(
-        `SELECT ja.id, ja.job_id, ja.driver_id, ja.vehicle_id, ja.fleet_truck_id,
-                ja.status, ja.sent_at,
-                COALESCE(d.company, d.full_name, d.email, 'Driver') AS driver_name,
-                v.id AS resolved_truck_id, v.truck_number, v.year AS truck_year,
-                v.make AS truck_make, v.model AS truck_model,
-                v.license_plate AS truck_license_plate, v.truck_type AS truck_type
-           FROM job_assignments ja
-           JOIN jobs j ON j.id = ja.job_id
-           LEFT JOIN users d ON d.id::text = ja.driver_id::text
-           LEFT JOIN driver_vehicles v
-             ON v.id::text = COALESCE(ja.vehicle_id::text, ja.fleet_truck_id::text)
-          WHERE j.contractor_id = $1`,
-        [auth.userId]
-      );
+      const assignRows = includeAssignmentDetails
+        ? await pool.query(
+            `SELECT ja.id, ja.job_id, ja.driver_id, ja.vehicle_id, ja.fleet_truck_id,
+                    ja.status, ja.sent_at,
+                    COALESCE(d.company, d.full_name, d.email, 'Driver') AS driver_name,
+                    v.id AS resolved_truck_id, v.truck_number, v.year AS truck_year,
+                    v.make AS truck_make, v.model AS truck_model,
+                    v.license_plate AS truck_license_plate, v.truck_type AS truck_type
+               FROM job_assignments ja
+               JOIN jobs j ON j.id = ja.job_id
+               LEFT JOIN users d ON d.id::text = ja.driver_id::text
+               LEFT JOIN driver_vehicles v
+                 ON v.id::text = COALESCE(ja.vehicle_id::text, ja.fleet_truck_id::text)
+              WHERE j.contractor_id = $1`,
+            [auth.userId]
+          )
+        : { rows: [] };
       const assignMap = new Map<string, any[]>();
       for (const a of assignRows.rows) {
         const key = String(a.job_id);
@@ -2893,6 +2899,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ...(p ? {
             projectId: j.projectId || p.project_id,
             projectName: j.projectName || p.project_name || undefined,
+            // A broker project belongs to exactly one client. Prefer that
+            // durable relationship when a canceled sibling job left this
+            // job's direct broker_job_clients link missing or stale.
+            clientUserId: p.project_client_user_id || l?.client_key || j.clientUserId,
           } : {}),
         };
       });

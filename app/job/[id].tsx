@@ -779,7 +779,7 @@ export default function JobDetailScreen() {
         if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         queryClient.removeQueries({ predicate: (q) => {
           const key = q.queryKey.join('/');
-          return key.includes('/api/jobs') || key.includes('/api/contractor');
+          return key.includes('/api/jobs') || key.includes('/api/broker/jobs') || key.includes('/api/contractor');
         }});
         if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any);
       } catch (e: any) {

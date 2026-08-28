@@ -3683,7 +3683,10 @@ async function registerRoutes(app2) {
     const auth = getWebsiteAuth(req);
     try {
       if (!auth.jwt || auth.jwt.startsWith("dev-local:")) return res.json([]);
-      const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+      const includeAssignmentDetails = String(req.query.include_assignments ?? "true") !== "false";
+      const forwardedParams = new URL(req.originalUrl, "http://localhost").searchParams;
+      forwardedParams.delete("include_assignments");
+      const qs = forwardedParams.size ? `?${forwardedParams.toString()}` : "";
       const jr = await websiteFetch(`/api/broker/jobs${qs}`, { method: "GET", jwt: auth.jwt });
       if (!jr.ok) {
         const text2 = await jr.text();
@@ -3701,12 +3704,12 @@ async function registerRoutes(app2) {
       const assignmentCutoff = /* @__PURE__ */ new Date();
       assignmentCutoff.setUTCDate(assignmentCutoff.getUTCDate() - 7);
       const assignmentCutoffKey = assignmentCutoff.toISOString().slice(0, 10);
-      const jobsWithAssignments = jobs2.filter((j) => {
+      const jobsWithAssignments = includeAssignmentDetails ? jobs2.filter((j) => {
         const stats = j.assignmentStats || {};
         const status = String(j.status || "").toLowerCase();
         const dateKey = String(j.scheduledDate || j.scheduled_date || "").slice(0, 10);
         return (Number(stats.assigned ?? stats.assignedCount) || 0) > 0 && !["completed", "cancelled", "canceled", "expired"].includes(status) && (!dateKey || dateKey >= assignmentCutoffKey);
-      });
+      }) : [];
       for (let i = 0; i < jobsWithAssignments.length; i += 8) {
         await Promise.all(jobsWithAssignments.slice(i, i + 8).map(async (j) => {
           const jobId = String(j.id || "");
@@ -3746,7 +3749,8 @@ async function registerRoutes(app2) {
       );
       const linkMap = new Map(links.rows.map((l) => [String(l.job_id), l]));
       const projRows = await pool.query(
-        `SELECT j.id, j.project_id, COALESCE(cp.name, bp.name) AS project_name
+        `SELECT j.id, j.project_id, COALESCE(cp.name, bp.name) AS project_name,
+                bp.client_user_id AS project_client_user_id
          FROM jobs j
          LEFT JOIN contractor_projects cp ON cp.id::text = j.project_id::text
          LEFT JOIN broker_client_projects bp ON bp.id::text = j.project_id::text
@@ -3754,21 +3758,21 @@ async function registerRoutes(app2) {
         [auth.userId]
       );
       const projMap = new Map(projRows.rows.map((r) => [String(r.id), r]));
-      const assignRows = await pool.query(
+      const assignRows = includeAssignmentDetails ? await pool.query(
         `SELECT ja.id, ja.job_id, ja.driver_id, ja.vehicle_id, ja.fleet_truck_id,
-                ja.status, ja.sent_at,
-                COALESCE(d.company, d.full_name, d.email, 'Driver') AS driver_name,
-                v.id AS resolved_truck_id, v.truck_number, v.year AS truck_year,
-                v.make AS truck_make, v.model AS truck_model,
-                v.license_plate AS truck_license_plate, v.truck_type AS truck_type
-           FROM job_assignments ja
-           JOIN jobs j ON j.id = ja.job_id
-           LEFT JOIN users d ON d.id::text = ja.driver_id::text
-           LEFT JOIN driver_vehicles v
-             ON v.id::text = COALESCE(ja.vehicle_id::text, ja.fleet_truck_id::text)
-          WHERE j.contractor_id = $1`,
+                    ja.status, ja.sent_at,
+                    COALESCE(d.company, d.full_name, d.email, 'Driver') AS driver_name,
+                    v.id AS resolved_truck_id, v.truck_number, v.year AS truck_year,
+                    v.make AS truck_make, v.model AS truck_model,
+                    v.license_plate AS truck_license_plate, v.truck_type AS truck_type
+               FROM job_assignments ja
+               JOIN jobs j ON j.id = ja.job_id
+               LEFT JOIN users d ON d.id::text = ja.driver_id::text
+               LEFT JOIN driver_vehicles v
+                 ON v.id::text = COALESCE(ja.vehicle_id::text, ja.fleet_truck_id::text)
+              WHERE j.contractor_id = $1`,
         [auth.userId]
-      );
+      ) : { rows: [] };
       const assignMap = /* @__PURE__ */ new Map();
       for (const a of assignRows.rows) {
         const key = String(a.job_id);
@@ -3842,7 +3846,11 @@ async function registerRoutes(app2) {
           } : {},
           ...p ? {
             projectId: j.projectId || p.project_id,
-            projectName: j.projectName || p.project_name || void 0
+            projectName: j.projectName || p.project_name || void 0,
+            // A broker project belongs to exactly one client. Prefer that
+            // durable relationship when a canceled sibling job left this
+            // job's direct broker_job_clients link missing or stale.
+            clientUserId: p.project_client_user_id || l?.client_key || j.clientUserId
           } : {}
         };
       });

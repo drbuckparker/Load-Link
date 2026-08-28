@@ -262,8 +262,9 @@ export default function JobsBrowseScreen() {
   }, [brokerClients, clientSearch, showInactiveClients]);
 
   // Broker jobs, used to list each client's jobs inline under their card.
-  const { data: _brokerJobs } = useQuery<any[]>({
-    queryKey: ['/api/broker/jobs'],
+  const brokerClientJobsQueryUrl = '/api/broker/jobs?include_assignments=false';
+  const { data: _brokerJobs, isLoading: brokerJobsLoading } = useQuery<any[]>({
+    queryKey: [brokerClientJobsQueryUrl],
     enabled: !!user && isBroker && activeTab === 'clients',
   });
   const brokerJobs = Array.isArray(_brokerJobs) ? _brokerJobs : [];
@@ -564,6 +565,11 @@ export default function JobsBrowseScreen() {
     if (!rawJobs) return [];
     const list = Array.isArray(rawJobs) ? rawJobs : [];
     let mapped = list.map(mapDbJob);
+    if (selectedProjectFilter) {
+      mapped = mapped.filter(j =>
+        !['completed', 'cancelled', 'canceled'].includes(String(j.status || '').toLowerCase())
+      );
+    }
     if (!isContractor && searchRadius != null && radiusOriginCoord) {
       const R = 3958.8;
       const { lat: oLat, lng: oLng } = radiusOriginCoord;
@@ -597,7 +603,7 @@ export default function JobsBrowseScreen() {
       });
     }
     return mapped;
-  }, [rawJobs, activeFilter, dateFilter, isContractor, searchRadius, radiusOriginCoord]);
+  }, [rawJobs, activeFilter, dateFilter, isContractor, searchRadius, radiusOriginCoord, selectedProjectFilter]);
 
   const spanningHints = useMemo(() => {
     if (!dateFilter || !rawJobs) return [] as { startDate: string; count: number }[];
@@ -1309,7 +1315,7 @@ export default function JobsBrowseScreen() {
           ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
           showsVerticalScrollIndicator={false}
           onRefresh={() => {
-            queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+            queryClient.invalidateQueries({ queryKey: [brokerClientJobsQueryUrl] });
             queryClient.invalidateQueries({ queryKey: [projectsQueryUrl] });
           }}
           refreshing={false}
@@ -1327,11 +1333,18 @@ export default function JobsBrowseScreen() {
             ) : null
           }
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
-              <Text style={styles.emptyTitle}>No jobs yet</Text>
-              <Text style={styles.emptySubtitle}>Tap + to add a job for this client</Text>
-            </View>
+            brokerJobsLoading ? (
+              <View style={styles.emptyContainer}>
+                <ActivityIndicator color={Colors.primary} />
+                <Text style={styles.emptySubtitle}>Loading jobs...</Text>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No jobs yet</Text>
+                <Text style={styles.emptySubtitle}>Tap + to add a job for this client</Text>
+              </View>
+            )
           }
           ListFooterComponent={<View style={{ height: 80 }} />}
         />
