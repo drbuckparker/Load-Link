@@ -14,6 +14,8 @@ export type ExpoPushMessage = {
   channelId: string;
   priority: 'default' | 'normal' | 'high';
   interruptionLevel: 'passive' | 'active' | 'timeSensitive' | 'critical';
+  /** Provider collapse key used to coalesce retries of the same business event. */
+  collapseId?: string;
   /** iOS app-icon badge number (red count on the icon). Omitted = leave as-is. */
   badge?: number;
 };
@@ -32,6 +34,8 @@ export function buildExpoPushMessage(opts: {
   interruptionLevel?: ExpoPushMessage['interruptionLevel'];
   /** iOS app-icon badge count. Pass the recipient's total unread count. */
   badge?: number;
+  /** Provider collapse key used to coalesce retries of the same business event. */
+  collapseId?: string;
 }): ExpoPushMessage {
   const sound = (opts.sound || '').trim() || 'default';
   const msg: ExpoPushMessage = {
@@ -51,6 +55,7 @@ export function buildExpoPushMessage(opts: {
   if (typeof opts.badge === 'number' && Number.isFinite(opts.badge) && opts.badge >= 0) {
     msg.badge = Math.floor(opts.badge);
   }
+  if (opts.collapseId) msg.collapseId = opts.collapseId;
   return msg;
 }
 

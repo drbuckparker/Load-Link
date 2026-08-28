@@ -88,6 +88,7 @@ export interface Notification {
   jobId?: string;
   isRead: boolean;
   createdAt: string;
+  pendingAssignmentIds?: string[];
 }
 
 export interface Earning {

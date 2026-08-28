@@ -107,6 +107,7 @@ export default function MyJobsScreen() {
       queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
   });
@@ -238,7 +239,7 @@ export default function MyJobsScreen() {
 
         {item.needsConfirmation && item.assignmentId ? (
           <View style={styles.confirmBar} testID={`confirm-bar-${item.id}`}>
-            <Text style={styles.confirmBarText}>Broker assigned you — confirm?</Text>
+            <Text style={styles.confirmBarText}>Instructions received — can you take this job?</Text>
             <Pressable
               testID={`decline-btn-${item.id}`}
               disabled={brokerRespondMutation.isPending}
@@ -250,6 +251,7 @@ export default function MyJobsScreen() {
               }}
             >
               <Ionicons name="thumbs-down" size={18} color={Colors.destructive} />
+              <Text style={styles.thumbDeclineText}>CAN'T DO IT</Text>
             </Pressable>
             <Pressable
               testID={`confirm-btn-${item.id}`}
@@ -262,6 +264,7 @@ export default function MyJobsScreen() {
               }}
             >
               <Ionicons name="thumbs-up" size={18} color={Colors.primaryForeground} />
+              <Text style={styles.thumbConfirmText}>CONFIRM</Text>
             </Pressable>
           </View>
         ) : null}
@@ -538,8 +541,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   thumbBtn: {
-    minWidth: 44,
+    minWidth: 82,
     minHeight: 44,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    gap: 5,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 10,
@@ -551,6 +557,18 @@ const styles = StyleSheet.create({
   },
   thumbBtnConfirm: {
     backgroundColor: Colors.primary,
+  },
+  thumbDeclineText: {
+    color: Colors.destructive,
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 10,
+    letterSpacing: 0.3,
+  },
+  thumbConfirmText: {
+    color: Colors.primaryForeground,
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 10,
+    letterSpacing: 0.3,
   },
   inviteBanner: {
     flexDirection: 'row',

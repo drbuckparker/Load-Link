@@ -134,6 +134,7 @@ export async function sendApnsPush(deviceToken: string, msg: ExpoPushMessage): P
         'apns-topic': topic,
         'apns-push-type': 'alert',
         'apns-priority': '10',
+        ...(msg.collapseId ? { 'apns-collapse-id': msg.collapseId.slice(0, 64) } : {}),
       }, payload);
       if (res.status >= 200 && res.status < 300) {
         workingTopic = topic;

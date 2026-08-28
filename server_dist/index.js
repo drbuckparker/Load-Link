@@ -1152,6 +1152,7 @@ function buildExpoPushMessage(opts) {
   if (typeof opts.badge === "number" && Number.isFinite(opts.badge) && opts.badge >= 0) {
     msg.badge = Math.floor(opts.badge);
   }
+  if (opts.collapseId) msg.collapseId = opts.collapseId;
   return msg;
 }
 var PUSH_SOUNDS = {
@@ -1306,7 +1307,8 @@ async function sendApnsPush(deviceToken, msg) {
         authorization: `bearer ${jwt}`,
         "apns-topic": topic,
         "apns-push-type": "alert",
-        "apns-priority": "10"
+        "apns-priority": "10",
+        ...msg.collapseId ? { "apns-collapse-id": msg.collapseId.slice(0, 64) } : {}
       }, payload);
       if (res.status >= 200 && res.status < 300) {
         workingTopic = topic;
@@ -1469,10 +1471,10 @@ try {
 async function deliverPush(tokens, msg, label) {
   if (tokens.apnsToken && apnsConfigured()) {
     const r = await sendApnsPush(tokens.apnsToken, msg);
-    if (r.ok) return;
+    if (r.ok) return true;
     console.error(`${label} APNs send failed (${r.status || ""} ${r.reason || ""}) \u2014 falling back to Expo`);
   }
-  if (!tokens.expoToken) return;
+  if (!tokens.expoToken) return false;
   try {
     const res = await fetch("https://exp.host/--/api/v2/push/send", {
       method: "POST",
@@ -1481,20 +1483,26 @@ async function deliverPush(tokens, msg, label) {
     });
     const tickets = await res.json().catch(() => null);
     const t = Array.isArray(tickets?.data) ? tickets.data[0] : tickets?.data;
-    if (t?.status === "error") console.error(`${label} Expo push ticket error:`, JSON.stringify(t));
+    if (t?.status === "error") {
+      console.error(`${label} Expo push ticket error:`, JSON.stringify(t));
+      return false;
+    }
+    return res.ok && t?.status === "ok";
   } catch (e) {
     console.error(`${label} Expo push send error:`, e.message);
+    return false;
   }
 }
-async function sendPushNotification(userId, title, body, data, sound = "default") {
+async function sendPushNotification(userId, title, body, data, sound = "default", collapseId) {
   try {
     const result = await pool.query(`SELECT expo_push_token, apns_device_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
     const row = result.rows[0];
-    if (!row || !row.expo_push_token && !row.apns_device_token) return;
-    const message = buildExpoPushMessage({ to: row.expo_push_token || "", title, body, data, sound });
-    await deliverPush({ expoToken: row.expo_push_token, apnsToken: row.apns_device_token }, message, "Push");
+    if (!row || !row.expo_push_token && !row.apns_device_token) return false;
+    const message = buildExpoPushMessage({ to: row.expo_push_token || "", title, body, data, sound, collapseId });
+    return await deliverPush({ expoToken: row.expo_push_token, apnsToken: row.apns_device_token }, message, "Push");
   } catch (e) {
     console.error("Push notification error:", e.message);
+    return false;
   }
 }
 async function notifyDriverJobAwarded(driverId, jobId, jobMaterial) {
@@ -1836,6 +1844,168 @@ async function reacquireBrokerJwt(brokerId) {
     return null;
   }
 }
+async function ensureBrokerInstructionPushOutbox() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS broker_assignment_push_deliveries (
+      assignment_id text PRIMARY KEY,
+      driver_id text NOT NULL,
+      job_id text NOT NULL,
+      claimed_at timestamptz,
+      attempted_at timestamptz,
+      delivered_at timestamptz,
+      attempts integer NOT NULL DEFAULT 0,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE broker_assignment_push_deliveries
+      ADD COLUMN IF NOT EXISTS attempted_at timestamptz
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_bapd_pending
+      ON broker_assignment_push_deliveries (delivered_at, claimed_at)
+  `);
+}
+async function enqueueHeldBrokerAssignments(jobId, brokerId, assignmentId) {
+  if (assignmentId) {
+    const valid = await pool.query(
+      `SELECT 1
+         FROM job_assignments ja
+         JOIN jobs j ON j.id = ja.job_id
+        WHERE ja.id::text = $1
+          AND ja.job_id::text = $2
+          AND j.contractor_id::text = $3
+          AND ja.status::text = 'pending'
+          AND ja.sent_at IS NULL
+        LIMIT 1`,
+      [assignmentId, jobId, brokerId]
+    );
+    if (!valid.rowCount) {
+      const error = new Error("Assignment is not held on this broker job");
+      error.status = 409;
+      throw error;
+    }
+  }
+  await pool.query(
+    `INSERT INTO broker_assignment_push_deliveries (assignment_id, driver_id, job_id)
+     SELECT ja.id::text, ja.driver_id::text, ja.job_id::text
+       FROM job_assignments ja
+       JOIN jobs j ON j.id = ja.job_id
+      WHERE ja.job_id::text = $1
+        AND j.contractor_id::text = $2
+        AND ja.status::text = 'pending'
+        AND ja.sent_at IS NULL
+         AND ($3::text IS NULL OR ja.id::text = $3)
+     ON CONFLICT (assignment_id) DO NOTHING
+     RETURNING assignment_id`,
+    [jobId, brokerId, assignmentId || null]
+  );
+}
+async function deliverPendingBrokerInstructionPushes(jobId, assignmentId) {
+  const params = [];
+  const filters = [];
+  if (jobId) {
+    params.push(jobId);
+    filters.push(`AND o2.job_id = $${params.length}`);
+  }
+  if (assignmentId) {
+    params.push(assignmentId);
+    filters.push(`AND o2.assignment_id = $${params.length}`);
+  }
+  const claimed = await pool.query(
+    `UPDATE broker_assignment_push_deliveries o
+        SET claimed_at = NOW(), attempted_at = NOW(), attempts = attempts + 1, error = NULL
+      WHERE o.assignment_id IN (
+        SELECT o2.assignment_id
+          FROM broker_assignment_push_deliveries o2
+          JOIN job_assignments ja ON ja.id::text = o2.assignment_id
+         WHERE o2.delivered_at IS NULL
+           AND o2.attempts < 3
+           AND (o2.claimed_at IS NULL OR o2.claimed_at < NOW() - INTERVAL '5 minutes')
+           AND ja.sent_at IS NOT NULL
+           AND ja.status::text = 'pending'
+            ${filters.join("\n            ")}
+         ORDER BY o2.created_at ASC
+         LIMIT 50
+         FOR UPDATE OF o2 SKIP LOCKED
+      )
+      RETURNING o.assignment_id, o.driver_id, o.job_id`,
+    params
+  );
+  let delivered = 0;
+  for (const row of claimed.rows) {
+    try {
+      const info = await pool.query(
+        `SELECT j.material, j.scheduled_date, u.company AS broker_company, u.full_name AS broker_name
+           FROM jobs j
+           LEFT JOIN users u ON u.id::text = j.contractor_id::text
+          WHERE j.id::text = $1 LIMIT 1`,
+        [String(row.job_id)]
+      );
+      const j = info.rows[0] || {};
+      const rawDate = j.scheduled_date instanceof Date ? j.scheduled_date.toISOString() : String(j.scheduled_date || "");
+      const dateKey = rawDate.slice(0, 10);
+      const dayLabel = dateKey ? (/* @__PURE__ */ new Date(`${dateKey}T12:00:00Z`)).toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC"
+      }) : "your upcoming job";
+      const brokerLabel = j.broker_company || j.broker_name || "Your broker";
+      const title = "Job instructions ready \u2014 confirm";
+      const body = `${brokerLabel} sent instructions for ${j.material || "your job"} on ${dayLabel}. Tap to confirm or decline.`;
+      const ok = await sendPushNotification(String(row.driver_id), title, body, {
+        type: "broker_assignment",
+        jobId: String(row.job_id),
+        assignmentId: String(row.assignment_id)
+      }, "default", `broker-assignment-${String(row.assignment_id)}`);
+      if (ok) {
+        await pool.query(
+          `UPDATE broker_assignment_push_deliveries
+              SET delivered_at = NOW(), claimed_at = NULL, error = NULL
+            WHERE assignment_id = $1`,
+          [String(row.assignment_id)]
+        );
+        delivered++;
+      } else {
+        await pool.query(
+          `UPDATE broker_assignment_push_deliveries
+              SET claimed_at = NULL,
+                  error = 'No registered device token or push provider rejected delivery'
+            WHERE assignment_id = $1`,
+          [String(row.assignment_id)]
+        );
+      }
+    } catch (e) {
+      await pool.query(
+        `UPDATE broker_assignment_push_deliveries
+            SET claimed_at = NULL, error = $2
+          WHERE assignment_id = $1`,
+        [String(row.assignment_id), String(e?.message || e).slice(0, 500)]
+      ).catch(() => {
+      });
+    }
+  }
+  return delivered;
+}
+async function sendBrokerJobInstructions(jobId, brokerId, jwt, assignmentId) {
+  await enqueueHeldBrokerAssignments(jobId, brokerId, assignmentId);
+  const response = await websiteFetch(
+    `/api/broker/jobs/${jobId}/${assignmentId ? "send" : "send-all"}`,
+    {
+      method: "POST",
+      body: assignmentId ? { assignmentId } : {},
+      jwt
+    }
+  );
+  if (response.ok) {
+    await deliverPendingBrokerInstructionPushes(jobId, assignmentId).catch(
+      (e) => console.error(`[BrokerSend] driver push error for job ${jobId}:`, e.message)
+    );
+  }
+  return response;
+}
 async function recoverStuckBrokerScheduledSends() {
   try {
     const r = await pool.query(
@@ -1919,7 +2089,7 @@ async function processDueBrokerScheduledSends() {
           (a) => (a.sentAt ?? a.sent_at) == null && a.status !== "declined" && a.status !== "withdrawn"
         );
         if (!held) continue;
-        const sr = await websiteFetch(`/api/broker/jobs/${job.id}/send-all`, { method: "POST", body: {}, jwt });
+        const sr = await sendBrokerJobInstructions(String(job.id), String(row.broker_id), jwt);
         if (sr.ok) sentJobs++;
         else {
           failedJobs.push(String(job.id));
@@ -1966,6 +2136,7 @@ function sweepOldBrokerScheduledSends() {
   });
 }
 function startBrokerScheduledSendWorker() {
+  ensureBrokerInstructionPushOutbox().then(() => deliverPendingBrokerInstructionPushes()).catch((e) => console.error("[BrokerSend] instruction push outbox init error:", e?.message || e));
   sweepOldBrokerScheduledSends();
   pool.query(`ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS claimed_at timestamptz`).catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e)).then(() => recoverStuckBrokerScheduledSends()).catch(() => {
   });
@@ -1975,6 +2146,10 @@ function startBrokerScheduledSendWorker() {
   }, 5 * 60 * 1e3);
   setInterval(() => {
     processDueBrokerScheduledSends().catch(() => {
+    });
+  }, 6e4);
+  setInterval(() => {
+    deliverPendingBrokerInstructionPushes().catch(() => {
     });
   }, 6e4);
   setInterval(sweepOldBrokerScheduledSends, 24 * 60 * 60 * 1e3);
@@ -2141,6 +2316,22 @@ function snakeToCamel(str) {
 }
 function camelToSnake2(str) {
   return str.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+}
+var ACCOUNTING_SYNC_FIELDS = [
+  "qbo_invoice_id",
+  "qbo_sync_status",
+  "qbo_synced_at",
+  "qbo_sync_error",
+  "xero_invoice_id",
+  "xero_sync_status",
+  "xero_synced_at",
+  "xero_sync_error"
+];
+function stripAccountingSyncUnlessPayee(row, viewerId) {
+  if (row && String(row.driver_id) !== String(viewerId)) {
+    for (const f of ACCOUNTING_SYNC_FIELDS) delete row[f];
+  }
+  return row;
 }
 function addDualKeys(obj) {
   if (Array.isArray(obj)) return obj.map(addDualKeys);
@@ -2342,6 +2533,7 @@ function airMilesToLeg(pLat, pLng, oLat, oLng, dLat, dLng) {
   return null;
 }
 async function registerRoutes(app2) {
+  await ensureBrokerInstructionPushOutbox();
   function requireAuth(req, res, next) {
     const auth = getWebsiteAuth(req);
     if (auth) {
@@ -2990,7 +3182,13 @@ async function registerRoutes(app2) {
                 u.phone as contractor_phone,
                 u.email as contractor_email,
                 d.full_name as driver_name,
-                COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company
+                COALESCE(NULLIF(dtc.company, ''), NULLIF(d.company, '')) as driver_company,
+                (SELECT bjc.client_name FROM broker_job_clients bjc
+                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_name,
+                (SELECT bjc.client_email FROM broker_job_clients bjc
+                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_email,
+                (SELECT bjc.client_key FROM broker_job_clients bjc
+                  WHERE bjc.job_id::text = j.id::text LIMIT 1) as client_key
          FROM jobs j
          LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text
          LEFT JOIN users u ON j.contractor_id::text = u.id::text
@@ -3117,6 +3315,10 @@ async function registerRoutes(app2) {
           }
         } catch (e) {
           console.error("GET /api/jobs/:id broker annotate error:", e.message);
+        }
+        if (String(job.contractor_id) !== auth.userId) {
+          delete job.client_email;
+          delete job.client_key;
         }
         return res.json(addDualKeys(job));
       }
@@ -3325,10 +3527,21 @@ async function registerRoutes(app2) {
       } catch (e) {
         console.error("[BrokerClients] job counts failed:", e.message);
       }
+      const archivedSet = /* @__PURE__ */ new Set();
+      try {
+        const arch = await pool.query(
+          `SELECT client_key FROM broker_archived_clients WHERE broker_id = $1`,
+          [auth.userId]
+        );
+        for (const row of arch.rows) archivedSet.add(String(row.client_key));
+      } catch (e) {
+        console.error("[BrokerClients] archived flags failed:", e.message);
+      }
       const manual = local.rows.map((r) => {
         const key = `manual-${r.id}`;
         const n = countMap.get(key) || 0;
         return {
+          archived: archivedSet.has(key),
           clientUserId: key,
           client_user_id: key,
           name: r.name,
@@ -3346,11 +3559,11 @@ async function registerRoutes(app2) {
           active_jobs_count: n
         };
       });
-      const manualKeys = new Set(manual.map((m) => m.clientUserId));
-      const upstreamWithCounts = upstream.filter((c) => !manualKeys.has(String(c.clientUserId || c.client_user_id || ""))).map((c) => {
-        const key = String(c.clientUserId || c.client_user_id || "");
+      const upstreamWithCounts = upstream.map((c) => {
+        const key = String(c.clientUserId || c.client_user_id || c.invitationId || c.invitation_id || c.id || c.email || "");
         const n = countMap.get(key);
-        return n === void 0 ? c : { ...c, activeJobsCount: n, active_jobs_count: n };
+        const base = n === void 0 ? c : { ...c, activeJobsCount: n, active_jobs_count: n };
+        return { ...base, archived: archivedSet.has(key) };
       });
       return res.json([...manual, ...upstreamWithCounts]);
     } catch (e) {
@@ -3409,23 +3622,6 @@ async function registerRoutes(app2) {
           sentAt: a.sent_at,
           sent_at: a.sent_at
         });
-      }
-      for (const j of jobs2) {
-        const jid = String(j.id || "");
-        const cKey = String(j.clientUserId || j.client_user_id || "");
-        const cName = String(j.clientName || j.client_name || "").trim();
-        const cEmail = String(j.clientEmail || j.client_email || "").trim().toLowerCase();
-        if (!jid || linkMap.has(jid) || !cKey && !cName && !cEmail) continue;
-        try {
-          await pool.query(
-            `INSERT INTO broker_job_clients (job_id, broker_id, client_key, client_name, client_email)
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`,
-            [jid, auth.userId, cKey, cName, cEmail]
-          );
-          linkMap.set(jid, { job_id: jid, client_key: cKey, client_name: cName, client_email: cEmail });
-        } catch (e) {
-          console.error("[JobClientLink] backfill failed:", e.message);
-        }
       }
       const merged = jobs2.map((j) => {
         const l = linkMap.get(String(j.id));
@@ -3785,6 +3981,37 @@ async function registerRoutes(app2) {
       return res.status(500).json({ message: "Failed to update client" });
     }
   });
+  app2.post("/api/broker/clients/:id/archive", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const key = String(req.params.id || "").trim();
+    if (!key) return res.status(400).json({ message: "Missing client id" });
+    try {
+      await pool.query(
+        `INSERT INTO broker_archived_clients (broker_id, client_key) VALUES ($1, $2)
+         ON CONFLICT (broker_id, client_key) DO NOTHING`,
+        [auth.userId, key]
+      );
+      return res.json({ success: true, archived: true });
+    } catch (e) {
+      console.error("POST /api/broker/clients/:id/archive error:", e.message);
+      return res.status(500).json({ message: "Failed to archive client" });
+    }
+  });
+  app2.delete("/api/broker/clients/:id/archive", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const key = String(req.params.id || "").trim();
+    if (!key) return res.status(400).json({ message: "Missing client id" });
+    try {
+      await pool.query(
+        `DELETE FROM broker_archived_clients WHERE broker_id = $1 AND client_key = $2`,
+        [auth.userId, key]
+      );
+      return res.json({ success: true, archived: false });
+    } catch (e) {
+      console.error("DELETE /api/broker/clients/:id/archive error:", e.message);
+      return res.status(500).json({ message: "Failed to restore client" });
+    }
+  });
   app2.delete("/api/broker/clients/:id", requireAuth, requireBrokerRole, async (req, res) => {
     const auth = getWebsiteAuth(req);
     const rawId = String(req.params.id || "");
@@ -3921,6 +4148,225 @@ async function registerRoutes(app2) {
       return res.status(500).json({ message: "Failed to update project" });
     }
   });
+  app2.post("/api/broker/assignments/swap", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    if (!auth.jwt || auth.jwt.startsWith("dev-local:")) {
+      return res.status(400).json({ message: "This feature requires a live website account." });
+    }
+    const { assignmentIdA, assignmentIdB } = req.body || {};
+    if (!assignmentIdA || !assignmentIdB || assignmentIdA === assignmentIdB) {
+      return res.status(400).json({ message: "Two different assignment ids are required" });
+    }
+    try {
+      const rows = await pool.query(
+        `SELECT ja.id, ja.job_id, ja.driver_id, ja.sent_at, ja.status, j.contractor_id
+           FROM job_assignments ja JOIN jobs j ON j.id = ja.job_id
+          WHERE ja.id::text = ANY($1)`,
+        [[String(assignmentIdA), String(assignmentIdB)]]
+      );
+      const a = rows.rows.find((r) => String(r.id) === String(assignmentIdA));
+      const b = rows.rows.find((r) => String(r.id) === String(assignmentIdB));
+      if (!a || !b) return res.status(404).json({ message: "Assignment not found" });
+      if (String(a.contractor_id) !== auth.userId || String(b.contractor_id) !== auth.userId) {
+        return res.status(403).json({ message: "You can only switch trucks on your own jobs" });
+      }
+      if (String(a.job_id) === String(b.job_id)) {
+        return res.status(400).json({ message: "These trucks are on the same job" });
+      }
+      const activeStatuses = ["pending", "accepted", "approved"];
+      if (!activeStatuses.includes(String(a.status)) || !activeStatuses.includes(String(b.status))) {
+        return res.status(400).json({ message: "Only active assignments can be switched" });
+      }
+      const ws = async (method, path2, body) => {
+        const r = await websiteFetch(path2, { method, body, jwt: auth.jwt });
+        const text2 = await r.text();
+        let data;
+        try {
+          data = JSON.parse(text2);
+        } catch {
+          data = { message: text2 };
+        }
+        return { ok: r.ok, status: r.status, data };
+      };
+      const del = (id) => ws("DELETE", `/api/broker/assignments/${id}`);
+      const assign = (jobId, driverId, sendNow) => ws("POST", `/api/broker/jobs/${jobId}/assign`, { driverId, sendNow });
+      const newId = (d) => d?.assignment?.id ? String(d.assignment.id) : d?.id ? String(d.id) : null;
+      const findUpstream = async (jobId, driverId) => {
+        try {
+          const r = await ws("GET", "/api/assignments");
+          const list = Array.isArray(r.data) ? r.data : [];
+          const hit = list.find((x) => String(x.jobId ?? x.job_id) === jobId && String(x.driverId ?? x.driver_id) === driverId && !["rejected", "withdrawn", "cancelled", "expired"].includes(String(x.status || "").toLowerCase()));
+          return hit?.id ? String(hit.id) : null;
+        } catch {
+          return null;
+        }
+      };
+      const sentA = !!a.sent_at, sentB = !!b.sent_at;
+      const dA = String(a.driver_id), dB = String(b.driver_id);
+      const jobA = String(a.job_id), jobB = String(b.job_id);
+      const r1 = await del(String(a.id));
+      if (!r1.ok) return res.status(502).json({ message: r1.data?.message || "Could not remove the first truck" });
+      const r2 = await del(String(b.id));
+      if (!r2.ok) {
+        const backA = await assign(jobA, dA, sentA);
+        return res.status(502).json({
+          message: (r2.data?.message || "Could not remove the second truck.") + (backA.ok ? " Nothing was switched." : " Check both jobs \u2014 a truck may need to be re-assigned.")
+        });
+      }
+      const r3 = await assign(jobB, dA, sentA);
+      if (!r3.ok) {
+        const back1 = await assign(jobA, dA, sentA);
+        const back2 = await assign(jobB, dB, sentB);
+        const restored = back1.ok && back2.ok;
+        return res.status(r3.status === 409 ? 409 : 502).json({
+          message: (r3.data?.message || "Could not move the first truck.") + (restored ? " Both trucks were put back on their original jobs." : " Check both jobs \u2014 a truck may need to be re-assigned.")
+        });
+      }
+      const r4 = await assign(jobA, dB, sentB);
+      if (!r4.ok) {
+        const created = newId(r3.data) || await findUpstream(jobB, dA);
+        const movedRemoved = created ? (await del(created)).ok : false;
+        const backB = await assign(jobB, dB, sentB);
+        const backA = movedRemoved ? await assign(jobA, dA, sentA) : { ok: false };
+        const restored = movedRemoved && backA.ok && backB.ok;
+        return res.status(r4.status === 409 ? 409 : 502).json({
+          message: (r4.data?.message || "Could not move the second truck.") + (restored ? " Both trucks were put back on their original jobs." : " Check both jobs \u2014 a truck may need to be re-assigned.")
+        });
+      }
+      try {
+        const idA2 = newId(r3.data), idB2 = newId(r4.data);
+        await pool.query(
+          `UPDATE job_assignments SET id = COALESCE($2, id), job_id = $3, sent_at = $4 WHERE id::text = $1`,
+          [String(a.id), idA2, jobB, sentA ? /* @__PURE__ */ new Date() : null]
+        );
+        await pool.query(
+          `UPDATE job_assignments SET id = COALESCE($2, id), job_id = $3, sent_at = $4 WHERE id::text = $1`,
+          [String(b.id), idB2, jobA, sentB ? /* @__PURE__ */ new Date() : null]
+        );
+      } catch (e) {
+        console.error("[assignments/swap] local mirror failed:", e.message);
+      }
+      return res.json({ success: true });
+    } catch (e) {
+      console.error("POST /api/broker/assignments/swap error:", e.message);
+      return res.status(500).json({ message: "Failed to switch trucks" });
+    }
+  });
+  app2.post("/api/broker/jobs/:id/send-all", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    try {
+      const up = await sendBrokerJobInstructions(String(req.params.id), auth.userId, auth.jwt);
+      const text2 = await up.text();
+      res.status(up.status);
+      try {
+        return res.json(JSON.parse(text2));
+      } catch {
+        return res.send(text2);
+      }
+    } catch (e) {
+      console.error("POST /api/broker/jobs/:id/send-all error:", e.message);
+      return res.status(502).json({ message: "Failed to send driver instructions" });
+    }
+  });
+  app2.post("/api/broker/jobs/:id/send", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const assignmentId = String(req.body?.assignmentId || "").trim();
+    if (!assignmentId) return res.status(400).json({ message: "assignmentId is required" });
+    try {
+      const up = await sendBrokerJobInstructions(
+        String(req.params.id),
+        auth.userId,
+        auth.jwt,
+        assignmentId
+      );
+      const text2 = await up.text();
+      res.status(up.status);
+      try {
+        return res.json(JSON.parse(text2));
+      } catch {
+        return res.send(text2);
+      }
+    } catch (e) {
+      console.error("POST /api/broker/jobs/:id/send error:", e.message);
+      return res.status(e.status || 502).json({ message: e.message || "Failed to send driver instructions" });
+    }
+  });
+  app2.post("/api/broker/jobs/:id/assign", requireAuth, requireBrokerRole, async (req, res) => {
+    const auth = getWebsiteAuth(req);
+    const jobId = String(req.params.id);
+    const driverId = String(req.body?.driverId || "").trim();
+    const sendNow = req.body?.sendNow === true;
+    if (!driverId) return res.status(400).json({ message: "driverId is required" });
+    try {
+      const before = await pool.query(
+        `SELECT ja.id::text AS id
+           FROM job_assignments ja
+           JOIN jobs j ON j.id = ja.job_id
+          WHERE ja.job_id::text = $1
+            AND j.contractor_id::text = $2
+            AND ja.driver_id::text = $3`,
+        [jobId, auth.userId, driverId]
+      );
+      const existingIds = before.rows.map((row) => String(row.id));
+      const assigned = await websiteFetch(`/api/broker/jobs/${jobId}/assign`, {
+        method: "POST",
+        body: { ...req.body, driverId, sendNow: false },
+        jwt: auth.jwt
+      });
+      const assignedText = await assigned.text();
+      let assignedBody = assignedText;
+      try {
+        assignedBody = JSON.parse(assignedText);
+      } catch {
+      }
+      if (!assigned.ok) {
+        res.status(assigned.status);
+        return typeof assignedBody === "string" ? res.send(assignedBody) : res.json(assignedBody);
+      }
+      let assignmentId = String(
+        assignedBody?.assignmentId || assignedBody?.assignment_id || assignedBody?.assignment?.id || assignedBody?.id || ""
+      ).trim();
+      if (!assignmentId) {
+        const resolved = await pool.query(
+          `SELECT ja.id::text AS id
+             FROM job_assignments ja
+             JOIN jobs j ON j.id = ja.job_id
+            WHERE ja.job_id::text = $1
+              AND j.contractor_id::text = $2
+              AND ja.driver_id::text = $3
+              AND ja.status::text = 'pending'
+              AND ja.sent_at IS NULL
+              AND NOT (ja.id::text = ANY($4::text[]))
+            ORDER BY ja.created_at DESC
+            LIMIT 1`,
+          [jobId, auth.userId, driverId, existingIds]
+        );
+        assignmentId = String(resolved.rows[0]?.id || "");
+      }
+      if (sendNow) {
+        if (!assignmentId) {
+          return res.status(502).json({
+            message: "Truck was added, but instructions could not be sent yet. Use Send on the held assignment."
+          });
+        }
+        const sent = await sendBrokerJobInstructions(jobId, auth.userId, auth.jwt, assignmentId);
+        const sentText = await sent.text();
+        let sentBody = sentText;
+        try {
+          sentBody = JSON.parse(sentText);
+        } catch {
+        }
+        res.status(sent.status);
+        return typeof sentBody === "string" ? res.send(sentBody) : res.json(sentBody);
+      }
+      const responseBody = typeof assignedBody === "object" && assignedBody !== null ? { ...assignedBody, ...assignmentId ? { assignmentId } : {} } : assignedBody;
+      res.status(assigned.status);
+      return typeof responseBody === "string" ? res.send(responseBody) : res.json(responseBody);
+    } catch (e) {
+      console.error("POST /api/broker/jobs/:id/assign error:", e.message);
+      return res.status(e.status || 502).json({ message: e.message || "Failed to assign driver" });
+    }
+  });
   app2.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
   const handleAssignmentResponse = (action) => async (req, res) => {
     const auth = getWebsiteAuth(req);
@@ -4004,11 +4450,57 @@ async function registerRoutes(app2) {
       if (!beforeRow.rows[0] || String(jobContractorId) !== auth.userId) {
         return res.status(403).json({ message: "You do not have permission to update this job" });
       }
+      const clientName = req.body.clientName ?? req.body.client_name;
+      const clientEmail = req.body.clientEmail ?? req.body.client_email ?? "";
+      const clientUserId = req.body.clientUserId ?? req.body.client_user_id ?? "";
+      const companionEditKeys = /* @__PURE__ */ new Set(["clientName", "client_name", "clientEmail", "client_email", "clientUserId", "client_user_id"]);
+      const roleRow = await pool.query(
+        `SELECT role::text AS role FROM users WHERE id::text = $1 LIMIT 1`,
+        [auth.userId]
+      );
+      const isBroker = roleRow.rows[0]?.role === "broker";
+      if (clientName !== void 0) {
+        if (!isBroker) return res.status(403).json({ message: "Broker access required to change a job's client" });
+        const clientKey = String(clientUserId || "").trim();
+        if (!clientKey) return res.status(400).json({ message: "Choose a client from your client list" });
+        const clientErr = await verifyBrokerClient(auth, clientKey);
+        if (clientErr) return res.status(clientErr.status).json({ message: clientErr.message });
+      }
+      const requestedProjectId = req.body.projectId ?? req.body.project_id;
+      if (requestedProjectId !== void 0 && requestedProjectId !== null && String(requestedProjectId)) {
+        if (isBroker) {
+          let clientKey = String(clientUserId || "").trim();
+          if (!clientKey) {
+            const currentLink = await pool.query(
+              `SELECT client_key FROM broker_job_clients WHERE job_id::text = $1 AND broker_id = $2 LIMIT 1`,
+              [req.params.id, auth.userId]
+            );
+            clientKey = String(currentLink.rows[0]?.client_key || "");
+          }
+          if (!clientKey) return res.status(400).json({ message: "Choose a client before changing the job name" });
+          const permitted = await pool.query(
+            `SELECT 1 FROM broker_client_projects
+               WHERE id::text = $1 AND broker_id = $2 AND client_user_id = $3 AND deleted_at IS NULL
+             UNION ALL
+             SELECT 1 FROM contractor_projects
+               WHERE id::text = $1 AND contractor_id::text = $3 AND deleted_at IS NULL
+             LIMIT 1`,
+            [String(requestedProjectId), auth.userId, clientKey]
+          );
+          if (!permitted.rows[0]) return res.status(403).json({ message: "That job name does not belong to the selected client" });
+        } else {
+          const permitted = await pool.query(
+            `SELECT 1 FROM contractor_projects WHERE id::text = $1 AND contractor_id::text = $2 AND deleted_at IS NULL LIMIT 1`,
+            [String(requestedProjectId), auth.userId]
+          );
+          if (!permitted.rows[0]) return res.status(403).json({ message: "That project does not belong to your account" });
+        }
+      }
       const updates = [];
       const values = [];
       let idx = 1;
       for (const [k, v] of Object.entries(req.body)) {
-        if (v !== void 0) {
+        if (v !== void 0 && !companionEditKeys.has(k)) {
           const col = camelToSnake2(k);
           updates.push(`${col} = $${idx}`);
           values.push(v);
@@ -4019,6 +4511,18 @@ async function registerRoutes(app2) {
         updates.push(`updated_at = NOW()`);
         values.push(req.params.id);
         await pool.query(`UPDATE jobs SET ${updates.join(", ")} WHERE id = $${idx}`, values);
+      }
+      if (clientName !== void 0) {
+        await pool.query(
+          `INSERT INTO broker_job_clients (job_id, broker_id, client_key, client_name, client_email)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (job_id) DO UPDATE SET
+             broker_id = EXCLUDED.broker_id,
+             client_key = EXCLUDED.client_key,
+             client_name = EXCLUDED.client_name,
+             client_email = EXCLUDED.client_email`,
+          [req.params.id, auth.userId, String(clientUserId).trim(), String(clientName).trim(), String(clientEmail || "").trim()]
+        );
       }
       const newDateRaw = req.body?.scheduledDate ?? req.body?.scheduled_date;
       const newDate = newDateRaw ? String(newDateRaw).slice(0, 10) : null;
@@ -4060,6 +4564,7 @@ async function registerRoutes(app2) {
         const pushBody = {};
         for (const k of Object.keys(req.body)) {
           if (req.body[k] === void 0) continue;
+          if (companionEditKeys.has(k)) continue;
           if (COMPANION_ONLY_JOB_KEYS.has(k)) continue;
           const col = camelToSnake2(k);
           let v = Object.prototype.hasOwnProperty.call(updatedRow, col) ? updatedRow[col] : req.body[k];
@@ -4125,14 +4630,49 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const { vehicleIds } = req.body || {};
+      const acceptVisibilityFeatures = await getVisibilityFeatures(pool);
+      const visibilitySelect = acceptVisibilityFeatures.jobsVisibility ? `, visibility` : `, NULL::text AS visibility`;
       const jobRow = await pool.query(
-        `SELECT id, contractor_id, driver_id, project_id, COALESCE(trucks_needed, 1)::int AS trucks_needed FROM jobs WHERE id = $1`,
+        `SELECT id, contractor_id, driver_id, project_id${visibilitySelect},
+                COALESCE(trucks_needed, 1)::int AS trucks_needed
+         FROM jobs WHERE id = $1`,
         [req.params.id]
       );
+      if (!jobRow.rows[0]) return res.status(404).json({ message: "Job not found" });
       const contractorId = jobRow.rows[0]?.contractor_id;
       const trucksNeeded = Number(jobRow.rows[0]?.trucks_needed) || 1;
+      const isOwnPostedJob = String(contractorId) === auth.userId;
+      if (isOwnPostedJob) {
+        const fleetRole = await pool.query(
+          `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'trucking_company' LIMIT 1`,
+          [auth.userId]
+        );
+        if (!fleetRole.rows[0] || jobRow.rows[0].visibility !== "public") {
+          return res.status(403).json({ message: "Switch to Trucking Company mode and make this job public before applying a truck" });
+        }
+        if (!Array.isArray(vehicleIds) || vehicleIds.length === 0) {
+          return res.status(400).json({ message: "Select at least one truck" });
+        }
+      }
       const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
       if (privateBlock) return res.status(403).json({ message: privateBlock });
+      if (Array.isArray(vehicleIds) && vehicleIds.length > 0) {
+        const uniqueVehicleIds = [...new Set(vehicleIds.map((v) => String(v)))];
+        if (uniqueVehicleIds.length !== vehicleIds.length) {
+          return res.status(400).json({ message: "Select each truck only once" });
+        }
+        const ownedVehicles = await pool.query(
+          `SELECT id::text AS id FROM trucks
+           WHERE id::text = ANY($1::text[])
+             AND (trucking_company_id::text = $2 OR assigned_driver_id::text = $2)
+             AND COALESCE(is_active, true) = true
+             AND archived_at IS NULL`,
+          [uniqueVehicleIds, auth.userId]
+        );
+        if (ownedVehicles.rows.length !== uniqueVehicleIds.length) {
+          return res.status(403).json({ message: "One or more selected trucks do not belong to your account" });
+        }
+      }
       let isAutoApprove = false;
       if (contractorId) {
         const userRow = await pool.query(`SELECT company FROM users WHERE id::text = $1`, [auth.userId]);
@@ -4364,6 +4904,14 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const { rate, note } = req.body;
+      const ownerCheck = await pool.query(
+        `SELECT contractor_id FROM jobs WHERE id = $1`,
+        [req.params.id]
+      );
+      if (!ownerCheck.rows[0]) return res.status(404).json({ message: "Job not found" });
+      if (String(ownerCheck.rows[0].contractor_id) === auth.userId) {
+        return res.status(403).json({ message: "You cannot counteroffer on your own job" });
+      }
       const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
       if (privateBlock) return res.status(403).json({ message: privateBlock });
       const id = crypto.randomUUID();
@@ -5640,6 +6188,45 @@ async function registerRoutes(app2) {
           }
         } catch {
         }
+      }
+      try {
+        const pending = await pool.query(
+          `SELECT ja.id::text AS assignment_id, ja.job_id::text AS job_id,
+                  ja.sent_at, j.material, j.scheduled_date,
+                  COALESCE(broker.company, broker.full_name, 'Your broker') AS broker_name
+             FROM job_assignments ja
+             JOIN jobs j ON j.id = ja.job_id
+             JOIN users broker ON broker.id::text = j.contractor_id::text
+            WHERE ja.driver_id::text = $1
+              AND ja.status::text = 'pending'
+              AND ja.sent_at IS NOT NULL
+              AND broker.role::text = 'broker'
+            ORDER BY ja.sent_at DESC`,
+          [auth.userId]
+        );
+        for (const p of pending.rows) {
+          const dateKey = p.scheduled_date instanceof Date ? p.scheduled_date.toISOString().slice(0, 10) : String(p.scheduled_date || "").slice(0, 10);
+          const dayLabel = dateKey ? (/* @__PURE__ */ new Date(`${dateKey}T12:00:00Z`)).toLocaleDateString("en-US", {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            timeZone: "UTC"
+          }) : "the scheduled day";
+          result.rows.unshift({
+            id: `broker-assignment:${p.assignment_id}`,
+            user_id: auth.userId,
+            type: "new_load",
+            title: "Instructions need confirmation",
+            message: `${p.broker_name} assigned you to ${p.material || "a job"} on ${dayLabel}. Confirm that you can perform it.`,
+            job_id: p.job_id,
+            is_read: false,
+            created_at: p.sent_at,
+            pendingAssignmentIds: [String(p.assignment_id)],
+            pending_assignment_ids: [String(p.assignment_id)]
+          });
+        }
+      } catch (e) {
+        console.error("GET /api/notifications assignment annotation error:", e.message);
       }
       return res.json(result.rows.map(addDualKeys));
     } catch {
@@ -7056,7 +7643,7 @@ async function registerRoutes(app2) {
         }
         return row;
       }));
-      return res.json(recomputed.map(addDualKeys));
+      return res.json(recomputed.map((r) => addDualKeys(stripAccountingSyncUnlessPayee(r, auth.userId))));
     } catch (e) {
       console.error("GET /api/invoices error:", e.message);
       return res.json([]);
@@ -7093,7 +7680,7 @@ async function registerRoutes(app2) {
         invoice.jobs = calc.jobs.map(addDualKeys);
         invoice.total_amount = calc.total;
         invoice.job_count = calc.jobCount;
-        return res.json(addDualKeys(invoice));
+        return res.json(addDualKeys(stripAccountingSyncUnlessPayee(invoice, auth.userId)));
       }
       return res.status(404).json({ message: "Invoice not found" });
     } catch (e) {
@@ -7114,7 +7701,7 @@ async function registerRoutes(app2) {
       pushToWebsite(`/api/invoices/${req.params.id}/status`, auth, { method: "POST", body: req.body }).catch(() => {
       });
       const result = await pool.query(`SELECT * FROM monthly_invoices WHERE id = $1`, [req.params.id]);
-      return res.json(addDualKeys(result.rows[0] || {}));
+      return res.json(addDualKeys(stripAccountingSyncUnlessPayee(result.rows[0] || {}, auth.userId)));
     } catch {
       return res.status(500).json({ message: "Failed to update invoice status" });
     }

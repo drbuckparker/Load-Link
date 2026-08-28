@@ -19,6 +19,7 @@ function mapNotification(n: any): Notification {
     jobId: n.job_id ?? n.jobId,
     isRead: n.is_read ?? n.isRead ?? false,
     createdAt: n.created_at ?? n.createdAt ?? '',
+    pendingAssignmentIds: n.pending_assignment_ids ?? n.pendingAssignmentIds ?? [],
   };
 }
 
@@ -79,6 +80,28 @@ export default function NotificationsScreen() {
 
   const notifications = (notifsData || []).map(mapNotification);
   const unreadCount = notifications.filter(n => !n.isRead).length;
+
+  const assignmentResponseMutation = useMutation({
+    mutationFn: async ({ assignmentId, action }: { assignmentId: string; action: 'confirm' | 'decline' }) =>
+      apiRequest('POST', `/api/assignments/${assignmentId}/${action}`, {}),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      infoDialog(
+        vars.action === 'confirm' ? 'Job confirmed' : 'Broker notified',
+        vars.action === 'confirm'
+          ? "You're confirmed for this job."
+          : "The broker knows you can't take this job and can reassign the truck."
+      );
+    },
+    onError: (e: any) => {
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      infoDialog('Could not respond', e?.message || 'Please try again.');
+    },
+  });
 
   // Pending roster invites — tapping a roster-invite notification lets the
   // user accept right here. (The My Jobs invite banner is driver-only; company
@@ -221,6 +244,7 @@ export default function NotificationsScreen() {
         renderItem={({ item }) => {
           const iconName = getNotifIcon(item.type);
           const iconColor = getNotifColor(item.type);
+          const pendingAssignmentIds = item.pendingAssignmentIds || [];
 
           return (
             <Pressable
@@ -240,6 +264,51 @@ export default function NotificationsScreen() {
                   <Text style={styles.notifTime}>{timeAgo(item.createdAt)}</Text>
                 </View>
                 <Text style={styles.notifMessage} numberOfLines={2}>{item.message}</Text>
+                {pendingAssignmentIds.map((pendingAssignmentId: string, index: number) => (
+                  <View key={pendingAssignmentId} style={styles.assignmentResponseBlock}>
+                    {pendingAssignmentIds.length > 1 ? (
+                      <Text style={styles.assignmentResponseLabel}>TRUCK {index + 1} — PLEASE RESPOND</Text>
+                    ) : null}
+                    <View style={styles.assignmentActions} testID={`notification-confirm-${pendingAssignmentId}`}>
+                    <Pressable
+                      disabled={assignmentResponseMutation.isPending}
+                      style={({ pressed }) => [
+                        styles.assignmentAction,
+                        styles.assignmentDecline,
+                        (pressed || assignmentResponseMutation.isPending) && styles.assignmentActionPressed,
+                      ]}
+                      onPress={(event) => {
+                        event.stopPropagation?.();
+                        assignmentResponseMutation.mutate({
+                          assignmentId: pendingAssignmentId,
+                          action: 'decline',
+                        });
+                      }}
+                    >
+                      <Ionicons name="thumbs-down" size={16} color={Colors.destructive} />
+                      <Text style={styles.assignmentDeclineText}>CAN'T DO IT</Text>
+                    </Pressable>
+                    <Pressable
+                      disabled={assignmentResponseMutation.isPending}
+                      style={({ pressed }) => [
+                        styles.assignmentAction,
+                        styles.assignmentConfirm,
+                        (pressed || assignmentResponseMutation.isPending) && styles.assignmentActionPressed,
+                      ]}
+                      onPress={(event) => {
+                        event.stopPropagation?.();
+                        assignmentResponseMutation.mutate({
+                          assignmentId: pendingAssignmentId,
+                          action: 'confirm',
+                        });
+                      }}
+                    >
+                      <Ionicons name="thumbs-up" size={16} color={Colors.primaryForeground} />
+                      <Text style={styles.assignmentConfirmText}>CONFIRM</Text>
+                    </Pressable>
+                    </View>
+                  </View>
+                ))}
               </View>
               {!item.isRead && <View style={styles.unreadDot} />}
             </Pressable>
@@ -313,6 +382,54 @@ const styles = StyleSheet.create({
   },
   notifCardPressed: {
     backgroundColor: Colors.cardHover,
+  },
+  assignmentActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
+  assignmentResponseBlock: {
+    marginTop: 12,
+  },
+  assignmentResponseLabel: {
+    color: Colors.primary,
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 10,
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  assignmentAction: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    borderWidth: 1,
+  },
+  assignmentDecline: {
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderColor: Colors.destructive,
+  },
+  assignmentConfirm: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  assignmentActionPressed: {
+    opacity: 0.65,
+  },
+  assignmentDeclineText: {
+    color: Colors.destructive,
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    letterSpacing: 0.4,
+  },
+  assignmentConfirmText: {
+    color: Colors.primaryForeground,
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 11,
+    letterSpacing: 0.4,
   },
   notifIcon: {
     width: 38,

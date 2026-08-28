@@ -26,13 +26,13 @@ async function deliverPush(
   tokens: { expoToken?: string | null; apnsToken?: string | null },
   msg: ExpoPushMessage,
   label: string
-): Promise<void> {
+): Promise<boolean> {
   if (tokens.apnsToken && apnsConfigured()) {
     const r = await sendApnsPush(tokens.apnsToken, msg);
-    if (r.ok) return;
+    if (r.ok) return true;
     console.error(`${label} APNs send failed (${r.status || ''} ${r.reason || ''}) — falling back to Expo`);
   }
-  if (!tokens.expoToken) return;
+  if (!tokens.expoToken) return false;
   try {
     const res = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
@@ -41,24 +41,37 @@ async function deliverPush(
     });
     const tickets = await res.json().catch(() => null);
     const t = Array.isArray(tickets?.data) ? tickets.data[0] : tickets?.data;
-    if (t?.status === 'error') console.error(`${label} Expo push ticket error:`, JSON.stringify(t));
+    if (t?.status === 'error') {
+      console.error(`${label} Expo push ticket error:`, JSON.stringify(t));
+      return false;
+    }
+    return res.ok && t?.status === 'ok';
   } catch (e: any) {
     console.error(`${label} Expo push send error:`, e.message);
+    return false;
   }
 }
 
-async function sendPushNotification(userId: string, title: string, body: string, data?: Record<string, any>, sound: string = 'default') {
+async function sendPushNotification(
+  userId: string,
+  title: string,
+  body: string,
+  data?: Record<string, any>,
+  sound: string = 'default',
+  collapseId?: string,
+): Promise<boolean> {
   try {
     const result = await pool.query(`SELECT expo_push_token, apns_device_token FROM users WHERE id::text = $1 LIMIT 1`, [userId]);
     const row = result.rows[0];
-    if (!row || (!row.expo_push_token && !row.apns_device_token)) return;
+    if (!row || (!row.expo_push_token && !row.apns_device_token)) return false;
     // buildExpoPushMessage guarantees an explicit iOS sound (omitting it makes
     // APNs deliver silently) and an interruptionLevel; channelId/priority
     // cover Android via the client-created 'default' channel.
-    const message = buildExpoPushMessage({ to: row.expo_push_token || '', title, body, data, sound });
-    await deliverPush({ expoToken: row.expo_push_token, apnsToken: row.apns_device_token }, message, 'Push');
+    const message = buildExpoPushMessage({ to: row.expo_push_token || '', title, body, data, sound, collapseId });
+    return await deliverPush({ expoToken: row.expo_push_token, apnsToken: row.apns_device_token }, message, 'Push');
   } catch (e: any) {
     console.error('Push notification error:', e.message);
+    return false;
   }
 }
 
@@ -486,6 +499,191 @@ async function reacquireBrokerJwt(brokerId: string): Promise<string | null> {
   }
 }
 
+// Durable outbox for the phone alert that accompanies a broker's "send
+// instructions" action. The website owns assignment state and creates the
+// in-app notification; the companion owns phone delivery. A primary key on
+// assignment_id prevents retries, overlapping workers, or repeated send-all
+// taps from producing duplicate pushes.
+async function ensureBrokerInstructionPushOutbox() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS broker_assignment_push_deliveries (
+      assignment_id text PRIMARY KEY,
+      driver_id text NOT NULL,
+      job_id text NOT NULL,
+      claimed_at timestamptz,
+      attempted_at timestamptz,
+      delivered_at timestamptz,
+      attempts integer NOT NULL DEFAULT 0,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE broker_assignment_push_deliveries
+      ADD COLUMN IF NOT EXISTS attempted_at timestamptz
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_bapd_pending
+      ON broker_assignment_push_deliveries (delivered_at, claimed_at)
+  `);
+}
+
+async function enqueueHeldBrokerAssignments(
+  jobId: string,
+  brokerId: string,
+  assignmentId?: string,
+): Promise<void> {
+  if (assignmentId) {
+    const valid = await pool.query(
+      `SELECT 1
+         FROM job_assignments ja
+         JOIN jobs j ON j.id = ja.job_id
+        WHERE ja.id::text = $1
+          AND ja.job_id::text = $2
+          AND j.contractor_id::text = $3
+          AND ja.status::text = 'pending'
+          AND ja.sent_at IS NULL
+        LIMIT 1`,
+      [assignmentId, jobId, brokerId]
+    );
+    if (!valid.rowCount) {
+      const error: any = new Error("Assignment is not held on this broker job");
+      error.status = 409;
+      throw error;
+    }
+  }
+  await pool.query(
+    `INSERT INTO broker_assignment_push_deliveries (assignment_id, driver_id, job_id)
+     SELECT ja.id::text, ja.driver_id::text, ja.job_id::text
+       FROM job_assignments ja
+       JOIN jobs j ON j.id = ja.job_id
+      WHERE ja.job_id::text = $1
+        AND j.contractor_id::text = $2
+        AND ja.status::text = 'pending'
+        AND ja.sent_at IS NULL
+         AND ($3::text IS NULL OR ja.id::text = $3)
+     ON CONFLICT (assignment_id) DO NOTHING
+     RETURNING assignment_id`,
+    [jobId, brokerId, assignmentId || null]
+  );
+}
+
+async function deliverPendingBrokerInstructionPushes(jobId?: string, assignmentId?: string): Promise<number> {
+  const params: any[] = [];
+  const filters: string[] = [];
+  if (jobId) {
+    params.push(jobId);
+    filters.push(`AND o2.job_id = $${params.length}`);
+  }
+  if (assignmentId) {
+    params.push(assignmentId);
+    filters.push(`AND o2.assignment_id = $${params.length}`);
+  }
+  // Claim only rows whose authoritative assignment is now sent. Claims are a
+  // recoverable lease so a server restart cannot permanently lose a push.
+  // Provider collapse IDs coalesce a replay of the same assignment if a crash
+  // occurs after provider acceptance but before delivered_at is persisted.
+  const claimed = await pool.query(
+    `UPDATE broker_assignment_push_deliveries o
+        SET claimed_at = NOW(), attempted_at = NOW(), attempts = attempts + 1, error = NULL
+      WHERE o.assignment_id IN (
+        SELECT o2.assignment_id
+          FROM broker_assignment_push_deliveries o2
+          JOIN job_assignments ja ON ja.id::text = o2.assignment_id
+         WHERE o2.delivered_at IS NULL
+           AND o2.attempts < 3
+           AND (o2.claimed_at IS NULL OR o2.claimed_at < NOW() - INTERVAL '5 minutes')
+           AND ja.sent_at IS NOT NULL
+           AND ja.status::text = 'pending'
+            ${filters.join("\n            ")}
+         ORDER BY o2.created_at ASC
+         LIMIT 50
+         FOR UPDATE OF o2 SKIP LOCKED
+      )
+      RETURNING o.assignment_id, o.driver_id, o.job_id`,
+    params
+  );
+
+  let delivered = 0;
+  for (const row of claimed.rows) {
+    try {
+      const info = await pool.query(
+        `SELECT j.material, j.scheduled_date, u.company AS broker_company, u.full_name AS broker_name
+           FROM jobs j
+           LEFT JOIN users u ON u.id::text = j.contractor_id::text
+          WHERE j.id::text = $1 LIMIT 1`,
+        [String(row.job_id)]
+      );
+      const j = info.rows[0] || {};
+      const rawDate = j.scheduled_date instanceof Date
+        ? j.scheduled_date.toISOString()
+        : String(j.scheduled_date || "");
+      const dateKey = rawDate.slice(0, 10);
+      const dayLabel = dateKey
+        ? new Date(`${dateKey}T12:00:00Z`).toLocaleDateString("en-US", {
+            weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
+          })
+        : "your upcoming job";
+      const brokerLabel = j.broker_company || j.broker_name || "Your broker";
+      const title = "Job instructions ready — confirm";
+      const body = `${brokerLabel} sent instructions for ${j.material || "your job"} on ${dayLabel}. Tap to confirm or decline.`;
+      const ok = await sendPushNotification(String(row.driver_id), title, body, {
+        type: "broker_assignment",
+        jobId: String(row.job_id),
+        assignmentId: String(row.assignment_id),
+      }, "default", `broker-assignment-${String(row.assignment_id)}`);
+      if (ok) {
+        await pool.query(
+          `UPDATE broker_assignment_push_deliveries
+              SET delivered_at = NOW(), claimed_at = NULL, error = NULL
+            WHERE assignment_id = $1`,
+          [String(row.assignment_id)]
+        );
+        delivered++;
+      } else {
+        await pool.query(
+          `UPDATE broker_assignment_push_deliveries
+              SET claimed_at = NULL,
+                  error = 'No registered device token or push provider rejected delivery'
+            WHERE assignment_id = $1`,
+          [String(row.assignment_id)]
+        );
+      }
+    } catch (e: any) {
+      await pool.query(
+        `UPDATE broker_assignment_push_deliveries
+            SET claimed_at = NULL, error = $2
+          WHERE assignment_id = $1`,
+        [String(row.assignment_id), String(e?.message || e).slice(0, 500)]
+      ).catch(() => {});
+    }
+  }
+  return delivered;
+}
+
+async function sendBrokerJobInstructions(
+  jobId: string,
+  brokerId: string,
+  jwt: string,
+  assignmentId?: string,
+) {
+  await enqueueHeldBrokerAssignments(jobId, brokerId, assignmentId);
+  const response = await websiteFetch(
+    `/api/broker/jobs/${jobId}/${assignmentId ? "send" : "send-all"}`,
+    {
+      method: "POST",
+      body: assignmentId ? { assignmentId } : {},
+      jwt,
+    }
+  );
+  if (response.ok) {
+    await deliverPendingBrokerInstructionPushes(jobId, assignmentId).catch((e: any) =>
+      console.error(`[BrokerSend] driver push error for job ${jobId}:`, e.message)
+    );
+  }
+  return response;
+}
+
 // Fires broker "send instructions at HH:MM" schedules: when one comes due,
 // send-all the held assignments on every job that broker has on that date.
 // Recover rows stuck in 'processing' after a crash/redeploy mid-send: the
@@ -590,7 +788,7 @@ async function processDueBrokerScheduledSends() {
             (a: any) => (a.sentAt ?? a.sent_at) == null && a.status !== "declined" && a.status !== "withdrawn"
           ));
         if (!held) continue;
-        const sr = await websiteFetch(`/api/broker/jobs/${job.id}/send-all`, { method: "POST", body: {}, jwt });
+        const sr = await sendBrokerJobInstructions(String(job.id), String(row.broker_id), jwt);
         if (sr.ok) sentJobs++;
         else {
           failedJobs.push(String(job.id));
@@ -642,6 +840,9 @@ function sweepOldBrokerScheduledSends() {
 }
 
 function startBrokerScheduledSendWorker() {
+  ensureBrokerInstructionPushOutbox()
+    .then(() => deliverPendingBrokerInstructionPushes())
+    .catch((e) => console.error("[BrokerSend] instruction push outbox init error:", e?.message || e));
   sweepOldBrokerScheduledSends();
   // Idempotent migration: older deployments' table predates claimed_at, and
   // the claim/recovery queries below reference it.
@@ -653,6 +854,7 @@ function startBrokerScheduledSendWorker() {
     .catch(() => {});
   setInterval(() => { recoverStuckBrokerScheduledSends().catch(() => {}); }, 5 * 60 * 1000);
   setInterval(() => { processDueBrokerScheduledSends().catch(() => {}); }, 60000);
+  setInterval(() => { deliverPendingBrokerInstructionPushes().catch(() => {}); }, 60000);
   // Daily sweep so long-lived deployed instances stay bounded, not just fresh
   // restarts.
   setInterval(sweepOldBrokerScheduledSends, 24 * 60 * 60 * 1000);
@@ -1156,6 +1358,9 @@ function airMilesToLeg(
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Routes and scheduled workers share this durable outbox. Initialize it
+  // before the server begins accepting instruction-send requests.
+  await ensureBrokerInstructionPushOutbox();
   function requireAuth(req: Request, res: Response, next: Function) {
     const auth = getWebsiteAuth(req);
     if (auth) {
@@ -3166,6 +3371,127 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (e: any) {
       console.error("POST /api/broker/assignments/swap error:", e.message);
       return res.status(500).json({ message: "Failed to switch trucks" });
+    }
+  });
+
+  // Add companion-owned phone delivery around the website's authoritative
+  // send-all action. Scheduled sends call the same helper above.
+  app.post("/api/broker/jobs/:id/send-all", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    try {
+      const up = await sendBrokerJobInstructions(String(req.params.id), auth.userId, auth.jwt);
+      const text = await up.text();
+      res.status(up.status);
+      try { return res.json(JSON.parse(text)); } catch { return res.send(text); }
+    } catch (e: any) {
+      console.error("POST /api/broker/jobs/:id/send-all error:", e.message);
+      return res.status(502).json({ message: "Failed to send driver instructions" });
+    }
+  });
+
+  // The Truck Confirmations card can send one held assignment at a time.
+  // Keep that path on the same durable phone-delivery wrapper as send-all.
+  app.post("/api/broker/jobs/:id/send", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const assignmentId = String(req.body?.assignmentId || "").trim();
+    if (!assignmentId) return res.status(400).json({ message: "assignmentId is required" });
+    try {
+      const up = await sendBrokerJobInstructions(
+        String(req.params.id),
+        auth.userId,
+        auth.jwt,
+        assignmentId,
+      );
+      const text = await up.text();
+      res.status(up.status);
+      try { return res.json(JSON.parse(text)); } catch { return res.send(text); }
+    } catch (e: any) {
+      console.error("POST /api/broker/jobs/:id/send error:", e.message);
+      return res.status(e.status || 502).json({ message: e.message || "Failed to send driver instructions" });
+    }
+  });
+
+  // Assigning with "Send instructions now" must not bypass durable phone
+  // delivery. Create the assignment held first, then use the same wrapped
+  // single-assignment send path. If the second step is interrupted, the held
+  // assignment remains visible for a safe manual retry.
+  app.post("/api/broker/jobs/:id/assign", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    const jobId = String(req.params.id);
+    const driverId = String(req.body?.driverId || "").trim();
+    const sendNow = req.body?.sendNow === true;
+    if (!driverId) return res.status(400).json({ message: "driverId is required" });
+    try {
+      const before = await pool.query(
+        `SELECT ja.id::text AS id
+           FROM job_assignments ja
+           JOIN jobs j ON j.id = ja.job_id
+          WHERE ja.job_id::text = $1
+            AND j.contractor_id::text = $2
+            AND ja.driver_id::text = $3`,
+        [jobId, auth.userId, driverId]
+      );
+      const existingIds = before.rows.map((row: any) => String(row.id));
+      const assigned = await websiteFetch(`/api/broker/jobs/${jobId}/assign`, {
+        method: "POST",
+        body: { ...req.body, driverId, sendNow: false },
+        jwt: auth.jwt,
+      });
+      const assignedText = await assigned.text();
+      let assignedBody: any = assignedText;
+      try { assignedBody = JSON.parse(assignedText); } catch {}
+      if (!assigned.ok) {
+        res.status(assigned.status);
+        return typeof assignedBody === "string" ? res.send(assignedBody) : res.json(assignedBody);
+      }
+
+      let assignmentId = String(
+        assignedBody?.assignmentId ||
+        assignedBody?.assignment_id ||
+        assignedBody?.assignment?.id ||
+        assignedBody?.id ||
+        ""
+      ).trim();
+      if (!assignmentId) {
+        const resolved = await pool.query(
+          `SELECT ja.id::text AS id
+             FROM job_assignments ja
+             JOIN jobs j ON j.id = ja.job_id
+            WHERE ja.job_id::text = $1
+              AND j.contractor_id::text = $2
+              AND ja.driver_id::text = $3
+              AND ja.status::text = 'pending'
+              AND ja.sent_at IS NULL
+              AND NOT (ja.id::text = ANY($4::text[]))
+            ORDER BY ja.created_at DESC
+            LIMIT 1`,
+          [jobId, auth.userId, driverId, existingIds]
+        );
+        assignmentId = String(resolved.rows[0]?.id || "");
+      }
+
+      if (sendNow) {
+        if (!assignmentId) {
+          return res.status(502).json({
+            message: "Truck was added, but instructions could not be sent yet. Use Send on the held assignment.",
+          });
+        }
+        const sent = await sendBrokerJobInstructions(jobId, auth.userId, auth.jwt, assignmentId);
+        const sentText = await sent.text();
+        let sentBody: any = sentText;
+        try { sentBody = JSON.parse(sentText); } catch {}
+        res.status(sent.status);
+        return typeof sentBody === "string" ? res.send(sentBody) : res.json(sentBody);
+      }
+
+      const responseBody = typeof assignedBody === "object" && assignedBody !== null
+        ? { ...assignedBody, ...(assignmentId ? { assignmentId } : {}) }
+        : assignedBody;
+      res.status(assigned.status);
+      return typeof responseBody === "string" ? res.send(responseBody) : res.json(responseBody);
+    } catch (e: any) {
+      console.error("POST /api/broker/jobs/:id/assign error:", e.message);
+      return res.status(e.status || 502).json({ message: e.message || "Failed to assign driver" });
     }
   });
 
@@ -5251,6 +5577,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
             pool.query(`UPDATE notifications SET job_id = $1 WHERE id = $2`, [row.job_id, row.id]).catch(() => {});
           }
         } catch {}
+      }
+      // Return one synthetic, assignment-keyed confirmation item for every
+      // sent broker assignment still awaiting a response. It is independent
+      // of the 50-row inbox limit and never attaches controls to an unrelated
+      // same-job notification. Once the driver responds, the pending row no
+      // longer matches and this item disappears automatically.
+      try {
+        const pending = await pool.query(
+          `SELECT ja.id::text AS assignment_id, ja.job_id::text AS job_id,
+                  ja.sent_at, j.material, j.scheduled_date,
+                  COALESCE(broker.company, broker.full_name, 'Your broker') AS broker_name
+             FROM job_assignments ja
+             JOIN jobs j ON j.id = ja.job_id
+             JOIN users broker ON broker.id::text = j.contractor_id::text
+            WHERE ja.driver_id::text = $1
+              AND ja.status::text = 'pending'
+              AND ja.sent_at IS NOT NULL
+              AND broker.role::text = 'broker'
+            ORDER BY ja.sent_at DESC`,
+          [auth.userId]
+        );
+        for (const p of pending.rows) {
+          const dateKey = p.scheduled_date instanceof Date
+            ? p.scheduled_date.toISOString().slice(0, 10)
+            : String(p.scheduled_date || "").slice(0, 10);
+          const dayLabel = dateKey
+            ? new Date(`${dateKey}T12:00:00Z`).toLocaleDateString("en-US", {
+                weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
+              })
+            : "the scheduled day";
+          result.rows.unshift({
+            id: `broker-assignment:${p.assignment_id}`,
+            user_id: auth.userId,
+            type: "new_load",
+            title: "Instructions need confirmation",
+            message: `${p.broker_name} assigned you to ${p.material || "a job"} on ${dayLabel}. Confirm that you can perform it.`,
+            job_id: p.job_id,
+            is_read: false,
+            created_at: p.sent_at,
+            pendingAssignmentIds: [String(p.assignment_id)],
+            pending_assignment_ids: [String(p.assignment_id)],
+          });
+        }
+      } catch (e: any) {
+        console.error("GET /api/notifications assignment annotation error:", e.message);
       }
       return res.json(result.rows.map(addDualKeys));
     } catch {

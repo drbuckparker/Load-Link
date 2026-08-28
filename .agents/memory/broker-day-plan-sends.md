@@ -1,13 +1,12 @@
 ---
-name: Broker day-plan scheduled sends
-description: How the broker "send instructions at X time" feature works and its session-JWT dependency
+name: Broker instruction-send ownership
+description: Durable boundaries for broker instruction state, delayed authorization, phone delivery, and confirmation
 ---
 
-Broker Day Plan tab stages held (sent_at NULL) assignments, then sends all held instructions for a date either immediately (client loops POST /api/broker/jobs/:id/send-all) or at a scheduled time via the companion-local `broker_scheduled_sends` table (one pending row per broker/date; tz_offset_min stored for day-bucketing timestamped job dates).
+The website remains authoritative for assignment state and ordinary inbox history. Delayed sends still require the broker's persisted or safely re-acquired user authorization; server-to-server API trust alone cannot act as the broker.
 
-**Why:** actual sending happens upstream on the website and requires the broker's *user* JWT — the server-to-server X-API-Key alone is not enough. The 60s worker (`processDueBrokerScheduledSends`) pulls the broker's latest non-dev JWT from the persisted `tokenToJwt` session map.
+The companion owns driver phone delivery. Every instruction-send mode—send while assigning, single, bulk, and scheduled—must share one durable, assignment-keyed delivery path.
 
-**How to apply:**
-- If the broker has no persisted real login session when the timer fires, the worker re-acquires a JWT via the email-only companion login (API-key trust, same endpoint as the interactive login fallback) before failing; only if re-auth is also refused is the row marked `failed`. Any feature that acts later on a user's behalf can use the same re-auth pattern.
-- Worker claims rows atomically (`pending`→`processing` with FOR UPDATE SKIP LOCKED); partial per-job failures re-queue as `pending` up to 5 attempts, then `failed`.
-- Companion-only table in the shared website DB (per companion-db-topology); schema changes must be hand-applied there.
+**Why:** website sends alone do not wake the phone, and splitting delivery by UI path lets one mode silently skip the alert. Pending confirmations may also outlive ordinary inbox pagination.
+
+**How to apply:** preserve authoritative website state, retain user-level authorization for deferred work, key push delivery and responses by assignment, collapse retries to that key, and expose pending confirmation independently of inbox limits.
