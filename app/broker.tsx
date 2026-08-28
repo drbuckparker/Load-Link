@@ -479,7 +479,6 @@ export default function BrokerDashboardScreen() {
       await queryClient.refetchQueries({ queryKey: ['/api/broker/jobs'] });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
-    onError: (e: any) => Alert.alert('Error', e.message || 'Failed to assign driver'),
   });
 
   const [selectedAssign, setSelectedAssign] = useState<Set<string>>(new Set());
@@ -498,16 +497,28 @@ export default function BrokerDashboardScreen() {
     haptic(Haptics.ImpactFeedbackStyle.Medium);
     const count = selectedAssign.size;
     let ok = 0;
+    const failed = new Set<string>();
+    let failureMessage = '';
     for (const driverId of Array.from(selectedAssign)) {
       try {
         await assignMutation.mutateAsync({ jobId: assignJob.id, driverId, sendNow });
         ok++;
-      } catch {
-        // assignMutation.onError already alerts; keep going for the rest.
+      } catch (e: any) {
+        failed.add(driverId);
+        if (!failureMessage) failureMessage = e?.message || 'Failed to assign truck';
       }
     }
-    setSelectedAssign(new Set());
-    if (ok > 0) {
+    setSelectedAssign(failed);
+    if (failed.size > 0) {
+      await queryClient.refetchQueries({ queryKey: ['/api/broker/jobs'] });
+      const msg = failureMessage || 'One or more trucks could not be assigned. They remain selected so you can try again.';
+      if (Platform.OS === 'web') {
+        if (typeof window !== 'undefined') window.alert(msg);
+      } else {
+        Alert.alert('Could Not Send', msg);
+      }
+    }
+    if (ok > 0 && failed.size === 0) {
       // Close the sheet and tell the user where the held sends went.
       setAssignJob(null);
       const msg = sendNow
@@ -518,8 +529,8 @@ export default function BrokerDashboardScreen() {
       } else {
         Alert.alert(sendNow ? 'Instructions Sent' : 'Trucks Added', msg);
       }
-    } else if (count > 0) {
-      // all failed — assignMutation.onError already surfaced the reason
+    } else if (count > 0 && failed.size > 0) {
+      // Keep the sheet open and failed rows selected for an explicit retry.
     }
   };
 

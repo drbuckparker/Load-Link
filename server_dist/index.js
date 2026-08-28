@@ -1863,44 +1863,115 @@ async function ensureBrokerInstructionPushOutbox() {
       ADD COLUMN IF NOT EXISTS attempted_at timestamptz
   `);
   await pool.query(`
+    ALTER TABLE broker_assignment_push_deliveries
+      ADD COLUMN IF NOT EXISTS ready_at timestamptz
+  `);
+  await pool.query(`
+    UPDATE broker_assignment_push_deliveries o
+       SET ready_at = COALESCE(o.attempted_at, NOW())
+      FROM job_assignments ja
+     WHERE o.assignment_id = ja.id::text
+       AND ja.sent_at IS NOT NULL
+       AND o.ready_at IS NULL
+  `);
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_bapd_pending
       ON broker_assignment_push_deliveries (delivered_at, claimed_at)
   `);
 }
-async function enqueueHeldBrokerAssignments(jobId, brokerId, assignmentId) {
+async function enqueueHeldBrokerAssignments(jobId, brokerId, jwt, assignmentId) {
+  const upstream = await websiteFetch(
+    `/api/broker/jobs/${encodeURIComponent(jobId)}/assignments`,
+    { method: "GET", jwt }
+  );
+  if (upstream.ok) {
+    const list = await upstream.json().catch(() => []);
+    const held = (Array.isArray(list) ? list : []).filter((a) => {
+      const id = String(a.id || a.assignmentId || a.assignment_id || "");
+      const status = String(a.status || "").toLowerCase();
+      const sentAt = Object.prototype.hasOwnProperty.call(a, "sentAt") ? a.sentAt : a.sent_at;
+      return (!assignmentId || id === assignmentId) && ["pending", "accepted", "approved", "assigned"].includes(status) && !sentAt;
+    });
+    if (assignmentId && held.length === 0) {
+      const error2 = new Error("Assignment is not held on this broker job");
+      error2.status = 409;
+      throw error2;
+    }
+    for (const a of held) {
+      const id = String(a.id || a.assignmentId || a.assignment_id);
+      const driverId = String(a.driverId || a.driver_id || a.driver?.id || "");
+      if (!id || !driverId) continue;
+      await pool.query(
+        `INSERT INTO broker_assignment_push_deliveries (assignment_id, driver_id, job_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (assignment_id) DO NOTHING`,
+        [id, driverId, jobId]
+      );
+    }
+    return;
+  }
+  const error = new Error("Could not verify held assignments");
+  error.status = upstream.status || 502;
+  throw error;
+}
+async function reconcileDormantBrokerInstructionPushes(jobId, assignmentId) {
+  const params = [];
+  const filters = [];
+  if (jobId) {
+    params.push(jobId);
+    filters.push(`AND o.job_id = $${params.length}`);
+  }
   if (assignmentId) {
-    const valid = await pool.query(
-      `SELECT 1
-         FROM job_assignments ja
-         JOIN jobs j ON j.id = ja.job_id
-        WHERE ja.id::text = $1
-          AND ja.job_id::text = $2
-          AND j.contractor_id::text = $3
-          AND ja.status::text = 'pending'
-          AND ja.sent_at IS NULL
-        LIMIT 1`,
-      [assignmentId, jobId, brokerId]
-    );
-    if (!valid.rowCount) {
-      const error = new Error("Assignment is not held on this broker job");
-      error.status = 409;
-      throw error;
+    params.push(assignmentId);
+    filters.push(`AND o.assignment_id = $${params.length}`);
+  }
+  const dormant = await pool.query(
+    `SELECT o.assignment_id, o.driver_id, o.job_id, j.contractor_id::text AS broker_id
+       FROM broker_assignment_push_deliveries o
+       JOIN jobs j ON j.id::text = o.job_id
+      WHERE o.delivered_at IS NULL
+        AND o.ready_at IS NULL
+        ${filters.join("\n        ")}
+      ORDER BY o.created_at ASC
+      LIMIT 100`,
+    params
+  );
+  const byJob = /* @__PURE__ */ new Map();
+  for (const row of dormant.rows) {
+    const key = String(row.job_id);
+    if (!byJob.has(key)) byJob.set(key, []);
+    byJob.get(key).push(row);
+  }
+  for (const [pendingJobId, rows] of byJob) {
+    const brokerId = String(rows[0]?.broker_id || "");
+    const jwt = brokerId ? await reacquireBrokerJwt(brokerId) : null;
+    if (!jwt) continue;
+    try {
+      const response = await websiteFetch(
+        `/api/broker/jobs/${encodeURIComponent(pendingJobId)}/assignments`,
+        { method: "GET", jwt }
+      );
+      if (!response.ok) continue;
+      const assignments = await response.json().catch(() => []);
+      if (!Array.isArray(assignments)) continue;
+      for (const row of rows) {
+        const assignment = assignments.find((a) => String(a.id || a.assignmentId || a.assignment_id || "") === String(row.assignment_id));
+        if (!assignment) continue;
+        const sentAt = Object.prototype.hasOwnProperty.call(assignment, "sentAt") ? assignment.sentAt : assignment.sent_at;
+        if (!sentAt) continue;
+        await pool.query(
+          `UPDATE broker_assignment_push_deliveries
+              SET ready_at = NOW()
+            WHERE assignment_id = $1
+              AND delivered_at IS NULL
+              AND ready_at IS NULL`,
+          [String(row.assignment_id)]
+        );
+      }
+    } catch (e) {
+      console.error(`[BrokerSend] dormant outbox reconciliation failed for ${pendingJobId}:`, e.message);
     }
   }
-  await pool.query(
-    `INSERT INTO broker_assignment_push_deliveries (assignment_id, driver_id, job_id)
-     SELECT ja.id::text, ja.driver_id::text, ja.job_id::text
-       FROM job_assignments ja
-       JOIN jobs j ON j.id = ja.job_id
-      WHERE ja.job_id::text = $1
-        AND j.contractor_id::text = $2
-        AND ja.status::text = 'pending'
-        AND ja.sent_at IS NULL
-         AND ($3::text IS NULL OR ja.id::text = $3)
-     ON CONFLICT (assignment_id) DO NOTHING
-     RETURNING assignment_id`,
-    [jobId, brokerId, assignmentId || null]
-  );
 }
 async function deliverPendingBrokerInstructionPushes(jobId, assignmentId) {
   const params = [];
@@ -1919,12 +1990,10 @@ async function deliverPendingBrokerInstructionPushes(jobId, assignmentId) {
       WHERE o.assignment_id IN (
         SELECT o2.assignment_id
           FROM broker_assignment_push_deliveries o2
-          JOIN job_assignments ja ON ja.id::text = o2.assignment_id
          WHERE o2.delivered_at IS NULL
+           AND o2.ready_at IS NOT NULL
            AND o2.attempts < 3
            AND (o2.claimed_at IS NULL OR o2.claimed_at < NOW() - INTERVAL '5 minutes')
-           AND ja.sent_at IS NOT NULL
-           AND ja.status::text = 'pending'
             ${filters.join("\n            ")}
          ORDER BY o2.created_at ASC
          LIMIT 50
@@ -1990,7 +2059,7 @@ async function deliverPendingBrokerInstructionPushes(jobId, assignmentId) {
   return delivered;
 }
 async function sendBrokerJobInstructions(jobId, brokerId, jwt, assignmentId) {
-  await enqueueHeldBrokerAssignments(jobId, brokerId, assignmentId);
+  await enqueueHeldBrokerAssignments(jobId, brokerId, jwt, assignmentId);
   const response = await websiteFetch(
     `/api/broker/jobs/${jobId}/${assignmentId ? "send" : "send-all"}`,
     {
@@ -2000,6 +2069,14 @@ async function sendBrokerJobInstructions(jobId, brokerId, jwt, assignmentId) {
     }
   );
   if (response.ok) {
+    await pool.query(
+      `UPDATE broker_assignment_push_deliveries
+          SET ready_at = NOW()
+        WHERE job_id = $1
+          AND ($2::text IS NULL OR assignment_id = $2)
+          AND delivered_at IS NULL`,
+      [jobId, assignmentId || null]
+    );
     await deliverPendingBrokerInstructionPushes(jobId, assignmentId).catch(
       (e) => console.error(`[BrokerSend] driver push error for job ${jobId}:`, e.message)
     );
@@ -2167,7 +2244,7 @@ function sweepOldBrokerScheduledSends() {
   });
 }
 function startBrokerScheduledSendWorker() {
-  ensureBrokerInstructionPushOutbox().then(() => deliverPendingBrokerInstructionPushes()).catch((e) => console.error("[BrokerSend] instruction push outbox init error:", e?.message || e));
+  ensureBrokerInstructionPushOutbox().then(() => reconcileDormantBrokerInstructionPushes()).then(() => deliverPendingBrokerInstructionPushes()).catch((e) => console.error("[BrokerSend] instruction push outbox init error:", e?.message || e));
   sweepOldBrokerScheduledSends();
   pool.query(`ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS claimed_at timestamptz`).catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e)).then(() => recoverStuckBrokerScheduledSends()).catch(() => {
   });
@@ -2180,7 +2257,7 @@ function startBrokerScheduledSendWorker() {
     });
   }, 6e4);
   setInterval(() => {
-    deliverPendingBrokerInstructionPushes().catch(() => {
+    reconcileDormantBrokerInstructionPushes().then(() => deliverPendingBrokerInstructionPushes()).catch(() => {
     });
   }, 6e4);
   setInterval(sweepOldBrokerScheduledSends, 24 * 60 * 60 * 1e3);
@@ -3621,9 +3698,14 @@ async function registerRoutes(app2) {
       const jobs2 = await jr.json().catch(() => []);
       if (!Array.isArray(jobs2)) return res.json(addDualKeys(jobs2));
       const upstreamAssignMap = /* @__PURE__ */ new Map();
+      const assignmentCutoff = /* @__PURE__ */ new Date();
+      assignmentCutoff.setUTCDate(assignmentCutoff.getUTCDate() - 7);
+      const assignmentCutoffKey = assignmentCutoff.toISOString().slice(0, 10);
       const jobsWithAssignments = jobs2.filter((j) => {
         const stats = j.assignmentStats || {};
-        return (Number(stats.assigned ?? stats.assignedCount) || 0) > 0;
+        const status = String(j.status || "").toLowerCase();
+        const dateKey = String(j.scheduledDate || j.scheduled_date || "").slice(0, 10);
+        return (Number(stats.assigned ?? stats.assignedCount) || 0) > 0 && !["completed", "cancelled", "canceled", "expired"].includes(status) && (!dateKey || dateKey >= assignmentCutoffKey);
       });
       for (let i = 0; i < jobsWithAssignments.length; i += 8) {
         await Promise.all(jobsWithAssignments.slice(i, i + 8).map(async (j) => {
@@ -4436,6 +4518,38 @@ async function registerRoutes(app2) {
     const sendNow = req.body?.sendNow === true;
     if (!driverId) return res.status(400).json({ message: "driverId is required" });
     try {
+      const currentResponse = await websiteFetch(
+        `/api/broker/jobs/${encodeURIComponent(jobId)}/assignments`,
+        { method: "GET", jwt: auth.jwt }
+      );
+      if (currentResponse.ok) {
+        const current = await currentResponse.json().catch(() => []);
+        const existing = (Array.isArray(current) ? current : []).find((a) => {
+          const existingDriverId = String(a.driverId || a.driver_id || a.driver?.id || "");
+          const status = String(a.status || "").toLowerCase();
+          return existingDriverId === driverId && ["pending", "accepted", "approved", "confirmed", "assigned"].includes(status);
+        });
+        if (existing) {
+          const existingId = String(existing.id || existing.assignmentId || existing.assignment_id || "");
+          const sentAt = Object.prototype.hasOwnProperty.call(existing, "sentAt") ? existing.sentAt : existing.sent_at;
+          if (sendNow && existingId && !sentAt) {
+            const sent = await sendBrokerJobInstructions(jobId, auth.userId, auth.jwt, existingId);
+            const sentText = await sent.text();
+            let sentBody = sentText;
+            try {
+              sentBody = JSON.parse(sentText);
+            } catch {
+            }
+            res.status(sent.status);
+            return typeof sentBody === "string" ? res.send(sentBody) : res.json(sentBody);
+          }
+          if (sendNow && existingId && sentAt) {
+            await reconcileDormantBrokerInstructionPushes(jobId, existingId);
+            await deliverPendingBrokerInstructionPushes(jobId, existingId);
+          }
+          return res.json({ assignmentId: existingId, alreadyAssigned: true, sent: !!sentAt });
+        }
+      }
       const before = await pool.query(
         `SELECT ja.id::text AS id
            FROM job_assignments ja
