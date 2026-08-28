@@ -539,15 +539,22 @@ export default function BrokerDashboardScreen() {
       }
     }
     if (ok > 0 && failed.size === 0) {
-      // Close the sheet and tell the user where the held sends went.
+      const heldJobDate = jobDateKey(assignJob);
       setAssignJob(null);
-      const msg = sendNow
-        ? `Instructions sent to ${ok} truck${ok === 1 ? '' : 's'}.`
-        : `${ok} truck${ok === 1 ? '' : 's'} added to this job. Send the instructions from the Truck Confirmations card on your home screen, or from the Day Plan.`;
-      if (Platform.OS === 'web') {
-        if (typeof window !== 'undefined') window.alert(msg);
+      if (!sendNow && heldJobDate) {
+        // SEND LATER means schedule the automatic delivery now—not merely
+        // leave a held assignment that the broker has to remember to send.
+        setSelectedDate(heldJobDate);
+        openScheduleModal();
       } else {
-        Alert.alert(sendNow ? 'Instructions Sent' : 'Trucks Added', msg);
+        const msg = sendNow
+          ? `Instructions sent to ${ok} truck${ok === 1 ? '' : 's'}.`
+          : `${ok} truck${ok === 1 ? '' : 's'} added, but this job has no date. Add a job date before scheduling the instructions.`;
+        if (Platform.OS === 'web') {
+          if (typeof window !== 'undefined') window.alert(msg);
+        } else {
+          Alert.alert(sendNow ? 'Instructions Sent' : 'Date Required', msg);
+        }
       }
     } else if (count > 0 && failed.size > 0) {
       // Keep the sheet open and failed rows selected for an explicit retry.
