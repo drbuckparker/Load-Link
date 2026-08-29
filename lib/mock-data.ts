@@ -36,6 +36,7 @@ export interface Job {
   projectName?: string;
   clientName?: string;
   projectId?: string;
+  isContractorProject?: boolean;
   pendingApplications?: number;
   approvedAssignments?: number;
   haulBothWays?: boolean;

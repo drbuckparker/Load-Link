@@ -3284,7 +3284,9 @@ async function registerRoutes(app2) {
     try {
       const auth = getWebsiteAuth(req);
       const result = await pool.query(
-        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name,
+        `SELECT j.*, COALESCE(cp.name, bcp.name) as project_name,
+                (cp.id IS NOT NULL) AS is_contractor_project,
+                u.company as contractor_name,
                 u.company as contractor_company,
                 u.full_name as contractor_full_name,
                 u.phone as contractor_phone,
@@ -4952,10 +4954,20 @@ async function registerRoutes(app2) {
       const isOwnPostedJob = String(contractorId) === auth.userId;
       if (isOwnPostedJob) {
         const fleetRole = await pool.query(
-          `SELECT 1 FROM users WHERE id::text = $1 AND role::text = 'trucking_company' LIMIT 1`,
+          `SELECT role::text AS role FROM users WHERE id::text = $1 LIMIT 1`,
           [auth.userId]
         );
-        if (!fleetRole.rows[0] || jobRow.rows[0].visibility !== "public") {
+        const baseRole = String(fleetRole.rows[0]?.role || "");
+        const fleetEntitled = allowedRolesForUser(baseRole).includes("trucking_company");
+        const activeRole = String(auth.user?.role || "");
+        const activeFleetMode = activeRole === "trucking_company" || activeRole === baseRole && fleetEntitled;
+        const visibility = jobRow.rows[0].visibility;
+        const legacyContractorProject = visibility == null && !!jobRow.rows[0].project_id ? await pool.query(
+          `SELECT 1 FROM contractor_projects WHERE id::text = $1::text LIMIT 1`,
+          [String(jobRow.rows[0].project_id)]
+        ) : null;
+        const publicFleetJob = visibility === "public" || visibility == null && !!legacyContractorProject?.rows[0];
+        if (!activeFleetMode || !fleetEntitled || !publicFleetJob) {
           return res.status(403).json({ message: "Switch to Trucking Company mode and make this job public before applying a truck" });
         }
         if (!Array.isArray(vehicleIds) || vehicleIds.length === 0) {

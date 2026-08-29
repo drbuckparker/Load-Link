@@ -222,6 +222,8 @@ function mapJob(j: any): Job {
     capacityNeeded: j.capacity_needed ?? j.capacityNeeded,
     totalTonsNeeded: j.total_tons_needed ?? j.totalTonsNeeded,
     createdAt: j.created_at ?? j.createdAt ?? '',
+    projectId: j.project_id ?? j.projectId,
+    isContractorProject: j.is_contractor_project ?? j.isContractorProject ?? false,
     projectName: j.project_name ?? j.projectName,
     clientName: j.client_name ?? j.clientName,
     visibility: j.visibility ?? undefined,
@@ -554,8 +556,19 @@ export default function JobDetailScreen() {
   // A public job posted by this same account can be applied for with its fleet
   // trucks only while the account is actively in Trucking Company mode. Broker
   // mode manages the posting and uses the roster assignment flow instead.
+  // Legacy project-backed marketplace jobs have NULL/undefined visibility,
+  // which means public. Broker roster jobs are project-less and remain closed
+  // unless they carry an explicit public value.
+  const activeFleetMode =
+    user?.role === 'trucking_company' ||
+    (
+      user?.role === user?.accountRole &&
+      String(user?.role || '').includes('trucking_company')
+    );
   const canApplyOwnPublicFleetJob =
-    isMyPostedJob && user?.role === 'trucking_company' && job.visibility === 'public';
+    isMyPostedJob &&
+    activeFleetMode &&
+    (job.visibility === 'public' || (job.visibility == null && job.isContractorProject === true));
   const canAccept =
     (jobStatus === 'open' || jobStatus === 'pending' || jobStatus === 'accepted') &&
     !hasApplied &&

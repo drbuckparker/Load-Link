@@ -16,3 +16,7 @@ ACTIVATED Aug 2026: the companion itself added `jobs.visibility` (text, nullable
 - The invite table is discovered by name pattern + required columns (project_id, user_id, status); its name is regex-allowlisted and quoted before SQL interpolation — never relax that (authz-critical dynamic identifier).
 - Owner-scoped routes (calendar, earnings, my-jobs, contractor dashboards) intentionally have no filter — they only return the viewer's own/assigned jobs.
 - UI shows PRIVATE / "N public openings" badges keyed purely off response fields, so they appear automatically too. Invitation screens were deliberately deferred until the website table exists.
+
+**Fleet self-application rule:** A fleet-entitled combined account may apply one of its own trucks to its own job only in the active trucking-company view. Explicitly public jobs qualify; legacy NULL visibility qualifies only when the job is durably backed by `contractor_projects`. Broker-client projects and project-less NULL jobs stay fail-closed.
+
+**Why:** Exact-role checks blocked combined trucking-company/contractor accounts, while treating every NULL or every project-backed job as public could expose older broker roster work after a role change. Contractor-project provenance distinguishes the intended legacy marketplace jobs.
