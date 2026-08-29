@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, FlatList, Platform, ActivityIndicator,
+  View, Text, StyleSheet, Pressable, TouchableOpacity, FlatList, Platform, ActivityIndicator,
   Modal, TextInput, Alert, ScrollView, KeyboardAvoidingView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -502,6 +502,20 @@ export default function BrokerDashboardScreen() {
   });
 
   const [selectedAssign, setSelectedAssign] = useState<Set<string>>(new Set());
+  // A held assignment is already on the job but still needs instructions.
+  // Include these checked rows in the footer count/actions automatically;
+  // otherwise the modal visually shows a selected truck while both send
+  // buttons remain disabled at "(0)".
+  const heldAssignedDriverIds = new Set(
+    (assignJob?.assignments || [])
+      .filter(a => isActiveAssignment(a) && (a.sentAt ?? a.sent_at) == null)
+      .map(assignmentDriverId)
+      .filter(Boolean)
+  );
+  const selectedSendDriverIds = new Set([
+    ...heldAssignedDriverIds,
+    ...selectedAssign,
+  ]);
 
   const toggleAssignSelect = (driverId: string) => {
     haptic();
@@ -513,13 +527,13 @@ export default function BrokerDashboardScreen() {
   };
 
   const assignSelected = async (sendNow: boolean) => {
-    if (!assignJob || selectedAssign.size === 0) return;
+    if (!assignJob || selectedSendDriverIds.size === 0) return;
     haptic(Haptics.ImpactFeedbackStyle.Medium);
-    const count = selectedAssign.size;
+    const count = selectedSendDriverIds.size;
     let ok = 0;
     const failed = new Set<string>();
     let failureMessage = '';
-    for (const driverId of Array.from(selectedAssign)) {
+    for (const driverId of Array.from(selectedSendDriverIds)) {
       try {
         await assignMutation.mutateAsync({ jobId: assignJob.id, driverId, sendNow });
         ok++;
@@ -1402,24 +1416,26 @@ export default function BrokerDashboardScreen() {
             </ScrollView>
             {roster.length > 0 && (
               <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-                <Pressable
+                <TouchableOpacity
                   testID="assign-selected-hold"
-                  disabled={selectedAssign.size === 0 || assignMutation.isPending}
-                  style={({ pressed }) => [styles.holdBtn, { flex: 1, alignItems: 'center', paddingVertical: 12 },
-                    (selectedAssign.size === 0 || assignMutation.isPending || pressed) && { opacity: 0.6 }]}
+                  disabled={selectedSendDriverIds.size === 0 || assignMutation.isPending}
+                  activeOpacity={0.7}
+                  style={[styles.holdBtn, { flex: 1, alignItems: 'center', paddingVertical: 12 },
+                    (selectedSendDriverIds.size === 0 || assignMutation.isPending) && { opacity: 0.6 }]}
                   onPress={() => assignSelected(false)}
                 >
-                  <Text style={styles.holdBtnText}>SEND LATER ({selectedAssign.size})</Text>
-                </Pressable>
-                <Pressable
+                  <Text style={styles.holdBtnText}>SEND LATER ({selectedSendDriverIds.size})</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
                   testID="assign-selected-send"
-                  disabled={selectedAssign.size === 0 || assignMutation.isPending}
-                  style={({ pressed }) => [styles.smallBtn, { flex: 1, alignItems: 'center', paddingVertical: 12 },
-                    (selectedAssign.size === 0 || assignMutation.isPending || pressed) && { opacity: 0.6 }]}
+                  disabled={selectedSendDriverIds.size === 0 || assignMutation.isPending}
+                  activeOpacity={0.7}
+                  style={[styles.smallBtn, { flex: 1, alignItems: 'center', paddingVertical: 12 },
+                    (selectedSendDriverIds.size === 0 || assignMutation.isPending) && { opacity: 0.6 }]}
                   onPress={() => assignSelected(true)}
                 >
-                  <Text style={styles.smallBtnText}>SEND NOW ({selectedAssign.size})</Text>
-                </Pressable>
+                  <Text style={styles.smallBtnText}>SEND NOW ({selectedSendDriverIds.size})</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
