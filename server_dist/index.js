@@ -2642,8 +2642,26 @@ function airMilesToLeg(pLat, pLng, oLat, oLng, dLat, dLng) {
 }
 async function registerRoutes(app2) {
   await ensureBrokerInstructionPushOutbox();
-  function requireAuth(req, res, next) {
-    const auth = getWebsiteAuth(req);
+  async function requireAuth(req, res, next) {
+    let auth = getWebsiteAuth(req);
+    if (!auth) {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
+      if (token && sessionDbReady) {
+        try {
+          const { rows } = await pool.query(
+            `SELECT entry FROM companion_sessions WHERE token = $1 LIMIT 1`,
+            [token]
+          );
+          if (rows[0]?.entry) {
+            tokenToJwt.set(token, rows[0].entry);
+            auth = rows[0].entry;
+          }
+        } catch (e) {
+          console.error("[Sessions] Failed to recover session from DB:", e?.message);
+        }
+      }
+    }
     if (auth) {
       req.userId = auth.userId;
       req.websiteJwt = auth.jwt;
@@ -2705,6 +2723,7 @@ async function registerRoutes(app2) {
             };
             tokenToJwt.set(localToken2, authEntry2);
             saveJsonMap("sessions.json", tokenToJwt);
+            await syncSessionsToDb(tokenToJwt);
             return res.json({ token: localToken2, user: userPayload(safeDbUser, authEntry2.originalRole) });
           }
         } catch (devErr) {
@@ -2746,6 +2765,7 @@ async function registerRoutes(app2) {
               };
               tokenToJwt.set(localToken2, authEntry2);
               saveJsonMap("sessions.json", tokenToJwt);
+              await syncSessionsToDb(tokenToJwt);
               console.log(`[Login] Companion-local session minted for ${email} (website refused email-only login)`);
               return res.json({ token: localToken2, user: userPayload(safeDbUser, authEntry2.originalRole) });
             }
@@ -2802,6 +2822,7 @@ async function registerRoutes(app2) {
       const authEntry = { jwt, userId: user.id, user, originalRole: user.role };
       tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
+      await syncSessionsToDb(tokenToJwt);
       const enrichedUser = userPayload(user, authEntry.originalRole);
       res.json({ token: localToken, user: enrichedUser });
       fullSync(authEntry).catch(() => {
@@ -2829,6 +2850,7 @@ async function registerRoutes(app2) {
         const authEntry = { jwt, userId: user.id, user, originalRole: user.role };
         tokenToJwt.set(localToken, authEntry);
         saveJsonMap("sessions.json", tokenToJwt);
+        await syncSessionsToDb(tokenToJwt);
         return res.json({ token: localToken, user: userPayload(user, authEntry.originalRole) });
       }
       return res.json(addDualKeys(data));

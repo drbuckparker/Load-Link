@@ -38,7 +38,7 @@ export function getApiUrl(): string {
   return url.href;
 }
 
-async function attemptSilentRelogin(): Promise<ReloginResult> {
+export async function recoverAuthSession(): Promise<ReloginResult> {
   if (_reloginInProgress) return _reloginInProgress;
   _reloginInProgress = (async (): Promise<ReloginResult> => {
     try {
@@ -83,7 +83,7 @@ async function attemptSilentRelogin(): Promise<ReloginResult> {
 // Shared 401 recovery: try a silent re-login; if the credentials are
 // definitively rejected (or missing), tell AuthContext the session is lost.
 async function recoverFromUnauthorized(): Promise<boolean> {
-  const result = await attemptSilentRelogin();
+  const result = await recoverAuthSession();
   if (result === 'ok') return true;
   if (result === 'invalid' && _onSessionLost) {
     try { _onSessionLost(); } catch {}

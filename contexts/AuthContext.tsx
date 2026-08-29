@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiRequest, getApiUrl, setAuthToken, getAuthToken, queryClient, setOnSessionLost } from '@/lib/query-client';
+import { apiRequest, getApiUrl, setAuthToken, getAuthToken, queryClient, recoverAuthSession, setOnSessionLost } from '@/lib/query-client';
 import { fetch } from 'expo/fetch';
 import { registerForPushNotifications } from '@/lib/notifications';
 
@@ -121,47 +121,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // 'ok' = re-logged in; 'invalid' = server explicitly rejected the stored
-  // credentials; 'transient' = network/server hiccup (do NOT treat as a
-  // sign-out — wiping credentials on a flaky request is what used to force
-  // users back to the sign-in screen).
-  async function silentRelogin(): Promise<'ok' | 'invalid' | 'transient'> {
-    try {
-      const email = await AsyncStorage.getItem('loadlink_email');
-      const password = await AsyncStorage.getItem('loadlink_password');
-      if (!email) return 'invalid';
-
-      const baseUrl = getApiUrl();
-      const body: any = { email };
-      if (password) body.password = password;
-
-      const res = await fetch(new URL('/api/auth/login', baseUrl).toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.token) {
-          setAuthToken(data.token);
-          await AsyncStorage.setItem('loadlink_token', data.token);
-          const mapped = mapDbUser(data.user);
-          await safeStore(mapped);
-          setUser(mapped);
-          registerForPushNotifications().catch(() => {});
-          return 'ok';
-        }
-      }
-      // Only a definitive rejection means the stored credentials are bad.
-      if (res.status === 401 || res.status === 403) return 'invalid';
-      return 'transient';
-    } catch {
-      return 'transient';
-    }
-  }
-
   async function checkAuth() {
     try {
       const storedToken = await AsyncStorage.getItem('loadlink_token');
@@ -194,7 +153,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             registerForPushNotifications().catch(() => {});
           } else if (res.status === 401 || res.status === 403) {
             // Session no longer valid on the server — try to quietly re-log in.
-            const relogin = await silentRelogin();
+            const relogin = await recoverAuthSession();
+            if (relogin === 'ok') {
+              const freshToken = getAuthToken();
+              if (freshToken) {
+                const retry = await fetch(new URL('/api/auth/me', baseUrl).toString(), {
+                  headers: { 'Authorization': `Bearer ${freshToken}` },
+                  credentials: 'include',
+                });
+                if (retry.ok) {
+                  const data = await retry.json();
+                  const mapped = mapDbUser(data.user);
+                  await safeStore(mapped);
+                  setUser(mapped);
+                  registerForPushNotifications().catch(() => {});
+                }
+              }
+            }
             if (relogin === 'invalid') {
               // Credentials definitively rejected: sign out for real.
               await AsyncStorage.multiRemove(['loadlink_user', 'loadlink_token', 'loadlink_email', 'loadlink_password']).catch(() => {});

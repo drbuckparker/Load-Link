@@ -1497,8 +1497,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Routes and scheduled workers share this durable outbox. Initialize it
   // before the server begins accepting instruction-send requests.
   await ensureBrokerInstructionPushOutbox();
-  function requireAuth(req: Request, res: Response, next: Function) {
-    const auth = getWebsiteAuth(req);
+  async function requireAuth(req: Request, res: Response, next: Function) {
+    let auth = getWebsiteAuth(req);
+    if (!auth) {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
+      if (token && sessionDbReady) {
+        try {
+          const { rows } = await pool.query(
+            `SELECT entry FROM companion_sessions WHERE token = $1 LIMIT 1`,
+            [token],
+          );
+          if (rows[0]?.entry) {
+            tokenToJwt.set(token, rows[0].entry);
+            auth = rows[0].entry;
+          }
+        } catch (e: any) {
+          console.error("[Sessions] Failed to recover session from DB:", e?.message);
+        }
+      }
+    }
     if (auth) {
       (req as any).userId = auth.userId;
       (req as any).websiteJwt = auth.jwt;
@@ -1573,6 +1591,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             };
             tokenToJwt.set(localToken, authEntry);
             saveJsonMap("sessions.json", tokenToJwt);
+            await syncSessionsToDb(tokenToJwt);
             return res.json({ token: localToken, user: userPayload(safeDbUser, authEntry.originalRole) });
           }
         } catch (devErr: any) {
@@ -1648,6 +1667,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               };
               tokenToJwt.set(localToken, authEntry);
               saveJsonMap("sessions.json", tokenToJwt);
+              await syncSessionsToDb(tokenToJwt);
               console.log(`[Login] Companion-local session minted for ${email} (website refused email-only login)`);
               return res.json({ token: localToken, user: userPayload(safeDbUser, authEntry.originalRole) });
             }
@@ -1723,6 +1743,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
       tokenToJwt.set(localToken, authEntry);
       saveJsonMap("sessions.json", tokenToJwt);
+      await syncSessionsToDb(tokenToJwt);
 
       const enrichedUser = userPayload(user, authEntry.originalRole);
       res.json({ token: localToken, user: enrichedUser });
@@ -1756,6 +1777,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const authEntry = { jwt, userId: user.id, user, originalRole: user.role as string };
         tokenToJwt.set(localToken, authEntry);
         saveJsonMap("sessions.json", tokenToJwt);
+        await syncSessionsToDb(tokenToJwt);
         return res.json({ token: localToken, user: userPayload(user, authEntry.originalRole) });
       }
 
