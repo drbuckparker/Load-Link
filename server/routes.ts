@@ -527,6 +527,13 @@ async function ensureBrokerInstructionPushOutbox() {
       ADD COLUMN IF NOT EXISTS ready_at timestamptz
   `);
   await pool.query(`
+    ALTER TABLE broker_assignment_push_deliveries
+      ADD COLUMN IF NOT EXISTS responded_at timestamptz,
+      ADD COLUMN IF NOT EXISTS response_action text,
+      ADD COLUMN IF NOT EXISTS response_claimed_at timestamptz,
+      ADD COLUMN IF NOT EXISTS response_claim_token text
+  `);
+  await pool.query(`
     UPDATE broker_assignment_push_deliveries o
        SET ready_at = COALESCE(o.attempted_at, NOW())
       FROM job_assignments ja
@@ -1865,6 +1872,7 @@ async function websiteFetch(
     body?: any;
     jwt?: string;
     query?: Record<string, string>;
+    timeoutMs?: number;
   } = {}
 ): Promise<globalThis.Response> {
   const url = new URL(path, WEBSITE_API_URL);
@@ -1888,6 +1896,7 @@ async function websiteFetch(
   const fetchOpts: RequestInit = {
     method: options.method || "GET",
     headers,
+    ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
   };
 
   if (options.body && options.method !== "GET") {
@@ -3053,6 +3062,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                SELECT o.assignment_id AS id, o.ready_at AS sent_at
                  FROM broker_assignment_push_deliveries o
                 WHERE o.job_id = $1 AND o.driver_id = $2
+                  AND o.responded_at IS NULL
                   AND NOT EXISTS (
                     SELECT 1 FROM job_assignments ja
                      WHERE ja.id::text = o.assignment_id
@@ -4557,6 +4567,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const assignmentId = String(req.params.id);
       try {
+        const prior = await pool.query(
+          `SELECT response_action, responded_at
+             FROM broker_assignment_push_deliveries
+            WHERE assignment_id = $1 AND driver_id = $2
+            LIMIT 1`,
+          [assignmentId, auth.userId]
+        );
+        if (prior.rows[0]?.responded_at) {
+          if (prior.rows[0].response_action === action) {
+            return res.json({ ok: true, alreadyResponded: true });
+          }
+          return res.status(409).json({ message: "This assignment already has a different response." });
+        }
+
         const up = await websiteFetch(`/api/assignments/${assignmentId}/${action}`, {
           method: "POST",
           body: req.body ?? {},
@@ -4573,55 +4597,212 @@ export async function registerRoutes(app: Express): Promise<Server> {
           up.status === 400 && /not a broker assignment/i.test(text || "");
         if (isSelfAssignGate) {
           let selfAssigned = false;
+          let selfJobId = "";
           try {
             const row = await pool.query(
-              `SELECT ja.id FROM job_assignments ja
+              `SELECT ja.id::text AS id, ja.job_id::text AS job_id
+                 FROM job_assignments ja
                  JOIN jobs j ON j.id = ja.job_id
-                WHERE ja.id = $1
+                WHERE ja.id::text = $1
                   AND ja.driver_id::text = $2
                   AND j.contractor_id::text = $2
-                  AND ja.sent_at IS NOT NULL`,
+                  AND ja.sent_at IS NOT NULL
+                  AND ja.status::text = 'pending'
+               UNION ALL
+               SELECT o.assignment_id AS id, o.job_id
+                 FROM broker_assignment_push_deliveries o
+                 JOIN jobs j ON j.id::text = o.job_id
+                WHERE o.assignment_id = $1
+                  AND o.driver_id = $2
+                  AND j.contractor_id::text = $2
+                  AND o.ready_at IS NOT NULL
+                  AND o.responded_at IS NULL
+               LIMIT 1`,
               [assignmentId, auth.userId]
             );
             selfAssigned = row.rows.length > 0;
+            selfJobId = String(row.rows[0]?.job_id || "");
           } catch {
-            selfAssigned = false; // e.g. schema without sent_at — fall through to the upstream error
+            selfAssigned = false;
           }
-          if (selfAssigned) {
-            // Only a pending assignment may transition (mirrors the upstream
-            // confirm/decline rule); a repeated tap on the same action is
-            // treated as idempotent success, anything else surfaces the
-            // upstream error unchanged.
-            const target = action === "confirm" ? "approved" : "rejected";
-            const upd = await pool.query(
-              action === "confirm"
-                ? `UPDATE job_assignments SET status = 'approved', approved_at = NOW()
-                     WHERE id = $1 AND status::text = 'pending'`
-                : `UPDATE job_assignments SET status = 'rejected'
-                     WHERE id = $1 AND status::text = 'pending'`,
-              [assignmentId]
+          if (selfAssigned && selfJobId) {
+            // Older/website-originated sends may have reached the local
+            // assignment mirror before the push outbox was created. Add a
+            // delivery-complete row solely as a durable response lock; marking
+            // it delivered prevents the push worker from sending a late alert.
+            await pool.query(
+              `INSERT INTO broker_assignment_push_deliveries
+                 (assignment_id, driver_id, job_id, ready_at, delivered_at)
+               SELECT ja.id::text, ja.driver_id::text, ja.job_id::text,
+                      ja.sent_at, NOW()
+                 FROM job_assignments ja
+                 JOIN jobs j ON j.id = ja.job_id
+                WHERE ja.id::text = $1
+                  AND ja.driver_id::text = $2
+                  AND j.contractor_id::text = $2
+                  AND ja.status::text = 'pending'
+                  AND ja.sent_at IS NOT NULL
+               ON CONFLICT (assignment_id) DO NOTHING`,
+              [assignmentId, auth.userId]
             );
-            let done = (upd.rowCount || 0) === 1;
-            if (!done) {
-              const cur = await pool.query(
-                `SELECT status::text AS status FROM job_assignments WHERE id = $1`,
-                [assignmentId]
+
+            // Reconcile with the authoritative website before every owner-side
+            // transition. This makes retries safe even if the remote action
+            // succeeded but the local response marker could not be persisted.
+            const detailsResponse = await websiteFetch(
+              `/api/broker/jobs/${encodeURIComponent(selfJobId)}/assignments`,
+              { method: "GET", jwt: auth.jwt, timeoutMs: 30_000 }
+            );
+            const details = detailsResponse.ok
+              ? await detailsResponse.json().catch(() => [])
+              : [];
+            const authoritative = Array.isArray(details)
+              ? details.find((a: any) =>
+                  String(a.id || a.assignmentId || a.assignment_id) === assignmentId &&
+                  String(a.driverId || a.driver_id || a.driver?.id || "") === auth.userId
+                )
+              : null;
+            if (!authoritative) {
+              return res.status(detailsResponse.ok ? 404 : detailsResponse.status).json({
+                message: detailsResponse.ok
+                  ? "This assignment could not be verified."
+                  : "Could not verify the assignment's current status.",
+              });
+            }
+            const authoritativeStatus = String(authoritative.status || "").toLowerCase();
+            const confirmedStatuses = new Set(["approved", "accepted", "confirmed"]);
+            const declinedStatuses = new Set(["rejected", "declined", "withdrawn"]);
+            if (confirmedStatuses.has(authoritativeStatus) || declinedStatuses.has(authoritativeStatus)) {
+              const recordedAction = confirmedStatuses.has(authoritativeStatus) ? "confirm" : "decline";
+              if (recordedAction !== action) {
+                return res.status(409).json({ message: "This assignment already has a different response." });
+              }
+              const reconciled = await pool.query(
+                `UPDATE broker_assignment_push_deliveries
+                    SET responded_at = COALESCE(responded_at, NOW()),
+                        response_action = $2,
+                        response_claimed_at = NULL,
+                        response_claim_token = NULL
+                  WHERE assignment_id = $1 AND driver_id = $3`,
+                [assignmentId, action, auth.userId]
               );
-              done = cur.rows[0]?.status === target;
+              if (reconciled.rowCount !== 1) {
+                throw new Error("Could not persist the authoritative assignment response");
+              }
+              return res.json({ ok: true, alreadyResponded: true, selfAssigned: true });
             }
-            if (done) {
-              // No broker notification: the broker IS the driver here.
-              return res.json({ ok: true, selfAssigned: true });
+            if (!["pending", "assigned"].includes(authoritativeStatus)) {
+              return res.status(409).json({ message: "This assignment can no longer be confirmed or declined." });
             }
+
+            const responseClaimToken = crypto.randomUUID();
+            const claim = await pool.query(
+              `UPDATE broker_assignment_push_deliveries
+                  SET response_action = $2,
+                      response_claimed_at = NOW(),
+                      response_claim_token = $4
+                WHERE assignment_id = $1
+                  AND driver_id = $3
+                  AND responded_at IS NULL
+                  AND (
+                    response_action IS NULL
+                    OR response_claimed_at IS NULL
+                    OR response_claimed_at < NOW() - INTERVAL '2 minutes'
+                  )
+                RETURNING assignment_id`,
+              [assignmentId, action, auth.userId, responseClaimToken]
+            );
+            if (claim.rowCount === 0) {
+              const current = await pool.query(
+                `SELECT response_action, responded_at
+                   FROM broker_assignment_push_deliveries
+                  WHERE assignment_id = $1 AND driver_id = $2 LIMIT 1`,
+                [assignmentId, auth.userId]
+              );
+              if (current.rows[0]?.responded_at && current.rows[0]?.response_action === action) {
+                return res.json({ ok: true, alreadyResponded: true });
+              }
+              if (current.rows[0]?.response_action && current.rows[0]?.response_action !== action) {
+                return res.status(409).json({ message: "This assignment already has a different response." });
+              }
+              return res.status(409).json({ message: "Your response is already being processed." });
+            }
+
+            // The website's driver-response endpoint deliberately excludes a
+            // broker responding to their own truck. As the posting broker,
+            // this account is authorized to make the equivalent authoritative
+            // approve/reject transition through the broker-side action.
+            const brokerAction = action === "confirm" ? "approve" : "reject";
+            let brokerResponse: globalThis.Response;
+            try {
+              // Keep this comfortably below the two-minute claim lease so an
+              // expired request cannot still be running when a retry reclaims.
+              brokerResponse = await websiteFetch(
+                `/api/job-assignments/${encodeURIComponent(assignmentId)}/${brokerAction}`,
+                { method: "POST", body: req.body ?? {}, jwt: auth.jwt, timeoutMs: 30_000 }
+              );
+            } catch (e) {
+              await pool.query(
+                `UPDATE broker_assignment_push_deliveries
+                    SET response_action = NULL,
+                        response_claimed_at = NULL,
+                        response_claim_token = NULL
+                  WHERE assignment_id = $1
+                    AND responded_at IS NULL
+                    AND response_claim_token = $2`,
+                [assignmentId, responseClaimToken]
+              ).catch(() => {});
+              throw e;
+            }
+            const brokerText = await brokerResponse.text();
+            if (brokerResponse.ok) {
+              const finalized = await pool.query(
+                `UPDATE broker_assignment_push_deliveries
+                    SET responded_at = NOW(),
+                        response_action = $2,
+                        response_claimed_at = NULL,
+                        response_claim_token = NULL
+                  WHERE assignment_id = $1
+                    AND response_claim_token = $3`,
+                [assignmentId, action, responseClaimToken]
+              );
+              if (finalized.rowCount !== 1) {
+                throw new Error("Authoritative response succeeded but could not be recorded locally");
+              }
+              let brokerBody: any = {};
+              try { brokerBody = JSON.parse(brokerText); } catch {}
+              return res.json({ ...brokerBody, ok: true, selfAssigned: true });
+            }
+            await pool.query(
+              `UPDATE broker_assignment_push_deliveries
+                  SET response_action = NULL,
+                      response_claimed_at = NULL,
+                      response_claim_token = NULL
+                WHERE assignment_id = $1
+                  AND responded_at IS NULL
+                  AND response_claim_token = $2`,
+              [assignmentId, responseClaimToken]
+            ).catch(() => {});
+            res.status(brokerResponse.status);
+            try { return res.json(JSON.parse(brokerText)); } catch { return res.send(brokerText); }
           }
         }
-        res.status(up.status);
-        try { res.json(JSON.parse(text)); } catch { res.send(text); }
         if (up.ok) {
+          await pool.query(
+            `UPDATE broker_assignment_push_deliveries
+                SET responded_at = NOW(),
+                    response_action = $2,
+                    response_claimed_at = NULL,
+                    response_claim_token = NULL
+              WHERE assignment_id = $1`,
+            [assignmentId, action]
+          );
           notifyBrokerAssignmentResponse(assignmentId, auth.userId, action).catch((e) =>
             console.error("Broker confirm-notify error:", e.message)
           );
         }
+        res.status(up.status);
+        try { res.json(JSON.parse(text)); } catch { res.send(text); }
       } catch (e: any) {
         console.error(`POST /api/assignments/:id/${action} error:`, e.message);
         if (!res.headersSent) res.status(502).json({ message: "Failed to reach website" });

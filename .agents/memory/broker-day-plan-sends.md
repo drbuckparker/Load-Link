@@ -17,6 +17,12 @@ The companion owns driver phone delivery. Every instruction-send mode—send whi
 
 **How to apply:** resolve missing notification job links through both local assignments and the assignment-keyed outbox; use the same two sources for job-detail authorization and pending-confirmation annotation.
 
+**Self-response rule:** The website's driver confirm/decline endpoint rejects a broker responding to their own assigned truck. After exact assignment/driver/owner verification, reconcile current website status and use the website's broker approve/reject action instead; never substitute a local-only status write.
+
+**Why:** New broker assignments can exist only on the website when the response arrives. A local fallback both fails to find them and can diverge from authoritative assignment state.
+
+**How to apply:** serialize self-responses with a durable claim, bound remote request time, recheck authoritative status before every transition, make same-action retries idempotent, and reject opposite-action replays.
+
 **Assignment-sheet rule:** An active assignment with no sent timestamp is both “already on this job” and a pending instruction-send target. Its checked row must count toward Send Now/Send Later; sent assignments remain checked for assignment state but are excluded from send counts.
 
 **Why:** Treating selection as only newly chosen drivers produced a checked held truck alongside disabled “(0)” send buttons, trapping brokers who assigned first and sent later.
