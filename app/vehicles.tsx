@@ -6,7 +6,7 @@ import TruckIcon from '@/components/TruckIcon';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState, useCallback, useRef } from 'react';
 import Colors from '@/constants/colors';
-import { apiRequest, queryClient, getApiUrl } from '@/lib/query-client';
+import { apiRequest, queryClient } from '@/lib/query-client';
 
 interface AssignedDriver {
   id: string;
@@ -74,10 +74,9 @@ export default function VehiclesScreen() {
     searchTimeout.current = setTimeout(async () => {
       setSearchingDrivers(true);
       try {
-        const url = new URL(`/api/drivers/search?q=${encodeURIComponent(query)}`, getApiUrl());
-        const resp = await fetch(url.toString(), { credentials: 'include' });
+        const resp = await apiRequest('GET', `/api/drivers/search?q=${encodeURIComponent(query)}`);
         const data = await resp.json();
-        setDriverResults(data);
+        setDriverResults(Array.isArray(data) ? data : []);
       } catch { setDriverResults([]); }
       setSearchingDrivers(false);
     }, 300);
@@ -117,7 +116,8 @@ export default function VehiclesScreen() {
   function handleSave() {
     if (!form.assigned_driver_id && driverSearch.trim()) {
       const needle = driverSearch.trim().toLowerCase();
-      const exactMatches = driverResults.filter(d =>
+      const results = Array.isArray(driverResults) ? driverResults : [];
+      const exactMatches = results.filter(d =>
         d.name?.trim().toLowerCase() === needle ||
         d.email?.trim().toLowerCase() === needle
       );
@@ -127,7 +127,7 @@ export default function VehiclesScreen() {
       }
       Alert.alert(
         'Select a Driver',
-        driverResults.length > 0
+          results.length > 0
           ? 'Tap the driver’s name in the search results before saving.'
           : 'No matching driver was selected. Search again and tap the driver’s name before saving.'
       );
