@@ -2472,6 +2472,7 @@ async function processDueBrokerScheduledSends() {
   } catch {
     return;
   }
+  if (due.length) console.log(`[BrokerSend] claimed ${due.length} due row(s): ${due.map((d) => d.id).join(",")}`);
   for (const row of due) {
     const dateKey = row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10);
     const tzOffsetMin = Number(row.tz_offset_min) || 0;
@@ -2512,7 +2513,16 @@ async function processDueBrokerScheduledSends() {
       continue;
     }
     try {
-      const jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt });
+      let jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt });
+      console.log(`[BrokerSend] schedule ${row.id}: jobs fetch ${jr.status}`);
+      if (jr.status === 401 || jr.status === 403) {
+        const fresh = await reacquireBrokerJwt(String(row.broker_id));
+        if (fresh) {
+          jwt = fresh;
+          console.log(`[BrokerSend] schedule ${row.id}: stale session JWT (${jr.status}); re-authenticated broker ${row.broker_id}`);
+          jr = await websiteFetch("/api/broker/jobs", { method: "GET", jwt });
+        }
+      }
       if (!jr.ok) throw new Error(`jobs fetch ${jr.status}`);
       const jobs2 = await jr.json().catch(() => []);
       let sentJobs = 0;
@@ -2532,7 +2542,9 @@ async function processDueBrokerScheduledSends() {
           const startKey = brokerJobStartKey(job, tzOffsetMin);
           if (!startKey || startKey >= dateKey) continue;
         }
-        const held = (job.assignmentStats?.held || 0) > 0 || Array.isArray(job.assignments) && job.assignments.some(
+        const stats = job.assignmentStats || {};
+        if (process.env.BROKER_SEND_DEBUG) console.log(`[BrokerSend][debug] job ${job.id} date=${job.scheduledDate || job.scheduled_date} stats=${JSON.stringify(stats)} activeOnDate=${brokerJobActiveOnDate(job, tzOffsetMin, dateKey)} startKey=${brokerJobStartKey(job, tzOffsetMin)} dateKey=${dateKey} fireDayKey=${fireDayKey}`);
+        const held = Number(stats.held ?? stats.heldCount ?? 0) > 0 || Array.isArray(job.assignments) && job.assignments.some(
           (a) => (a.sentAt ?? a.sent_at) == null && a.status !== "declined" && a.status !== "withdrawn"
         );
         if (held) {
@@ -2642,7 +2654,7 @@ function startBrokerScheduledSendWorker() {
   )).then(() => pool.query(
     `CREATE UNIQUE INDEX IF NOT EXISTS broker_scheduled_sends_pending_uniq
          ON broker_scheduled_sends (broker_id, date) WHERE status = 'pending'`
-  )).catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e)).then(() => recoverStuckBrokerScheduledSends()).then(() => reconcileBrokerScheduledSendChains()).catch(() => {
+  )).catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e)).then(() => recoverStuckBrokerScheduledSends()).then(() => reconcileBrokerScheduledSendChains()).then(() => processDueBrokerScheduledSends()).catch(() => {
   });
   setInterval(() => {
     recoverStuckBrokerScheduledSends().then(() => reconcileBrokerScheduledSendChains()).catch(() => {

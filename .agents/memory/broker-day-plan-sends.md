@@ -30,3 +30,10 @@ The companion owns driver phone delivery. Every instruction-send mode—send whi
 **Why:** the nightly send is the product promise behind "on this job every day until removed"; any single-shot failure mode breaks it invisibly.
 
 **Day semantics:** job scheduled dates stored at midnight are calendar days — never tz-shift them (shifting moved US brokers' jobs a day early). Multi-day jobs are effectively open-ended: treat them active every allowed work day while open, because their stored duration estimate is often 1.0 and meaningless. Nightly sends fire the evening before the work day, so recurrence math must anchor on the fire date and keep the broker's local wall-clock time across DST.
+
+## Nightly recurring chain — verification lessons (Aug 2026)
+- Website jobs list reports hold state as `assignmentStats.heldCount` (NOT `held`) — reading the wrong key made every scheduled send resolve 0 jobs. Worker now checks `held ?? heldCount`.
+- Worker 401s: session JWTs restored from companion_sessions go stale; processDue now re-acquires via reacquireBrokerJwt and retries once on 401/403.
+- The PROD deployment shares the DB and its worker races dev, claiming due rows within seconds — dev almost never wins. To test worker code deterministically, temporarily export processDueBrokerScheduledSends and drive it from a tsx script (arm row + call fn in one process).
+- Two-night compression without waiting: fireDayKey = now - tz_offset_min; set the row's tz_offset_min negative (e.g. -720) so fireDayKey rolls to "tomorrow" and the sentDay===fireDayKey suppression no longer skips the reminder.
+- BLAST RADIUS: open-ended multi_day jobs are "active" every day forever, so a recurring occurrence serves ALL of a broker's old open multi-day jobs; held assignments on stale jobs would get real sends. Clean up or complete old jobs before firing real occurrences.

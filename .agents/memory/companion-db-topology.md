@@ -15,3 +15,6 @@ The DB split was resolved by consolidating everything into the **website project
 - Dev + deployed companion + live website all share this one DB; writes via the Express pool are live production changes.
 - If a companion route 500s with "column does not exist" after a website release, suspect schema drift between this app's SQL and the website-managed schema.
 - The migration overwrote user rows: any password hash or role set only companion-side before consolidation was clobbered (had to re-set Calvin's temp password and demo's compound role post-migration).
+
+## Correction (Aug 2026): website has its OWN authoritative DB
+The shared Neon DB's jobs/job_assignments are a **synced copy**, not the website's store. Rows inserted directly into the local DB never appear in website APIs (/api/broker/jobs etc.), and website-created assignments may never sync down. To drive any website-owned flow in a test, create everything through the website API (jobs need billRate+billRateType+clientName for brokers). Also: a user's companion users.id can DIFFER from their website users.id (login response reveals the website id) — role fixes via PUT /api/users/:id must use the WEBSITE id.
