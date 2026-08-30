@@ -11,6 +11,12 @@ The companion owns driver phone delivery. Every instruction-send mode—send whi
 
 **How to apply:** preserve authoritative website state, retain user-level authorization for deferred work, key push delivery and responses by assignment, collapse retries to that key, and expose pending confirmation independently of inbox limits.
 
+**Notification-navigation rule:** A website-created assignment may be absent from the companion's local assignment mirror when its banner or inbox card is tapped. Until synchronization catches up, the durable push outbox is valid evidence of the assigned driver's job access and pending response.
+
+**Why:** Otherwise the push arrives correctly but its deep link gets a 403, and the job detail omits confirm/decline even though the website has already sent the assignment.
+
+**How to apply:** resolve missing notification job links through both local assignments and the assignment-keyed outbox; use the same two sources for job-detail authorization and pending-confirmation annotation.
+
 **Assignment-sheet rule:** An active assignment with no sent timestamp is both “already on this job” and a pending instruction-send target. Its checked row must count toward Send Now/Send Later; sent assignments remain checked for assignment state but are excluded from send counts.
 
 **Why:** Treating selection as only newly chosen drivers produced a checked held truck alongside disabled “(0)” send buttons, trapping brokers who assigned first and sent later.

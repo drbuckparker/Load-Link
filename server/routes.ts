@@ -2915,10 +2915,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Broker "send-later" rule: a HELD assignment (sent_at NULL) on a
           // broker-posted job grants NO visibility until the broker sends it.
           const aCheck = await pool.query(
-            `SELECT 1 FROM job_assignments ja WHERE ja.job_id = $1 AND ja.driver_id = $2
-             AND ja.status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired')
-             AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
-               SELECT 1 FROM users _bu WHERE _bu.id::text = $3 AND _bu.role::text = 'broker'))
+            `SELECT 1
+               FROM job_assignments ja
+              WHERE ja.job_id::text = $1 AND ja.driver_id::text = $2
+                AND ja.status::text NOT IN ('rejected', 'withdrawn', 'cancelled', 'expired')
+                AND (ja.sent_at IS NOT NULL OR NOT EXISTS (
+                  SELECT 1 FROM users _bu WHERE _bu.id::text = $3 AND _bu.role::text = 'broker'))
+             UNION ALL
+             SELECT 1
+               FROM broker_assignment_push_deliveries o
+              WHERE o.job_id = $1 AND o.driver_id = $2
              LIMIT 1`,
             [req.params.id, auth.userId, String(job.contractor_id)]
           );
@@ -3018,9 +3024,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
               job.assignments = job.assignments.filter((a: any) => a.sent_at || a.sentAt);
             }
             const mine = await pool.query(
-              `SELECT id, sent_at FROM job_assignments
-               WHERE job_id = $1 AND driver_id::text = $2
-                 AND status::text = 'pending' AND sent_at IS NOT NULL LIMIT 1`,
+              `SELECT id::text AS id, sent_at FROM job_assignments
+                WHERE job_id::text = $1 AND driver_id::text = $2
+                  AND status::text = 'pending' AND sent_at IS NOT NULL
+               UNION ALL
+               SELECT o.assignment_id AS id, o.ready_at AS sent_at
+                 FROM broker_assignment_push_deliveries o
+                WHERE o.job_id = $1 AND o.driver_id = $2
+                  AND NOT EXISTS (
+                    SELECT 1 FROM job_assignments ja
+                     WHERE ja.id::text = o.assignment_id
+                       AND ja.status::text <> 'pending'
+                  )
+               LIMIT 1`,
               [req.params.id, auth.userId]
             );
             if (mine.rows.length > 0) {
@@ -6563,8 +6579,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const [, material, mo, day, yr] = m;
           const jr = await pool.query(
             `SELECT j.id FROM jobs j
-              JOIN job_assignments a ON a.job_id = j.id AND a.driver_id::text = $1
-                AND a.status::text NOT IN ('declined','withdrawn','rejected')
+              JOIN (
+                SELECT a.job_id::text AS job_id
+                  FROM job_assignments a
+                 WHERE a.driver_id::text = $1
+                   AND a.status::text NOT IN ('declined','withdrawn','rejected')
+                UNION
+                SELECT o.job_id
+                  FROM broker_assignment_push_deliveries o
+                 WHERE o.driver_id = $1
+              ) mine ON mine.job_id = j.id::text
              WHERE LOWER(j.material) = LOWER($2)
                AND j.scheduled_date::date = make_date($3::int, $4::int, $5::int)
              ORDER BY j.created_at DESC LIMIT 1`,
