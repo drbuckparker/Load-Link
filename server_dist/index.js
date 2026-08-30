@@ -1879,6 +1879,29 @@ async function ensureBrokerInstructionPushOutbox() {
       ON broker_assignment_push_deliveries (delivered_at, claimed_at)
   `);
 }
+async function enqueueWebsiteSentBrokerAssignments() {
+  try {
+    const r = await pool.query(
+      `INSERT INTO broker_assignment_push_deliveries (assignment_id, driver_id, job_id, ready_at)
+       SELECT ja.id::text, ja.driver_id::text, ja.job_id::text, NOW()
+         FROM job_assignments ja
+         JOIN jobs j ON j.id = ja.job_id
+         JOIN users bu ON bu.id::text = j.contractor_id::text AND bu.role::text = 'broker'
+        WHERE ja.sent_at IS NOT NULL
+          AND ja.sent_at > NOW() - INTERVAL '30 minutes'
+          AND ja.driver_id IS NOT NULL
+          AND LOWER(COALESCE(ja.status::text, '')) IN ('pending', 'accepted', 'approved', 'assigned')
+          AND LOWER(COALESCE(j.status::text, '')) NOT IN ('completed', 'cancelled', 'canceled', 'expired')
+       ON CONFLICT (assignment_id) DO NOTHING
+       RETURNING assignment_id`
+    );
+    if (r.rowCount) {
+      console.log(`[BrokerSend] enqueued ${r.rowCount} website-sent assignment push(es)`);
+    }
+  } catch (e) {
+    console.error("[BrokerSend] website-sent assignment watcher error:", e?.message || e);
+  }
+}
 async function enqueueHeldBrokerAssignments(jobId, brokerId, jwt, assignmentId) {
   const upstream = await websiteFetch(
     `/api/broker/jobs/${encodeURIComponent(jobId)}/assignments`,
@@ -2630,7 +2653,7 @@ function startBrokerScheduledSendWorker() {
     });
   }, 6e4);
   setInterval(() => {
-    reconcileDormantBrokerInstructionPushes().then(() => deliverPendingBrokerInstructionPushes()).catch(() => {
+    enqueueWebsiteSentBrokerAssignments().then(() => reconcileDormantBrokerInstructionPushes()).then(() => deliverPendingBrokerInstructionPushes()).catch(() => {
     });
   }, 6e4);
   setInterval(sweepOldBrokerScheduledSends, 24 * 60 * 60 * 1e3);

@@ -540,6 +540,39 @@ async function ensureBrokerInstructionPushOutbox() {
   `);
 }
 
+// Instructions sent OUTSIDE the app never reached a phone: the website's
+// send action sets job_assignments.sent_at directly in the shared DB, and the
+// companion outbox only got rows from the app's own Send Now path. Poll for
+// recently sent broker assignments with no outbox row and enqueue them ready
+// for delivery. Recipient is the assignment's driver_id — deliberately
+// role-blind, so a broker/contractor/fleet manager who assigned THEMSELVES as
+// the driver gets the push like anyone else. The assignment_id PK dedupes
+// against app-initiated sends and across instances; the 30-minute window
+// keeps a fresh deploy or long downtime from blasting stale instructions.
+async function enqueueWebsiteSentBrokerAssignments(): Promise<void> {
+  try {
+    const r = await pool.query(
+      `INSERT INTO broker_assignment_push_deliveries (assignment_id, driver_id, job_id, ready_at)
+       SELECT ja.id::text, ja.driver_id::text, ja.job_id::text, NOW()
+         FROM job_assignments ja
+         JOIN jobs j ON j.id = ja.job_id
+         JOIN users bu ON bu.id::text = j.contractor_id::text AND bu.role::text = 'broker'
+        WHERE ja.sent_at IS NOT NULL
+          AND ja.sent_at > NOW() - INTERVAL '30 minutes'
+          AND ja.driver_id IS NOT NULL
+          AND LOWER(COALESCE(ja.status::text, '')) IN ('pending', 'accepted', 'approved', 'assigned')
+          AND LOWER(COALESCE(j.status::text, '')) NOT IN ('completed', 'cancelled', 'canceled', 'expired')
+       ON CONFLICT (assignment_id) DO NOTHING
+       RETURNING assignment_id`
+    );
+    if (r.rowCount) {
+      console.log(`[BrokerSend] enqueued ${r.rowCount} website-sent assignment push(es)`);
+    }
+  } catch (e: any) {
+    console.error("[BrokerSend] website-sent assignment watcher error:", e?.message || e);
+  }
+}
+
 async function enqueueHeldBrokerAssignments(
   jobId: string,
   brokerId: string,
@@ -1522,7 +1555,8 @@ function startBrokerScheduledSendWorker() {
   }, 5 * 60 * 1000);
   setInterval(() => { processDueBrokerScheduledSends().catch(() => {}); }, 60000);
   setInterval(() => {
-    reconcileDormantBrokerInstructionPushes()
+    enqueueWebsiteSentBrokerAssignments()
+      .then(() => reconcileDormantBrokerInstructionPushes())
       .then(() => deliverPendingBrokerInstructionPushes())
       .catch(() => {});
   }, 60000);
