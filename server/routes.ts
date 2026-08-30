@@ -4902,7 +4902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Private jobs (broker roster-only work) cannot take public applications.
-      const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
+      const privateBlock = await privateJobApplicationBlock(String(req.params.id), auth.userId);
       if (privateBlock) return res.status(403).json({ message: privateBlock });
 
       // Never trust vehicle ids supplied by the client. Every selected truck
@@ -5218,7 +5218,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (String(ownerCheck.rows[0].contractor_id) === auth.userId) {
         return res.status(403).json({ message: "You cannot counteroffer on your own job" });
       }
-      const privateBlock = await privateJobApplicationBlock(req.params.id, auth.userId);
+      const privateBlock = await privateJobApplicationBlock(String(req.params.id), auth.userId);
       if (privateBlock) return res.status(403).json({ message: privateBlock });
       const id = crypto.randomUUID();
       await pool.query(
@@ -6434,7 +6434,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [req.params.id, auth.userId]
       );
       if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
-      deletedVehicleIds.add(req.params.id);
+      deletedVehicleIds.add(String(req.params.id));
       await pool.query(`UPDATE trucks SET archived_at = NOW(), is_active = false WHERE id = $1`, [req.params.id]);
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
@@ -6474,7 +6474,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await pool.query(`UPDATE job_assignments SET vehicle_id = NULL WHERE vehicle_id = $1`, [req.params.id]);
       await pool.query(`UPDATE driver_invitations SET assigned_truck_id = NULL WHERE assigned_truck_id = $1`, [req.params.id]);
       await pool.query(`DELETE FROM trucks WHERE id = $1`, [req.params.id]);
-      deletedVehicleIds.add(req.params.id);
+      deletedVehicleIds.add(String(req.params.id));
       return res.json({ ok: true });
     } catch (e: any) {
       console.error("Permanent delete vehicle error:", e.message);
@@ -6491,7 +6491,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [req.params.id, auth.userId]
       );
       if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
-      deletedVehicleIds.delete(req.params.id);
+      deletedVehicleIds.delete(String(req.params.id));
       await pool.query(`UPDATE trucks SET archived_at = NULL, is_active = true WHERE id = $1`, [req.params.id]);
       return res.json({ ok: true });
     } catch (e: any) {
@@ -7947,7 +7947,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return activeStatuses.has(status);
       });
 
-      const assignmentCounts: Record<string, { approved: number; applied: number }> = {};
+      const assignmentCounts: Record<string, { approved: number; pending: number; applied: number }> = {};
       try {
         const jobIds = myJobs.map((j: any) => j.id);
         if (jobIds.length > 0) {

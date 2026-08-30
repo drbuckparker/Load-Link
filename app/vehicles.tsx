@@ -28,6 +28,7 @@ interface Vehicle {
   is_primary: boolean;
   is_active: boolean;
   created_at: string;
+  has_tarp?: boolean;
   assigned_driver_id: string | null;
   assigned_driver: AssignedDriver | null;
 }
@@ -63,7 +64,7 @@ export default function VehiclesScreen() {
   const [driverSearch, setDriverSearch] = useState('');
   const [driverResults, setDriverResults] = useState<AssignedDriver[]>([]);
   const [searchingDrivers, setSearchingDrivers] = useState(false);
-  const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const searchTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const searchDrivers = useCallback((query: string) => {
     setDriverSearch(query);
@@ -444,7 +445,7 @@ export default function VehiclesScreen() {
             <Pressable onPress={() => openEdit(item)} hitSlop={8}>
               <Ionicons name="create-outline" size={20} color={Colors.textMuted} />
             </Pressable>
-            <Pressable onPress={() => handleArchive(item.id)} hitSlop={8}>
+            <Pressable onPress={() => handleArchive(String(item.id))} hitSlop={8}>
               <Ionicons name="archive-outline" size={20} color={Colors.warning} />
             </Pressable>
           </View>
@@ -527,9 +528,9 @@ export default function VehiclesScreen() {
                   const label = `${item.truck_number ? '#' + item.truck_number + ' ' : ''}${item.year || ''} ${item.make || ''} ${item.model || ''}`.trim() || 'this vehicle';
                   return (
                   <View key={String(item.id)} style={[styles.vehicleCard, { opacity: 0.7 }]}>
-                    <View style={styles.vehicleHeader}>
+                    <View style={styles.vehicleCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.vehicleName}>
+                        <Text style={styles.vehicleTitle}>
                           {item.truck_number ? `#${item.truck_number} ` : ''}{item.year} {item.make} {item.model}
                         </Text>
                         <Text style={styles.vehicleType}>{TRUCK_TYPE_LABELS[item.truck_type] || item.truck_type}</Text>

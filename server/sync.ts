@@ -878,7 +878,7 @@ export async function enqueueExistingProjects(auth: SyncAuth, projectIds?: strin
   return queued;
 }
 
-const _syncTimers = new Map<string, NodeJS.Timeout>();
+const _syncTimers = new Map<string, ReturnType<typeof setInterval>>();
 
 const _lastUserActivity = new Map<string, number>();
 

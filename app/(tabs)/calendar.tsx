@@ -254,7 +254,7 @@ export default function CalendarScreen() {
     enabled: !!user,
   });
 
-  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; needed: number; jobCount: number }>; dailyJobs: Record<string, any[]> }>({
+  const capacityQuery = useQuery<{ fleetSize: number; dailyCapacity: Record<string, { booked: number; pending?: number; needed: number; jobCount: number }>; dailyJobs: Record<string, any[]> }>({
     queryKey: ['/api/contractor/calendar-capacity', `?month=${currentMonth + 1}&year=${currentYear}`],
     enabled: !!user && isContractor,
     staleTime: 30_000,
@@ -339,6 +339,7 @@ export default function CalendarScreen() {
       pickupTime: string; status: string; assignmentStatus: string; truckType: string;
       contractorName: string; rate: string; rateType: string;
       vehicle: { id: string; make: string; model: string; year: number; licensePlate: string; truckType: string } | null;
+      vehicleAssignments?: { vehicleId: string; status: string }[];
     }[]>;
     jobDates: string[];
   }>({
@@ -578,7 +579,7 @@ export default function CalendarScreen() {
       setSelectedVehicleIds(alreadySet);
       setShowTruckPicker(isAvailable ? 'available' : 'unavailable');
     } else {
-      quickSetAvailability(selectedDate, isAvailable, vehicles.length === 1 ? [vehicles[0].id] : undefined);
+      quickSetAvailability(selectedDate!, isAvailable, vehicles.length === 1 ? [vehicles[0].id] : undefined);
     }
   }
 

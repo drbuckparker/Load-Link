@@ -1695,7 +1695,7 @@ export default function CreateJobScreen() {
               <Text style={[styles.label, { marginBottom: 0 }]}>Pickup Location</Text>
               <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('origin')}>
                 <Ionicons name="location" size={16} color={originLat ? Colors.primary : Colors.textSecondary} />
-                <Text style={[styles.mapPinLinkText, originLat && { color: Colors.primary }]}>
+                <Text style={[styles.mapPinLinkText, originLat ? { color: Colors.primary } : null]}>
                   {originLat ? 'Pin Set' : 'Drop Pin on Map'}
                 </Text>
               </Pressable>
@@ -1765,7 +1765,7 @@ export default function CreateJobScreen() {
               <Text style={[styles.label, { marginBottom: 0 }]}>Dropoff Location</Text>
               <Pressable style={styles.mapPinLink} onPress={() => openMapPicker('destination')}>
                 <Ionicons name="location" size={16} color={destLat ? Colors.primary : Colors.textSecondary} />
-                <Text style={[styles.mapPinLinkText, destLat && { color: Colors.primary }]}>
+                <Text style={[styles.mapPinLinkText, destLat ? { color: Colors.primary } : null]}>
                   {destLat ? 'Pin Set' : 'Drop Pin on Map'}
                 </Text>
               </Pressable>

@@ -18,7 +18,7 @@ function checkLiquidGlass(): boolean {
   } catch {
     _liquidGlassAvailable = false;
   }
-  return _liquidGlassAvailable;
+  return _liquidGlassAvailable ?? false;
 }
 
 let NativeTabsModule: any = null;

@@ -299,6 +299,7 @@ export default function ProfileScreen() {
   const radiusOptions = [50, 100, 250];
 
   function renderProfileTab() {
+    if (!user) return null;
     return (
       <>
         <View style={styles.profileCard}>
