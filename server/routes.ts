@@ -4581,7 +4581,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(409).json({ message: "This assignment already has a different response." });
         }
 
-        const up = await websiteFetch(`/api/assignments/${assignmentId}/${action}`, {
+        // Website assignment responses live under /api/job-assignments. The
+        // legacy /api/assignments path can route an owner-driver response into
+        // contractor approval, incorrectly making the active dashboard role
+        // decide whether the assigned driver may respond.
+        const up = await websiteFetch(`/api/job-assignments/${encodeURIComponent(assignmentId)}/${action}`, {
           method: "POST",
           body: req.body ?? {},
           jwt: auth.jwt,

@@ -5188,7 +5188,7 @@ async function registerRoutes(app2) {
         }
         return res.status(409).json({ message: "This assignment already has a different response." });
       }
-      const up = await websiteFetch(`/api/assignments/${assignmentId}/${action}`, {
+      const up = await websiteFetch(`/api/job-assignments/${encodeURIComponent(assignmentId)}/${action}`, {
         method: "POST",
         body: req.body ?? {},
         jwt: auth.jwt
