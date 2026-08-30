@@ -6878,7 +6878,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const result = await pool.query(
-        `SELECT *, capacity AS max_capacity_tons FROM trucks WHERE (trucking_company_id = $1 OR assigned_driver_id = $1) AND archived_at IS NULL ORDER BY sort_order, created_at`,
+        `SELECT t.*, t.capacity AS max_capacity_tons,
+                CASE WHEN d.id IS NOT NULL THEN json_build_object(
+                  'id', d.id::text,
+                  'name', COALESCE(d.full_name, d.email, 'Driver'),
+                  'email', d.email
+                ) ELSE NULL END AS assigned_driver
+           FROM trucks t
+           LEFT JOIN users d ON d.id::text = t.assigned_driver_id::text
+          WHERE (t.trucking_company_id = $1 OR t.assigned_driver_id = $1)
+            AND t.archived_at IS NULL
+          ORDER BY t.sort_order, t.created_at`,
         [auth.userId]
       );
       return res.json(result.rows.map(addDualKeys));
@@ -6967,7 +6977,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         values.push(req.params.id);
         await pool.query(`UPDATE trucks SET ${updates.join(', ')} WHERE id = $${idx}`, values);
       }
-      const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [req.params.id]);
+      const result = await pool.query(
+        `SELECT t.*,
+                CASE WHEN d.id IS NOT NULL THEN json_build_object(
+                  'id', d.id::text,
+                  'name', COALESCE(d.full_name, d.email, 'Driver'),
+                  'email', d.email
+                ) ELSE NULL END AS assigned_driver
+           FROM trucks t
+           LEFT JOIN users d ON d.id::text = t.assigned_driver_id::text
+          WHERE t.id = $1`,
+        [req.params.id]
+      );
       return res.json(addDualKeys(result.rows[0] || {}));
     } catch (e: any) {
       console.error("PUT vehicle error:", e.message, e.detail || '');

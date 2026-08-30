@@ -89,7 +89,7 @@ export default function VehiclesScreen() {
   const vehicles = _vehicles || [];
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (assignedDriverId?: string) => {
       const payload: any = {
         truck_type: form.truck_type,
         make: form.make,
@@ -101,7 +101,7 @@ export default function VehiclesScreen() {
         truck_number: form.truck_number,
         is_primary: form.is_primary,
         has_tarp: form.has_tarp,
-        assigned_driver_id: form.assigned_driver_id || null,
+        assigned_driver_id: assignedDriverId || form.assigned_driver_id || null,
       };
       if (editingId) {
         return apiRequest('PUT', `/api/vehicles/${editingId}`, payload);
@@ -113,6 +113,28 @@ export default function VehiclesScreen() {
       closeForm();
     },
   });
+
+  function handleSave() {
+    if (!form.assigned_driver_id && driverSearch.trim()) {
+      const needle = driverSearch.trim().toLowerCase();
+      const exactMatches = driverResults.filter(d =>
+        d.name?.trim().toLowerCase() === needle ||
+        d.email?.trim().toLowerCase() === needle
+      );
+      if (exactMatches.length === 1) {
+        saveMutation.mutate(exactMatches[0].id);
+        return;
+      }
+      Alert.alert(
+        'Select a Driver',
+        driverResults.length > 0
+          ? 'Tap the driver’s name in the search results before saving.'
+          : 'No matching driver was selected. Search again and tap the driver’s name before saving.'
+      );
+      return;
+    }
+    saveMutation.mutate(undefined);
+  }
 
   const [showArchived, setShowArchived] = useState(false);
 
@@ -395,7 +417,7 @@ export default function VehiclesScreen() {
           </Pressable>
           <Pressable
             style={[styles.saveBtn, saveMutation.isPending && { opacity: 0.6 }]}
-            onPress={() => saveMutation.mutate()}
+            onPress={handleSave}
             disabled={saveMutation.isPending}
           >
             {saveMutation.isPending ? (
