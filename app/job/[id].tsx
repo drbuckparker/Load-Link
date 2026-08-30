@@ -844,6 +844,8 @@ export default function JobDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
       if (action === 'decline') {
         if (router.canGoBack()) router.back(); else router.replace('/(tabs)' as any);
       }
