@@ -2114,6 +2114,265 @@ async function sendBrokerAssignmentChangePush(driverId, jobId, change) {
     jobId
   }, "default", `${change}-broker-assignment-${jobId}-${driverId}`);
 }
+function brokerJobActiveDateKeys(job, tzOffsetMin) {
+  const startKey = brokerJobStartKey(job, tzOffsetMin);
+  if (!startKey) return [];
+  const days = Math.max(1, Math.ceil(Number(
+    job.listedDays ?? job.listed_days ?? job.estimatedDays ?? job.estimated_days ?? 1
+  ) || 1));
+  const current = /* @__PURE__ */ new Date(`${startKey}T00:00:00Z`);
+  if (isNaN(current.getTime())) return [];
+  const dates = [];
+  let added = 0;
+  let guard = 0;
+  while (added < days && guard++ < 120) {
+    const key = current.toISOString().slice(0, 10);
+    const dayAllowed = added === 0 ? true : brokerJobDayAllowed(job, key, startKey);
+    if (dayAllowed) {
+      dates.push(current.toISOString().slice(0, 10));
+      added++;
+    }
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+function brokerJobStartKey(job, tzOffsetMin) {
+  const raw = String(job.scheduledDate || job.scheduled_date || "");
+  if (!raw) return "";
+  if (!raw.includes("T") || /T00:00(:00)?/.test(raw)) return raw.slice(0, 10);
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return raw.slice(0, 10);
+  return new Date(d.getTime() - tzOffsetMin * 6e4).toISOString().slice(0, 10);
+}
+function brokerJobDayAllowed(job, dateKey, startKey) {
+  if (dateKey === startKey) return true;
+  const dow = (/* @__PURE__ */ new Date(`${dateKey}T00:00:00Z`)).getUTCDay();
+  if (dow !== 0 && dow !== 6) return true;
+  const weekends = !!(job.includesWeekends ?? job.includes_weekends);
+  const sat = weekends || !!(job.includesSaturday ?? job.includes_saturday);
+  const sun = weekends || !!(job.includesSunday ?? job.includes_sunday);
+  return dow === 6 && sat || dow === 0 && sun;
+}
+function brokerJobActiveOnDate(job, tzOffsetMin, dateKey) {
+  if (brokerJobActiveDateKeys(job, tzOffsetMin).includes(dateKey)) return true;
+  const jobType = String(job.jobType ?? job.job_type ?? "");
+  if (jobType !== "multi_day") return false;
+  const startKey = brokerJobStartKey(job, tzOffsetMin);
+  if (!startKey || dateKey < startKey) return false;
+  return brokerJobDayAllowed(job, dateKey, startKey);
+}
+function brokerJobNextActiveDate(job, tzOffsetMin, dateKey) {
+  const explicit = brokerJobActiveDateKeys(job, tzOffsetMin).filter((d) => d > dateKey).sort()[0] || null;
+  const jobType = String(job.jobType ?? job.job_type ?? "");
+  if (jobType !== "multi_day") return explicit;
+  const startKey = brokerJobStartKey(job, tzOffsetMin);
+  if (!startKey) return explicit;
+  if (startKey > dateKey) {
+    return explicit && explicit < startKey ? explicit : startKey;
+  }
+  const cursor = /* @__PURE__ */ new Date(`${dateKey}T00:00:00Z`);
+  for (let i = 0; i < 14; i++) {
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const candidate = cursor.toISOString().slice(0, 10);
+    if (candidate <= dateKey) continue;
+    if (candidate < startKey) continue;
+    if (brokerJobDayAllowed(job, candidate, startKey)) {
+      return explicit && explicit < candidate ? explicit : candidate;
+    }
+  }
+  return explicit;
+}
+async function ensureBrokerNightlyReminderLedger() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS broker_nightly_reminder_deliveries (
+      assignment_id text NOT NULL,
+      work_date date NOT NULL,
+      driver_id text NOT NULL,
+      job_id text NOT NULL,
+      delivered boolean NOT NULL DEFAULT false,
+      attempts integer NOT NULL DEFAULT 0,
+      claimed_at timestamptz,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (assignment_id, work_date)
+    )
+  `);
+  await pool.query(
+    `ALTER TABLE broker_nightly_reminder_deliveries ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0`
+  );
+  await pool.query(
+    `ALTER TABLE broker_nightly_reminder_deliveries ADD COLUMN IF NOT EXISTS claimed_at timestamptz`
+  );
+}
+async function sendNightlyAssignmentReminders(job, assignments, workDateKey, fireDayKey) {
+  let reminded = 0;
+  let failed = 0;
+  let active = 0;
+  for (const a of Array.isArray(assignments) ? assignments : []) {
+    const id = String(a.id || a.assignmentId || a.assignment_id || "");
+    const driverId = String(a.driverId || a.driver_id || a.driver?.id || "");
+    const status = String(a.status || "").toLowerCase();
+    const sentAtRaw = Object.prototype.hasOwnProperty.call(a, "sentAt") ? a.sentAt : a.sent_at;
+    if (!id || !driverId) continue;
+    if (!["pending", "accepted", "approved", "assigned"].includes(status)) continue;
+    active++;
+    if (!sentAtRaw) continue;
+    const sentDay = String(new Date(sentAtRaw).toISOString() || "").slice(0, 10);
+    if (sentDay === fireDayKey || sentDay === workDateKey) continue;
+    try {
+      const claim = await pool.query(
+        `INSERT INTO broker_nightly_reminder_deliveries (assignment_id, work_date, driver_id, job_id, attempts, claimed_at)
+         VALUES ($1, $2::date, $3, $4, 1, NOW())
+         ON CONFLICT (assignment_id, work_date) DO UPDATE
+           SET attempts = broker_nightly_reminder_deliveries.attempts + 1,
+               claimed_at = NOW()
+         WHERE broker_nightly_reminder_deliveries.delivered = false
+           AND broker_nightly_reminder_deliveries.attempts < 5
+           AND (broker_nightly_reminder_deliveries.claimed_at IS NULL
+                OR broker_nightly_reminder_deliveries.claimed_at < NOW() - INTERVAL '2 minutes')
+         RETURNING attempts`,
+        [id, workDateKey, driverId, String(job.id)]
+      );
+      if (claim.rowCount === 0) continue;
+      const dayLabel = (/* @__PURE__ */ new Date(`${workDateKey}T12:00:00Z`)).toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC"
+      });
+      const pickup = String(job.originAddress || job.origin_address || "").trim();
+      const destination = String(job.destinationAddress || job.destination_address || "").trim();
+      const route = [
+        pickup ? `Pickup: ${pickup}.` : "",
+        destination ? `Deliver to: ${destination}.` : ""
+      ].filter(Boolean).join(" ");
+      const title = "Reminder: you're on this job tomorrow";
+      const body = `${job.material || "Your job"} continues ${dayLabel}. ${route}`.trim();
+      const ok = await sendPushNotification(driverId, title, body, {
+        type: "broker_assignment_reminder",
+        jobId: String(job.id),
+        assignmentId: id
+      }, "default", `nightly-reminder-${id}-${workDateKey}`);
+      await pool.query(
+        `UPDATE broker_nightly_reminder_deliveries
+            SET delivered = $3, error = $4,
+                claimed_at = CASE WHEN $3 THEN claimed_at ELSE NULL END
+          WHERE assignment_id = $1 AND work_date = $2::date`,
+        [id, workDateKey, ok, ok ? null : "No registered device token or push provider rejected delivery"]
+      ).catch(() => {
+      });
+      if (ok) reminded++;
+      else failed++;
+    } catch (e) {
+      failed++;
+      console.error(`[BrokerSend] nightly reminder failed for assignment ${id}:`, e.message);
+      await pool.query(
+        `UPDATE broker_nightly_reminder_deliveries SET claimed_at = NULL
+          WHERE assignment_id = $1 AND work_date = $2::date AND delivered = false`,
+        [id, workDateKey]
+      ).catch(() => {
+      });
+    }
+  }
+  return { reminded, failed, active };
+}
+function nextSendAtWallClock(sendAtMs, nextDateKey, dayDiff, tzName) {
+  const fallback = new Date(sendAtMs + dayDiff * 864e5);
+  if (!tzName) return fallback;
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tzName,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+    const partsAt = (ms) => {
+      const p = {};
+      for (const { type, value } of fmt.formatToParts(ms)) {
+        if (type !== "literal") p[type] = Number(value);
+      }
+      return p;
+    };
+    const wall = partsAt(sendAtMs);
+    const targetUtcGuess = Date.UTC(
+      wall.year,
+      wall.month - 1,
+      wall.day + dayDiff,
+      wall.hour % 24,
+      wall.minute,
+      wall.second || 0
+    );
+    let guess = targetUtcGuess;
+    for (let i = 0; i < 2; i++) {
+      const g = partsAt(guess);
+      const asUtc = Date.UTC(g.year, g.month - 1, g.day, g.hour % 24, g.minute, g.second || 0);
+      guess = targetUtcGuess - (asUtc - guess);
+    }
+    const result = new Date(guess);
+    return isNaN(result.getTime()) ? fallback : result;
+  } catch {
+    return fallback;
+  }
+}
+async function rollForwardBrokerScheduledSend(row, dateKey, jobs2, sendAtMs, hadActivity = null) {
+  if (hadActivity === false) {
+    await pool.query(
+      `UPDATE broker_scheduled_sends SET status = 'ended'
+        WHERE id = $1 AND status IN ('sent', 'failed')`,
+      [row.id]
+    ).catch(() => {
+    });
+    console.log(`[BrokerSend] schedule ${row.id}: no active assignments remain \u2014 nightly chain ends`);
+    return;
+  }
+  const tzOffsetMin = Number(row.tz_offset_min) || 0;
+  if (!Array.isArray(jobs2)) {
+    try {
+      const lr = await pool.query(
+        `SELECT id, scheduled_date, listed_days, estimated_days, includes_weekends,
+                includes_saturday, includes_sunday, job_type, status
+           FROM jobs WHERE contractor_id = $1`,
+        [String(row.broker_id)]
+      );
+      jobs2 = lr.rows;
+    } catch {
+      jobs2 = [];
+    }
+  }
+  let nextDate = null;
+  for (const job of Array.isArray(jobs2) ? jobs2 : []) {
+    const status = String(job.status || "").toLowerCase();
+    if (["completed", "cancelled", "canceled", "expired"].includes(status)) continue;
+    if (!brokerJobActiveOnDate(job, tzOffsetMin, dateKey)) continue;
+    const d = brokerJobNextActiveDate(job, tzOffsetMin, dateKey);
+    if (d && (!nextDate || d < nextDate)) nextDate = d;
+  }
+  if (!nextDate) return;
+  const dayDiff = Math.round(
+    (Date.parse(`${nextDate}T00:00:00Z`) - Date.parse(`${dateKey}T00:00:00Z`)) / 864e5
+  );
+  if (!(dayDiff > 0)) return;
+  const tzName = row.tz_name ? String(row.tz_name) : null;
+  const nextSendAt = nextSendAtWallClock(sendAtMs, nextDate, dayDiff, tzName);
+  try {
+    const r = await pool.query(
+      `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min, tz_name, origin)
+       VALUES ($1, $2::date, $3, $4, $5, 'recurring')
+       ON CONFLICT (broker_id, date) WHERE status = 'pending' DO NOTHING
+       RETURNING id`,
+      [row.broker_id, nextDate, nextSendAt.toISOString(), tzOffsetMin, tzName]
+    );
+    if (r.rowCount) {
+      console.log(`[BrokerSend] schedule ${row.id}: rolled forward to ${nextDate} at ${nextSendAt.toISOString()}`);
+    }
+  } catch (e) {
+    console.error(`[BrokerSend] roll-forward error for schedule ${row.id}:`, e.message);
+  }
+}
 async function recoverStuckBrokerScheduledSends() {
   try {
     const r = await pool.query(
@@ -2130,13 +2389,47 @@ async function recoverStuckBrokerScheduledSends() {
            AND COALESCE(claimed_at, send_at) < NOW() - INTERVAL '5 minutes'
          FOR UPDATE SKIP LOCKED
        )
-       RETURNING id, status`
+       RETURNING id, status, broker_id, date, send_at, tz_offset_min, tz_name, origin`
     );
     for (const row of r.rows) {
       console.log(`[BrokerSend] schedule ${row.id}: recovered stuck 'processing' row -> ${row.status}`);
+      if (row.status === "failed") {
+        const dateKey = String(row.date instanceof Date ? row.date.toISOString().slice(0, 10) : row.date).slice(0, 10);
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (dateKey && !isNaN(sendAtMs)) {
+          await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+        }
+      }
     }
   } catch (e) {
     console.error("[BrokerSend] stuck-row recovery error:", e?.message || e);
+  }
+}
+async function reconcileBrokerScheduledSendChains() {
+  try {
+    const r = await pool.query(
+      `SELECT DISTINCT ON (broker_id) id, broker_id, date, send_at, tz_offset_min, tz_name, origin
+         FROM broker_scheduled_sends t
+        WHERE status IN ('sent', 'failed')
+          AND send_at > NOW() - INTERVAL '7 days'
+          AND NOT EXISTS (
+            SELECT 1 FROM broker_scheduled_sends p
+             WHERE p.broker_id = t.broker_id AND p.status IN ('pending', 'processing')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM broker_scheduled_sends c
+             WHERE c.broker_id = t.broker_id AND c.status IN ('cancelled', 'ended') AND c.date >= t.date
+          )
+        ORDER BY broker_id, send_at DESC`
+    );
+    for (const row of r.rows) {
+      const dateKey = String(row.date instanceof Date ? row.date.toISOString().slice(0, 10) : row.date).slice(0, 10);
+      const sendAtMs = new Date(row.send_at).getTime();
+      if (!dateKey || isNaN(sendAtMs)) continue;
+      await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+    }
+  } catch (e) {
+    console.error("[BrokerSend] chain reconciliation error:", e?.message || e);
   }
 }
 async function processDueBrokerScheduledSends() {
@@ -2150,7 +2443,7 @@ async function processDueBrokerScheduledSends() {
          ORDER BY send_at ASC LIMIT 20
          FOR UPDATE SKIP LOCKED
        )
-       RETURNING id, broker_id, date, tz_offset_min, attempts`
+       RETURNING id, broker_id, date, send_at, tz_offset_min, tz_name, origin, attempts`
     );
     due = r.rows;
   } catch {
@@ -2161,7 +2454,7 @@ async function processDueBrokerScheduledSends() {
     const tzOffsetMin = Number(row.tz_offset_min) || 0;
     const jobDayKey = (raw) => {
       if (!raw) return "";
-      if (!raw.includes("T")) return raw.slice(0, 10);
+      if (!raw.includes("T") || /T00:00(:00)?/.test(raw)) return raw.slice(0, 10);
       const d = new Date(raw);
       if (isNaN(d.getTime())) return raw.slice(0, 10);
       return new Date(d.getTime() - tzOffsetMin * 6e4).toISOString().slice(0, 10);
@@ -2177,11 +2470,22 @@ async function processDueBrokerScheduledSends() {
       }
     }
     if (!jwt) {
-      await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1 AND status = 'processing'`,
-        [row.id]
-      ).catch(() => {
-      });
+      if (Number(row.attempts) < 5) {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'pending', attempts = attempts + 1,
+             error = 'No active login session at send time; will retry' WHERE id = $1 AND status = 'processing'`,
+          [row.id]
+        ).catch(() => {
+        });
+      } else {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1 AND status = 'processing'`,
+          [row.id]
+        ).catch(() => {
+        });
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (!isNaN(sendAtMs)) await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+      }
       continue;
     }
     try {
@@ -2189,19 +2493,52 @@ async function processDueBrokerScheduledSends() {
       if (!jr.ok) throw new Error(`jobs fetch ${jr.status}`);
       const jobs2 = await jr.json().catch(() => []);
       let sentJobs = 0;
+      let reminders = 0;
+      let activeAssignments = 0;
+      let assignmentInfoUnknown = false;
+      const isRecurring = String(row.origin || "user") === "recurring";
       const failedJobs = [];
+      const fireDayKey = new Date(Date.now() - tzOffsetMin * 6e4).toISOString().slice(0, 10);
       for (const job of Array.isArray(jobs2) ? jobs2 : []) {
-        const jobDate = jobDayKey(String(job.scheduledDate || job.scheduled_date || ""));
-        if (jobDate !== dateKey) continue;
+        const status = String(job.status || "").toLowerCase();
+        if (["completed", "cancelled", "canceled", "expired"].includes(status)) continue;
+        if (!brokerJobActiveOnDate(job, tzOffsetMin, dateKey)) {
+          if (jobDayKey(String(job.scheduledDate || job.scheduled_date || "")) !== dateKey) continue;
+        }
+        if (isRecurring) {
+          const startKey = brokerJobStartKey(job, tzOffsetMin);
+          if (!startKey || startKey >= dateKey) continue;
+        }
         const held = (job.assignmentStats?.held || 0) > 0 || Array.isArray(job.assignments) && job.assignments.some(
           (a) => (a.sentAt ?? a.sent_at) == null && a.status !== "declined" && a.status !== "withdrawn"
         );
-        if (!held) continue;
-        const sr = await sendBrokerJobInstructions(String(job.id), String(row.broker_id), jwt);
-        if (sr.ok) sentJobs++;
-        else {
-          failedJobs.push(String(job.id));
-          console.error(`[BrokerSend] send-all failed for job ${job.id}: ${sr.status}`);
+        if (held) {
+          const sr = await sendBrokerJobInstructions(String(job.id), String(row.broker_id), jwt);
+          if (sr.ok) sentJobs++;
+          else {
+            failedJobs.push(String(job.id));
+            console.error(`[BrokerSend] send-all failed for job ${job.id}: ${sr.status}`);
+          }
+        }
+        try {
+          const ar = await websiteFetch(
+            `/api/broker/jobs/${encodeURIComponent(String(job.id))}/assignments`,
+            { method: "GET", jwt }
+          );
+          if (ar.ok) {
+            const assignments = await ar.json().catch(() => []);
+            const rr = await sendNightlyAssignmentReminders(job, assignments, dateKey, fireDayKey);
+            reminders += rr.reminded;
+            activeAssignments += rr.active;
+            if (rr.failed > 0) failedJobs.push(`reminders:${job.id}`);
+          } else {
+            assignmentInfoUnknown = true;
+            failedJobs.push(`reminders:${job.id}`);
+          }
+        } catch (e) {
+          assignmentInfoUnknown = true;
+          failedJobs.push(`reminders:${job.id}`);
+          console.error(`[BrokerSend] reminder pass failed for job ${job.id}:`, e.message);
         }
       }
       if (failedJobs.length > 0 && Number(row.attempts) < 5) {
@@ -2222,34 +2559,70 @@ async function processDueBrokerScheduledSends() {
           [row.id, sentJobs]
         );
       }
-      console.log(`[BrokerSend] schedule ${row.id}: sent instructions on ${sentJobs} job(s) for ${dateKey}${failedJobs.length ? `, ${failedJobs.length} failed (will retry)` : ""}`);
+      const stillRetrying = failedJobs.length > 0 && Number(row.attempts) < 5;
+      if (!stillRetrying) {
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (!isNaN(sendAtMs)) {
+          const hadActivity = assignmentInfoUnknown ? null : sentJobs > 0 || reminders > 0 || activeAssignments > 0;
+          await rollForwardBrokerScheduledSend(row, dateKey, jobs2, sendAtMs, hadActivity);
+        }
+      }
+      console.log(`[BrokerSend] schedule ${row.id}: sent instructions on ${sentJobs} job(s), ${reminders} nightly reminder(s) for ${dateKey}${failedJobs.length ? `, ${failedJobs.length} failed (will retry)` : ""}`);
     } catch (e) {
       console.error("[BrokerSend] error:", e.message);
-      await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1 AND status = 'processing'`,
-        [row.id, String(e.message || e).slice(0, 500)]
-      ).catch(() => {
-      });
+      if (Number(row.attempts) < 5) {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'pending', attempts = attempts + 1,
+             error = $2 WHERE id = $1 AND status = 'processing'`,
+          [row.id, `Will retry: ${String(e.message || e).slice(0, 450)}`]
+        ).catch(() => {
+        });
+      } else {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1 AND status = 'processing'`,
+          [row.id, String(e.message || e).slice(0, 500)]
+        ).catch(() => {
+        });
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (!isNaN(sendAtMs)) await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+      }
     }
   }
 }
 function sweepOldBrokerScheduledSends() {
   pool.query(
     `DELETE FROM broker_scheduled_sends
-     WHERE status IN ('sent', 'failed')
+     WHERE status IN ('sent', 'failed', 'cancelled', 'ended')
        AND send_at < NOW() - INTERVAL '30 days'`
   ).then((r) => {
     if (r.rowCount) console.log(`[BrokerSend] swept ${r.rowCount} old sent/failed schedule row(s)`);
   }).catch(() => {
   });
+  pool.query(
+    `DELETE FROM broker_nightly_reminder_deliveries WHERE work_date < NOW() - INTERVAL '30 days'`
+  ).catch(() => {
+  });
 }
 function startBrokerScheduledSendWorker() {
-  ensureBrokerInstructionPushOutbox().then(() => reconcileDormantBrokerInstructionPushes()).then(() => deliverPendingBrokerInstructionPushes()).catch((e) => console.error("[BrokerSend] instruction push outbox init error:", e?.message || e));
+  ensureBrokerInstructionPushOutbox().then(() => ensureBrokerNightlyReminderLedger()).then(() => reconcileDormantBrokerInstructionPushes()).then(() => deliverPendingBrokerInstructionPushes()).catch((e) => console.error("[BrokerSend] instruction push outbox init error:", e?.message || e));
   sweepOldBrokerScheduledSends();
-  pool.query(`ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS claimed_at timestamptz`).catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e)).then(() => recoverStuckBrokerScheduledSends()).catch(() => {
+  pool.query(`ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS claimed_at timestamptz`).then(() => pool.query(
+    `ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS tz_name text`
+  )).then(() => pool.query(
+    `ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'user'`
+  )).then(() => pool.query(
+    `DELETE FROM broker_scheduled_sends a
+        USING broker_scheduled_sends b
+        WHERE a.status = 'pending' AND b.status = 'pending'
+          AND a.broker_id = b.broker_id AND a.date = b.date
+          AND a.created_at > b.created_at`
+  )).then(() => pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS broker_scheduled_sends_pending_uniq
+         ON broker_scheduled_sends (broker_id, date) WHERE status = 'pending'`
+  )).catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e)).then(() => recoverStuckBrokerScheduledSends()).then(() => reconcileBrokerScheduledSendChains()).catch(() => {
   });
   setInterval(() => {
-    recoverStuckBrokerScheduledSends().catch(() => {
+    recoverStuckBrokerScheduledSends().then(() => reconcileBrokerScheduledSendChains()).catch(() => {
     });
   }, 5 * 60 * 1e3);
   setInterval(() => {
@@ -4090,7 +4463,7 @@ async function registerRoutes(app2) {
         params.push(date);
       }
       const r = await pool.query(
-        `SELECT id, date, send_at, status, error, sent_jobs, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
+        `SELECT id, date, send_at, status, error, sent_jobs, created_at FROM broker_scheduled_sends WHERE ${where} AND status <> 'cancelled' ORDER BY send_at ASC`,
         params
       );
       return res.json(r.rows.map((row) => ({
@@ -4118,14 +4491,20 @@ async function registerRoutes(app2) {
     if (sendAt.getTime() < Date.now() - 6e4) return res.status(400).json({ message: "sendAt is in the past" });
     try {
       await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status IN ('pending', 'failed')`,
+        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status IN ('pending', 'failed', 'cancelled')`,
         [auth.userId, date]
       );
       const tzOffsetMin = Number(req.body?.tzOffsetMin ?? req.header("X-TZ-Offset") ?? 0) || 0;
+      const tzNameRaw = String(req.body?.tzName || "").slice(0, 64);
+      const tzName = /^[A-Za-z_+\-]+(\/[A-Za-z_+\-0-9]+){0,2}$/.test(tzNameRaw) ? tzNameRaw : null;
       const r = await pool.query(
-        `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min) VALUES ($1, $2, $3, $4)
+        `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min, tz_name)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (broker_id, date) WHERE status = 'pending'
+         DO UPDATE SET send_at = EXCLUDED.send_at, tz_offset_min = EXCLUDED.tz_offset_min,
+                       tz_name = EXCLUDED.tz_name, attempts = 0, error = NULL, origin = 'user'
          RETURNING id, date, send_at, status`,
-        [auth.userId, date, sendAt.toISOString(), tzOffsetMin]
+        [auth.userId, date, sendAt.toISOString(), tzOffsetMin, tzName]
       );
       const row = r.rows[0];
       return res.status(201).json({
@@ -4143,7 +4522,8 @@ async function registerRoutes(app2) {
     const auth = getWebsiteAuth(req);
     try {
       const r = await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status IN ('pending', 'failed') RETURNING id`,
+        `UPDATE broker_scheduled_sends SET status = 'cancelled', claimed_at = NULL
+          WHERE id = $1 AND broker_id = $2 AND status IN ('pending', 'failed') RETURNING id`,
         [req.params.id, auth.userId]
       );
       if (r.rowCount === 0) return res.status(404).json({ message: "Scheduled send not found" });

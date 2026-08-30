@@ -18,3 +18,9 @@ The companion owns driver phone delivery. Every instruction-send mode—send whi
 **Confirmation rule:** After a successful immediate send, close the truck sheet and require an explicit OK on “Your instructions were sent.” After scheduling succeeds, close the scheduler and require OK on a confirmation containing the localized send time.
 
 **Why:** The broker needs an unmistakable acknowledgement that the immediate send or saved schedule actually succeeded; silently returning to the job list leaves the outcome ambiguous.
+
+**Recurring-nightly rule:** A scheduled send is a chain, not a one-shot: every path that ends an occurrence — success, retry-cap failure, crash recovery — must leave a pending successor (or an explicit broker cancellation), and a reconciler must heal chains a crash broke, or one bad night silently ends multi-day reminders. Cancellation must be a durable signal distinct from "row missing", or healing resurrects schedules the broker stopped.
+
+**Why:** the nightly send is the product promise behind "on this job every day until removed"; any single-shot failure mode breaks it invisibly.
+
+**Day semantics:** job scheduled dates stored at midnight are calendar days — never tz-shift them (shifting moved US brokers' jobs a day early). Multi-day jobs are effectively open-ended: treat them active every allowed work day while open, because their stored duration estimate is often 1.0 and meaningless. Nightly sends fire the evening before the work day, so recurrence math must anchor on the fire date and keep the broker's local wall-clock time across DST.

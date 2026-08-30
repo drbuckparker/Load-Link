@@ -820,6 +820,354 @@ async function sendBrokerAssignmentChangePush(
   }, "default", `${change}-broker-assignment-${jobId}-${driverId}`);
 }
 
+// A job's active broker-local work-day keys. Mirrors the calendar's
+// getJobDateRange expansion (day 1 is always the start date; weekend-skipping
+// only applies to continuation days) so the nightly scheduler and the
+// on-screen calendar agree about which days a multi-day job covers.
+function brokerJobActiveDateKeys(job: any, tzOffsetMin: number): string[] {
+  const startKey = brokerJobStartKey(job, tzOffsetMin);
+  if (!startKey) return [];
+  const days = Math.max(1, Math.ceil(Number(
+    job.listedDays ?? job.listed_days ?? job.estimatedDays ?? job.estimated_days ?? 1
+  ) || 1));
+  const current = new Date(`${startKey}T00:00:00Z`);
+  if (isNaN(current.getTime())) return [];
+  const dates: string[] = [];
+  let added = 0;
+  let guard = 0;
+  while (added < days && guard++ < 120) {
+    const key = current.toISOString().slice(0, 10);
+    const dayAllowed = added === 0 ? true : brokerJobDayAllowed(job, key, startKey);
+    if (dayAllowed) {
+      dates.push(current.toISOString().slice(0, 10));
+      added++;
+    }
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function brokerJobStartKey(job: any, tzOffsetMin: number): string {
+  const raw = String(job.scheduledDate || job.scheduled_date || "");
+  if (!raw) return "";
+  // Calendar days are stored as midnight ("2026-08-31T00:00:00.000Z" from the
+  // website, "2026-08-31 00:00:00" locally): the first 10 chars ARE the
+  // scheduled day — shifting them into the broker's timezone would move US
+  // brokers' jobs a day early (same rule as the app's jobDateKey).
+  if (!raw.includes("T") || /T00:00(:00)?/.test(raw)) return raw.slice(0, 10);
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return raw.slice(0, 10);
+  return new Date(d.getTime() - tzOffsetMin * 60_000).toISOString().slice(0, 10);
+}
+
+// Same weekend policy as the app's jobCoversDay (broker.tsx): Saturday works
+// when includesWeekends OR includesSaturday, Sunday when includesWeekends OR
+// includesSunday — the aggregate flag and the per-day flags are each
+// sufficient on their own.
+function brokerJobDayAllowed(job: any, dateKey: string, startKey: string): boolean {
+  if (dateKey === startKey) return true;
+  const dow = new Date(`${dateKey}T00:00:00Z`).getUTCDay();
+  if (dow !== 0 && dow !== 6) return true;
+  const weekends = !!(job.includesWeekends ?? job.includes_weekends);
+  const sat = weekends || !!(job.includesSaturday ?? job.includes_saturday);
+  const sun = weekends || !!(job.includesSunday ?? job.includes_sunday);
+  return (dow === 6 && sat) || (dow === 0 && sun);
+}
+
+// "On this job — every day until removed": a multi_day job that is still
+// active stays on the nightly schedule every allowed work day from its start
+// until it completes/cancels or its trucks are removed, regardless of its
+// (often meaningless) duration estimate. There is deliberately NO day cap —
+// the chain ends via job status or the no-active-assignments check in the
+// worker, matching the promise "until the job ends or they're removed".
+function brokerJobActiveOnDate(job: any, tzOffsetMin: number, dateKey: string): boolean {
+  if (brokerJobActiveDateKeys(job, tzOffsetMin).includes(dateKey)) return true;
+  const jobType = String(job.jobType ?? job.job_type ?? "");
+  if (jobType !== "multi_day") return false;
+  const startKey = brokerJobStartKey(job, tzOffsetMin);
+  if (!startKey || dateKey < startKey) return false;
+  return brokerJobDayAllowed(job, dateKey, startKey);
+}
+
+// Earliest allowed work day strictly after dateKey on which the job is still
+// active, or null.
+function brokerJobNextActiveDate(job: any, tzOffsetMin: number, dateKey: string): string | null {
+  const explicit = brokerJobActiveDateKeys(job, tzOffsetMin)
+    .filter((d) => d > dateKey)
+    .sort()[0] || null;
+  const jobType = String(job.jobType ?? job.job_type ?? "");
+  if (jobType !== "multi_day") return explicit;
+  const startKey = brokerJobStartKey(job, tzOffsetMin);
+  if (!startKey) return explicit;
+  // Open-ended multi_day: no day cap — the chain is ended by job status or
+  // the worker's no-active-assignments check, never by an arbitrary cutoff.
+  // A job that hasn't started yet is next active on its start day.
+  if (startKey > dateKey) {
+    return explicit && explicit < startKey ? explicit : startKey;
+  }
+  // Walk forward from dateKey; the first allowed day strictly after it wins.
+  const cursor = new Date(`${dateKey}T00:00:00Z`);
+  for (let i = 0; i < 14; i++) {
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    const candidate = cursor.toISOString().slice(0, 10);
+    if (candidate <= dateKey) continue;
+    if (candidate < startKey) continue;
+    if (brokerJobDayAllowed(job, candidate, startKey)) {
+      return explicit && explicit < candidate ? explicit : candidate;
+    }
+  }
+  return explicit;
+}
+
+// Nightly reminder dedupe ledger: one reminder per assignment per work day,
+// held across retries, overlapping workers, and server restarts.
+async function ensureBrokerNightlyReminderLedger() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS broker_nightly_reminder_deliveries (
+      assignment_id text NOT NULL,
+      work_date date NOT NULL,
+      driver_id text NOT NULL,
+      job_id text NOT NULL,
+      delivered boolean NOT NULL DEFAULT false,
+      attempts integer NOT NULL DEFAULT 0,
+      claimed_at timestamptz,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (assignment_id, work_date)
+    )
+  `);
+  await pool.query(
+    `ALTER TABLE broker_nightly_reminder_deliveries ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0`
+  );
+  await pool.query(
+    `ALTER TABLE broker_nightly_reminder_deliveries ADD COLUMN IF NOT EXISTS claimed_at timestamptz`
+  );
+}
+
+// On each nightly occurrence, remind every still-active assignment that was
+// already sent its instructions on an earlier day ("On this job — every day
+// until removed"). First-time sends are handled by the held-assignment path;
+// this covers days 2..N of multi-day jobs. Returns the number of reminders
+// actually pushed.
+async function sendNightlyAssignmentReminders(
+  job: any,
+  assignments: any[],
+  workDateKey: string,
+  fireDayKey: string,
+): Promise<{ reminded: number; failed: number; active: number }> {
+  let reminded = 0;
+  let failed = 0;
+  let active = 0;
+  for (const a of Array.isArray(assignments) ? assignments : []) {
+    const id = String(a.id || a.assignmentId || a.assignment_id || "");
+    const driverId = String(a.driverId || a.driver_id || a.driver?.id || "");
+    const status = String(a.status || "").toLowerCase();
+    const sentAtRaw = Object.prototype.hasOwnProperty.call(a, "sentAt") ? a.sentAt : a.sent_at;
+    if (!id || !driverId) continue;
+    if (!["pending", "accepted", "approved", "assigned"].includes(status)) continue;
+    active++; // still on the job — keeps the nightly chain alive
+    if (!sentAtRaw) continue; // never sent yet — the held path owns the first send
+    // If the real instruction send already happened on the fire day (Send Now
+    // this afternoon, or the held path minutes ago in this same pass), the
+    // driver just got the full instructions — don't double-notify tonight.
+    const sentDay = String(new Date(sentAtRaw).toISOString() || "").slice(0, 10);
+    if (sentDay === fireDayKey || sentDay === workDateKey) continue;
+    try {
+      // Leased claim, not a permanent one: the atomic upsert takes a 2-minute
+      // lease (claimed_at), so an overlapping worker or a recovered/retried
+      // occurrence cannot double-claim a row another instance is actively
+      // pushing — it only reclaims after the lease expires. A crash between
+      // claim and push, or a push failure, becomes reclaimable on the next
+      // pass, up to 5 attempts. Only delivered=true suppresses further tries.
+      const claim = await pool.query(
+        `INSERT INTO broker_nightly_reminder_deliveries (assignment_id, work_date, driver_id, job_id, attempts, claimed_at)
+         VALUES ($1, $2::date, $3, $4, 1, NOW())
+         ON CONFLICT (assignment_id, work_date) DO UPDATE
+           SET attempts = broker_nightly_reminder_deliveries.attempts + 1,
+               claimed_at = NOW()
+         WHERE broker_nightly_reminder_deliveries.delivered = false
+           AND broker_nightly_reminder_deliveries.attempts < 5
+           AND (broker_nightly_reminder_deliveries.claimed_at IS NULL
+                OR broker_nightly_reminder_deliveries.claimed_at < NOW() - INTERVAL '2 minutes')
+         RETURNING attempts`,
+        [id, workDateKey, driverId, String(job.id)]
+      );
+      if (claim.rowCount === 0) continue; // delivered, capped, or actively leased elsewhere
+      const dayLabel = new Date(`${workDateKey}T12:00:00Z`).toLocaleDateString("en-US", {
+        weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
+      });
+      const pickup = String(job.originAddress || job.origin_address || "").trim();
+      const destination = String(job.destinationAddress || job.destination_address || "").trim();
+      const route = [
+        pickup ? `Pickup: ${pickup}.` : "",
+        destination ? `Deliver to: ${destination}.` : "",
+      ].filter(Boolean).join(" ");
+      const title = "Reminder: you're on this job tomorrow";
+      const body = `${job.material || "Your job"} continues ${dayLabel}. ${route}`.trim();
+      const ok = await sendPushNotification(driverId, title, body, {
+        type: "broker_assignment_reminder",
+        jobId: String(job.id),
+        assignmentId: id,
+      }, "default", `nightly-reminder-${id}-${workDateKey}`);
+      // On failure, release the lease immediately (claimed_at = NULL) so the
+      // occurrence's next retry pass — one minute later — can reclaim and
+      // redeliver without waiting out the 2-minute lease. The lease only
+      // needs to cover the in-flight push window that just ended.
+      await pool.query(
+        `UPDATE broker_nightly_reminder_deliveries
+            SET delivered = $3, error = $4,
+                claimed_at = CASE WHEN $3 THEN claimed_at ELSE NULL END
+          WHERE assignment_id = $1 AND work_date = $2::date`,
+        [id, workDateKey, ok, ok ? null : "No registered device token or push provider rejected delivery"]
+      ).catch(() => {});
+      if (ok) reminded++;
+      else failed++;
+    } catch (e: any) {
+      failed++;
+      console.error(`[BrokerSend] nightly reminder failed for assignment ${id}:`, e.message);
+      // Same lease release on an exception mid-push: without it the row
+      // stays leased for 2 minutes while the occurrence retries every 1.
+      await pool.query(
+        `UPDATE broker_nightly_reminder_deliveries SET claimed_at = NULL
+          WHERE assignment_id = $1 AND work_date = $2::date AND delivered = false`,
+        [id, workDateKey]
+      ).catch(() => {});
+    }
+  }
+  return { reminded, failed, active };
+}
+
+// DST-aware "same wall-clock time on a later day": when the broker's IANA
+// timezone is known, keep the local HH:MM stable across DST transitions;
+// otherwise fall back to fixed elapsed-time math.
+function nextSendAtWallClock(
+  sendAtMs: number,
+  nextDateKey: string,
+  dayDiff: number,
+  tzName: string | null,
+): Date {
+  const fallback = new Date(sendAtMs + dayDiff * 86_400_000);
+  if (!tzName) return fallback;
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tzName, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    const partsAt = (ms: number) => {
+      const p: Record<string, number> = {};
+      for (const { type, value } of fmt.formatToParts(ms)) {
+        if (type !== "literal") p[type] = Number(value);
+      }
+      return p;
+    };
+    const wall = partsAt(sendAtMs); // broker-local wall time of the original send
+    // Anchor on the original FIRE date, not the work date: nightly sends fire
+    // the evening before the work day, so the next fire is dayDiff calendar
+    // days after the original fire, at the same local wall time.
+    const targetUtcGuess = Date.UTC(
+      wall.year, wall.month - 1, wall.day + dayDiff,
+      wall.hour % 24, wall.minute, wall.second || 0
+    );
+    // Two-pass offset correction: offset(tz, t) = wallClockAsUTC(t) - t.
+    let guess = targetUtcGuess;
+    for (let i = 0; i < 2; i++) {
+      const g = partsAt(guess);
+      const asUtc = Date.UTC(g.year, g.month - 1, g.day, g.hour % 24, g.minute, g.second || 0);
+      guess = targetUtcGuess - (asUtc - guess);
+    }
+    const result = new Date(guess);
+    return isNaN(result.getTime()) ? fallback : result;
+  } catch {
+    return fallback;
+  }
+}
+
+// After a nightly occurrence resolves, keep the chain alive: if the broker
+// still has active work on a later date, schedule the same send time on the
+// next such date. Cancelling the pending row stops the chain (nothing rolls
+// forward from a deleted schedule), and edits replace the pending row, so
+// future nights always follow the latest saved time.
+async function rollForwardBrokerScheduledSend(
+  row: { id: string; broker_id: string; tz_offset_min: any; tz_name?: any },
+  dateKey: string,
+  jobs: any[] | null,
+  sendAtMs: number,
+  // false = the resolved occurrence found nothing to do (no held sends, no
+  // active assignments) — its trucks were removed or the jobs ended, so the
+  // chain must stop. null/true = keep the chain alive.
+  hadActivity: boolean | null = null,
+): Promise<void> {
+  if (hadActivity === false) {
+    // Durable chain-stop marker: 'ended' (not 'sent') so the reconciler's
+    // healing pass — which cannot re-check assignments from local data —
+    // never resurrects a chain that finished because all trucks were removed
+    // or the jobs are done. Saving a new schedule restarts it explicitly.
+    await pool.query(
+      `UPDATE broker_scheduled_sends SET status = 'ended'
+        WHERE id = $1 AND status IN ('sent', 'failed')`,
+      [row.id]
+    ).catch(() => {});
+    console.log(`[BrokerSend] schedule ${row.id}: no active assignments remain — nightly chain ends`);
+    return;
+  }
+  const tzOffsetMin = Number(row.tz_offset_min) || 0;
+  // When the occurrence failed before the website jobs list could be fetched
+  // (re-auth failed, upstream outage), fall back to the locally synced jobs
+  // so the nightly chain survives the outage.
+  if (!Array.isArray(jobs)) {
+    try {
+      const lr = await pool.query(
+        `SELECT id, scheduled_date, listed_days, estimated_days, includes_weekends,
+                includes_saturday, includes_sunday, job_type, status
+           FROM jobs WHERE contractor_id = $1`,
+        [String(row.broker_id)]
+      );
+      jobs = lr.rows;
+    } catch {
+      jobs = [];
+    }
+  }
+  let nextDate: string | null = null;
+  for (const job of Array.isArray(jobs) ? jobs : []) {
+    const status = String(job.status || "").toLowerCase();
+    if (["completed", "cancelled", "canceled", "expired"].includes(status)) continue;
+    // Scope the chain to the jobs this occurrence actually served: only a
+    // job active on the resolved date may pull the chain to its next work
+    // day. An unrelated future job (e.g. a single-day job on Wednesday when
+    // the broker scheduled Monday) must NOT be silently auto-sent — the
+    // broker schedules that one themselves.
+    if (!brokerJobActiveOnDate(job, tzOffsetMin, dateKey)) continue;
+    const d = brokerJobNextActiveDate(job, tzOffsetMin, dateKey);
+    if (d && (!nextDate || d < nextDate)) nextDate = d;
+  }
+  if (!nextDate) return;
+  const dayDiff = Math.round(
+    (Date.parse(`${nextDate}T00:00:00Z`) - Date.parse(`${dateKey}T00:00:00Z`)) / 86_400_000
+  );
+  if (!(dayDiff > 0)) return;
+  const tzName = row.tz_name ? String(row.tz_name) : null;
+  const nextSendAt = nextSendAtWallClock(sendAtMs, nextDate, dayDiff, tzName);
+  try {
+    // The partial unique index on (broker_id, date) WHERE status='pending'
+    // makes this atomic: concurrent roll-forwards (or a broker saving their
+    // own schedule at the same moment) can never create duplicate pending
+    // occurrences, and a broker-set time always survives (DO NOTHING).
+    const r = await pool.query(
+      `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min, tz_name, origin)
+       VALUES ($1, $2::date, $3, $4, $5, 'recurring')
+       ON CONFLICT (broker_id, date) WHERE status = 'pending' DO NOTHING
+       RETURNING id`,
+      [row.broker_id, nextDate, nextSendAt.toISOString(), tzOffsetMin, tzName]
+    );
+    if (r.rowCount) {
+      console.log(`[BrokerSend] schedule ${row.id}: rolled forward to ${nextDate} at ${nextSendAt.toISOString()}`);
+    }
+  } catch (e: any) {
+    console.error(`[BrokerSend] roll-forward error for schedule ${row.id}:`, e.message);
+  }
+}
+
 // Fires broker "send instructions at HH:MM" schedules: when one comes due,
 // send-all the held assignments on every job that broker has on that date.
 // Recover rows stuck in 'processing' after a crash/redeploy mid-send: the
@@ -848,13 +1196,64 @@ async function recoverStuckBrokerScheduledSends() {
            AND COALESCE(claimed_at, send_at) < NOW() - INTERVAL '5 minutes'
          FOR UPDATE SKIP LOCKED
        )
-       RETURNING id, status`
+       RETURNING id, status, broker_id, date, send_at, tz_offset_min, tz_name, origin`
     );
     for (const row of r.rows) {
       console.log(`[BrokerSend] schedule ${row.id}: recovered stuck 'processing' row -> ${row.status}`);
+      // A recovery that lands terminally failed must still keep the nightly
+      // chain alive: roll forward from locally synced jobs (jobs=null path),
+      // same as the retry-cap paths in the worker.
+      if (row.status === "failed") {
+        const dateKey = String(row.date instanceof Date
+          ? row.date.toISOString().slice(0, 10)
+          : row.date).slice(0, 10);
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (dateKey && !isNaN(sendAtMs)) {
+          await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+        }
+      }
     }
   } catch (e: any) {
     console.error("[BrokerSend] stuck-row recovery error:", e?.message || e);
+  }
+}
+
+// Durable successor reconciliation: the worker resolves an occurrence to a
+// terminal state and THEN rolls the chain forward as two separate writes, so
+// a crash (or a swallowed insert error) in between can leave a terminal row
+// with no pending successor — silently ending the nightly chain. This pass
+// finds each broker whose most recent occurrence within 7 days ended
+// sent/failed with NO pending row anywhere, and re-runs roll-forward from it
+// (idempotent via the pending partial unique index). A 'cancelled' row at or
+// after that occurrence's date is the broker's explicit stop signal and
+// suppresses resurrection.
+async function reconcileBrokerScheduledSendChains() {
+  try {
+    const r = await pool.query(
+      `SELECT DISTINCT ON (broker_id) id, broker_id, date, send_at, tz_offset_min, tz_name, origin
+         FROM broker_scheduled_sends t
+        WHERE status IN ('sent', 'failed')
+          AND send_at > NOW() - INTERVAL '7 days'
+          AND NOT EXISTS (
+            SELECT 1 FROM broker_scheduled_sends p
+             WHERE p.broker_id = t.broker_id AND p.status IN ('pending', 'processing')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM broker_scheduled_sends c
+             WHERE c.broker_id = t.broker_id AND c.status IN ('cancelled', 'ended') AND c.date >= t.date
+          )
+        ORDER BY broker_id, send_at DESC`
+    );
+    for (const row of r.rows) {
+      const dateKey = String(row.date instanceof Date
+        ? row.date.toISOString().slice(0, 10)
+        : row.date).slice(0, 10);
+      const sendAtMs = new Date(row.send_at).getTime();
+      if (!dateKey || isNaN(sendAtMs)) continue;
+      await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+    }
+  } catch (e: any) {
+    console.error("[BrokerSend] chain reconciliation error:", e?.message || e);
   }
 }
 
@@ -871,7 +1270,7 @@ async function processDueBrokerScheduledSends() {
          ORDER BY send_at ASC LIMIT 20
          FOR UPDATE SKIP LOCKED
        )
-       RETURNING id, broker_id, date, tz_offset_min, attempts`
+       RETURNING id, broker_id, date, send_at, tz_offset_min, tz_name, origin, attempts`
     );
     due = r.rows;
   } catch { return; }
@@ -882,7 +1281,10 @@ async function processDueBrokerScheduledSends() {
     // the broker's local timezone before taking the YYYY-MM-DD key.
     const jobDayKey = (raw: string): string => {
       if (!raw) return "";
-      if (!raw.includes("T")) return raw.slice(0, 10);
+      // Midnight-stored values are calendar days: their first 10 chars ARE
+      // the scheduled day (matches the app's jobDateKey; a tz shift would
+      // move US brokers' jobs a day early). Only true timestamps are shifted.
+      if (!raw.includes("T") || /T00:00(:00)?/.test(raw)) return raw.slice(0, 10);
       const d = new Date(raw);
       if (isNaN(d.getTime())) return raw.slice(0, 10);
       return new Date(d.getTime() - tzOffsetMin * 60_000).toISOString().slice(0, 10);
@@ -904,10 +1306,24 @@ async function processDueBrokerScheduledSends() {
       }
     }
     if (!jwt) {
-      await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1 AND status = 'processing'`,
-        [row.id]
-      ).catch(() => {});
+      // Transient by nature (restart, session eviction, upstream outage):
+      // retry through the same attempts cap as send failures. Only after the
+      // cap do we mark it failed — and even then roll the chain forward from
+      // locally synced jobs so one bad night doesn't end the recurrence.
+      if (Number(row.attempts) < 5) {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'pending', attempts = attempts + 1,
+             error = 'No active login session at send time; will retry' WHERE id = $1 AND status = 'processing'`,
+          [row.id]
+        ).catch(() => {});
+      } else {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'failed', error = 'No active login session at send time and re-auth failed' WHERE id = $1 AND status = 'processing'`,
+          [row.id]
+        ).catch(() => {});
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (!isNaN(sendAtMs)) await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+      }
       continue;
     }
     try {
@@ -915,20 +1331,67 @@ async function processDueBrokerScheduledSends() {
       if (!jr.ok) throw new Error(`jobs fetch ${jr.status}`);
       const jobs = await jr.json().catch(() => []);
       let sentJobs = 0;
+      let reminders = 0;
+      let activeAssignments = 0;
+      let assignmentInfoUnknown = false;
+      const isRecurring = String(row.origin || "user") === "recurring";
       const failedJobs: string[] = [];
+      // Broker-local day the schedule is firing on, to suppress a nightly
+      // reminder right after the same day's real instruction send.
+      const fireDayKey = new Date(Date.now() - tzOffsetMin * 60_000).toISOString().slice(0, 10);
       for (const job of Array.isArray(jobs) ? jobs : []) {
-        const jobDate = jobDayKey(String(job.scheduledDate || job.scheduled_date || ""));
-        if (jobDate !== dateKey) continue;
+        const status = String(job.status || "").toLowerCase();
+        if (["completed", "cancelled", "canceled", "expired"].includes(status)) continue;
+        // Multi-day aware: a job is due tonight when ANY of its active work
+        // days is the schedule's date, not just its start date.
+        if (!brokerJobActiveOnDate(job, tzOffsetMin, dateKey)) {
+          // Backstop: keep the old exact-start-date match for jobs whose day
+          // expansion fails (missing/invalid scheduled date).
+          if (jobDayKey(String(job.scheduledDate || job.scheduled_date || "")) !== dateKey) continue;
+        }
+        // A chain-created occurrence only serves jobs already underway before
+        // its date. A job STARTING on this date that the broker never
+        // scheduled must not have its held instructions silently released —
+        // the broker schedules (or Send Nows) that job themselves.
+        if (isRecurring) {
+          const startKey = brokerJobStartKey(job, tzOffsetMin);
+          if (!startKey || startKey >= dateKey) continue;
+        }
         const held = (job.assignmentStats?.held || 0) > 0 ||
           (Array.isArray(job.assignments) && job.assignments.some(
             (a: any) => (a.sentAt ?? a.sent_at) == null && a.status !== "declined" && a.status !== "withdrawn"
           ));
-        if (!held) continue;
-        const sr = await sendBrokerJobInstructions(String(job.id), String(row.broker_id), jwt);
-        if (sr.ok) sentJobs++;
-        else {
-          failedJobs.push(String(job.id));
-          console.error(`[BrokerSend] send-all failed for job ${job.id}: ${sr.status}`);
+        if (held) {
+          const sr = await sendBrokerJobInstructions(String(job.id), String(row.broker_id), jwt);
+          if (sr.ok) sentJobs++;
+          else {
+            failedJobs.push(String(job.id));
+            console.error(`[BrokerSend] send-all failed for job ${job.id}: ${sr.status}`);
+          }
+        }
+        // Nightly reminders for trucks whose instructions were sent on an
+        // earlier day but who are still on this job for the coming work day.
+        try {
+          const ar = await websiteFetch(
+            `/api/broker/jobs/${encodeURIComponent(String(job.id))}/assignments`,
+            { method: "GET", jwt }
+          );
+          if (ar.ok) {
+            const assignments = await ar.json().catch(() => []);
+            const rr = await sendNightlyAssignmentReminders(job, assignments, dateKey, fireDayKey);
+            reminders += rr.reminded;
+            activeAssignments += rr.active;
+            // Failed reminders keep the occurrence retrying (same attempts
+            // cap); the leased ledger lets the retry pass redeliver them.
+            if (rr.failed > 0) failedJobs.push(`reminders:${job.id}`);
+          } else {
+            assignmentInfoUnknown = true;
+            failedJobs.push(`reminders:${job.id}`);
+          }
+        } catch (e: any) {
+          assignmentInfoUnknown = true;
+          failedJobs.push(`reminders:${job.id}`);
+          console.error(`[BrokerSend] reminder pass failed for job ${job.id}:`, e.message);
         }
       }
       if (failedJobs.length > 0 && Number(row.attempts) < 5) {
@@ -951,13 +1414,45 @@ async function processDueBrokerScheduledSends() {
           [row.id, sentJobs]
         );
       }
-      console.log(`[BrokerSend] schedule ${row.id}: sent instructions on ${sentJobs} job(s) for ${dateKey}${failedJobs.length ? `, ${failedJobs.length} failed (will retry)` : ""}`);
+      // Recurring nightly behavior: once this occurrence has resolved for
+      // good (sent, or failed after exhausting retries — but not while it is
+      // still pending a retry), schedule the same time on the broker's next
+      // active work day. Reminder dedupe above makes a re-fired occurrence
+      // safe; a broker cancelling the pending row stops the chain.
+      const stillRetrying = failedJobs.length > 0 && Number(row.attempts) < 5;
+      if (!stillRetrying) {
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (!isNaN(sendAtMs)) {
+          // "Until removed": when tonight's pass conclusively found nothing —
+          // no held sends and zero still-active assignments across the served
+          // jobs — the trucks were removed or the jobs are done, so the chain
+          // ends. Unknown assignment info (fetch failures) keeps it alive.
+          const hadActivity = assignmentInfoUnknown
+            ? null
+            : (sentJobs > 0 || reminders > 0 || activeAssignments > 0);
+          await rollForwardBrokerScheduledSend(row, dateKey, jobs, sendAtMs, hadActivity);
+        }
+      }
+      console.log(`[BrokerSend] schedule ${row.id}: sent instructions on ${sentJobs} job(s), ${reminders} nightly reminder(s) for ${dateKey}${failedJobs.length ? `, ${failedJobs.length} failed (will retry)` : ""}`);
     } catch (e: any) {
       console.error("[BrokerSend] error:", e.message);
-      await pool.query(
-        `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1 AND status = 'processing'`,
-        [row.id, String(e.message || e).slice(0, 500)]
-      ).catch(() => {});
+      // Same retry-cap policy for unexpected failures (e.g. the website jobs
+      // fetch throwing): retry, then fail conclusively and still roll the
+      // recurring chain forward from locally synced jobs.
+      if (Number(row.attempts) < 5) {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'pending', attempts = attempts + 1,
+             error = $2 WHERE id = $1 AND status = 'processing'`,
+          [row.id, `Will retry: ${String(e.message || e).slice(0, 450)}`]
+        ).catch(() => {});
+      } else {
+        await pool.query(
+          `UPDATE broker_scheduled_sends SET status = 'failed', error = $2 WHERE id = $1 AND status = 'processing'`,
+          [row.id, String(e.message || e).slice(0, 500)]
+        ).catch(() => {});
+        const sendAtMs = new Date(row.send_at).getTime();
+        if (!isNaN(sendAtMs)) await rollForwardBrokerScheduledSend(row, dateKey, null, sendAtMs);
+      }
     }
   }
 }
@@ -968,15 +1463,19 @@ async function processDueBrokerScheduledSends() {
 function sweepOldBrokerScheduledSends() {
   pool.query(
     `DELETE FROM broker_scheduled_sends
-     WHERE status IN ('sent', 'failed')
+     WHERE status IN ('sent', 'failed', 'cancelled', 'ended')
        AND send_at < NOW() - INTERVAL '30 days'`
   ).then((r) => {
     if (r.rowCount) console.log(`[BrokerSend] swept ${r.rowCount} old sent/failed schedule row(s)`);
   }).catch(() => {});
+  pool.query(
+    `DELETE FROM broker_nightly_reminder_deliveries WHERE work_date < NOW() - INTERVAL '30 days'`
+  ).catch(() => {});
 }
 
 function startBrokerScheduledSendWorker() {
   ensureBrokerInstructionPushOutbox()
+    .then(() => ensureBrokerNightlyReminderLedger())
     .then(() => reconcileDormantBrokerInstructionPushes())
     .then(() => deliverPendingBrokerInstructionPushes())
     .catch((e) => console.error("[BrokerSend] instruction push outbox init error:", e?.message || e));
@@ -984,12 +1483,43 @@ function startBrokerScheduledSendWorker() {
   // Idempotent migration: older deployments' table predates claimed_at, and
   // the claim/recovery queries below reference it.
   pool.query(`ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS claimed_at timestamptz`)
+    .then(() => pool.query(
+      `ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS tz_name text`
+    ))
+    // 'user' = the broker explicitly saved this occurrence; 'recurring' = the
+    // nightly chain created it. Recurring occurrences are scoped to jobs that
+    // were already underway — they must never release held instructions for
+    // a future job the broker didn't schedule.
+    .then(() => pool.query(
+      `ALTER TABLE broker_scheduled_sends ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'user'`
+    ))
+    // One pending occurrence per broker per day, enforced by the database so
+    // concurrent roll-forwards/saves can't duplicate the nightly chain. Older
+    // deployments may already hold duplicates — keep the earliest, drop the
+    // rest, then add the partial unique index (idempotent).
+    .then(() => pool.query(
+      `DELETE FROM broker_scheduled_sends a
+        USING broker_scheduled_sends b
+        WHERE a.status = 'pending' AND b.status = 'pending'
+          AND a.broker_id = b.broker_id AND a.date = b.date
+          AND a.created_at > b.created_at`
+    ))
+    .then(() => pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS broker_scheduled_sends_pending_uniq
+         ON broker_scheduled_sends (broker_id, date) WHERE status = 'pending'`
+    ))
     .catch((e) => console.error("[BrokerSend] claimed_at migration error:", e?.message || e))
     // Startup recovery of rows orphaned in 'processing' by a crash (after the
     // migration so claimed_at is guaranteed to exist).
     .then(() => recoverStuckBrokerScheduledSends())
+    // ...and heal any nightly chain a crash left without a pending successor.
+    .then(() => reconcileBrokerScheduledSendChains())
     .catch(() => {});
-  setInterval(() => { recoverStuckBrokerScheduledSends().catch(() => {}); }, 5 * 60 * 1000);
+  setInterval(() => {
+    recoverStuckBrokerScheduledSends()
+      .then(() => reconcileBrokerScheduledSendChains())
+      .catch(() => {});
+  }, 5 * 60 * 1000);
   setInterval(() => { processDueBrokerScheduledSends().catch(() => {}); }, 60000);
   setInterval(() => {
     reconcileDormantBrokerInstructionPushes()
@@ -3205,7 +3735,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let where = `broker_id = $1 AND (status = 'pending' OR (status IN ('sent', 'failed') AND send_at > NOW() - INTERVAL '7 days'))`;
       if (/^\d{4}-\d{2}-\d{2}$/.test(date)) { where += ` AND date = $2`; params.push(date); }
       const r = await pool.query(
-        `SELECT id, date, send_at, status, error, sent_jobs, created_at FROM broker_scheduled_sends WHERE ${where} ORDER BY send_at ASC`,
+        `SELECT id, date, send_at, status, error, sent_jobs, created_at FROM broker_scheduled_sends WHERE ${where} AND status <> 'cancelled' ORDER BY send_at ASC`,
         params
       );
       return res.json(r.rows.map((row: any) => ({
@@ -3235,16 +3765,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // One pending schedule per broker per day: replace any existing one.
       await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status IN ('pending', 'failed')`,
+        `DELETE FROM broker_scheduled_sends WHERE broker_id = $1 AND date = $2 AND status IN ('pending', 'failed', 'cancelled')`,
         [auth.userId, date]
       );
       // Broker's local timezone offset (minutes, getTimezoneOffset semantics)
       // so the worker buckets timestamped job dates into the same local day.
       const tzOffsetMin = Number(req.body?.tzOffsetMin ?? req.header("X-TZ-Offset") ?? 0) || 0;
+      // IANA timezone (e.g. America/Denver) so nightly roll-forward keeps the
+      // broker's wall-clock time stable across DST transitions.
+      const tzNameRaw = String(req.body?.tzName || "").slice(0, 64);
+      const tzName = /^[A-Za-z_+\-]+(\/[A-Za-z_+\-0-9]+){0,2}$/.test(tzNameRaw) ? tzNameRaw : null;
+      // The broker's explicit choice always wins over a roll-forward-created
+      // pending row that might race in between the DELETE above and here.
       const r = await pool.query(
-        `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min) VALUES ($1, $2, $3, $4)
+        `INSERT INTO broker_scheduled_sends (broker_id, date, send_at, tz_offset_min, tz_name)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (broker_id, date) WHERE status = 'pending'
+         DO UPDATE SET send_at = EXCLUDED.send_at, tz_offset_min = EXCLUDED.tz_offset_min,
+                       tz_name = EXCLUDED.tz_name, attempts = 0, error = NULL, origin = 'user'
          RETURNING id, date, send_at, status`,
-        [auth.userId, date, sendAt.toISOString(), tzOffsetMin]
+        [auth.userId, date, sendAt.toISOString(), tzOffsetMin, tzName]
       );
       const row = r.rows[0];
       return res.status(201).json({
@@ -3262,8 +3802,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/broker/scheduled-sends/:id", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req)!;
     try {
+      // Mark cancelled instead of deleting: the cancellation is the durable
+      // "stop the nightly chain" signal — the reconciler must not resurrect a
+      // pending occurrence the broker explicitly removed.
       const r = await pool.query(
-        `DELETE FROM broker_scheduled_sends WHERE id = $1 AND broker_id = $2 AND status IN ('pending', 'failed') RETURNING id`,
+        `UPDATE broker_scheduled_sends SET status = 'cancelled', claimed_at = NULL
+          WHERE id = $1 AND broker_id = $2 AND status IN ('pending', 'failed') RETURNING id`,
         [req.params.id, auth.userId]
       );
       if (r.rowCount === 0) return res.status(404).json({ message: "Scheduled send not found" });

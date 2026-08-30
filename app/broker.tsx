@@ -633,7 +633,13 @@ export default function BrokerDashboardScreen() {
 
   const scheduleMutation = useMutation({
     mutationFn: async (sendAtIso: string) => {
-      return apiRequest('POST', '/api/broker/scheduled-sends', { date: selectedDate, sendAt: sendAtIso, tzOffsetMin: new Date().getTimezoneOffset() });
+      return apiRequest('POST', '/api/broker/scheduled-sends', {
+        date: selectedDate,
+        sendAt: sendAtIso,
+        tzOffsetMin: new Date().getTimezoneOffset(),
+        // IANA zone so nightly repeats keep this wall-clock time across DST.
+        tzName: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
     },
     onSuccess: (_data, sendAtIso) => {
       queryClient.invalidateQueries({ queryKey: ['/api/broker/scheduled-sends'] });
@@ -642,7 +648,7 @@ export default function BrokerDashboardScreen() {
         hour: 'numeric',
         minute: '2-digit',
       });
-      setInstructionConfirmation(`Your instructions will be sent at ${sendTime}.`);
+      setInstructionConfirmation(`Your instructions will be sent at ${sendTime}. Trucks on multi-day jobs get a reminder at this time every night until the job ends or they're removed.`);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to schedule send'),
@@ -1594,7 +1600,7 @@ export default function BrokerDashboardScreen() {
               );
             })()}
             <Text style={styles.scheduleNote}>
-              Trucks you assign with SEND LATER stay invisible to drivers until this time. You can cancel the timer any time before it fires.
+              Trucks you assign with SEND LATER stay invisible to drivers until this time. On multi-day jobs this repeats nightly — every truck still on the job gets next-day instructions at this time until the job ends or the truck is removed. You can cancel the timer any time before it fires.
             </Text>
           </View>
         </View>
