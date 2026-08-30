@@ -289,6 +289,10 @@ export default function JobDetailScreen() {
 
   const [jobStatus, setJobStatus] = useState<string>('');
   const [confirmingBroker, setConfirmingBroker] = useState(false);
+  const [brokerTruckPickerVisible, setBrokerTruckPickerVisible] = useState(false);
+  const [brokerTruckOptions, setBrokerTruckOptions] = useState<any[]>([]);
+  const [selectedBrokerTruckId, setSelectedBrokerTruckId] = useState<string | null>(null);
+  const [loadingBrokerTrucks, setLoadingBrokerTrucks] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [showResumeModal, setShowResumeModal] = useState(false);
@@ -832,18 +836,58 @@ export default function JobDetailScreen() {
   }
 
   const needsConfirmation = !!(jobData?.needsConfirmation ?? jobData?.needs_confirmation);
+  const needsTruckSelection = !!(jobData?.needsTruckSelection ?? jobData?.needs_truck_selection);
   const brokerAssignmentId = jobData?.assignmentId ?? jobData?.assignment_id ?? null;
 
-  async function respondToBrokerAssignment(action: 'confirm' | 'decline') {
+  // Confirming books an exact fleet truck, so the driver must pick which of
+  // their preassigned trucks runs the job. Fetch the eligible list first; a
+  // sole eligible truck is preselected but still shown for confirmation.
+  async function openBrokerTruckPicker() {
+    if (!brokerAssignmentId || confirmingBroker || loadingBrokerTrucks) return;
+    setLoadingBrokerTrucks(true);
+    try {
+      const res = await apiRequest('GET', `/api/assignments/${brokerAssignmentId}/response-options`);
+      const data = await res.json();
+      const trucks: any[] = Array.isArray(data?.trucks) ? data.trucks : [];
+      const eligible = trucks.filter(t => t.eligible);
+      if (eligible.length === 0) {
+        Alert.alert(
+          'No Eligible Truck',
+          trucks.length === 0
+            ? 'You have no truck assigned to you. Ask your fleet manager to assign you a truck in My Vehicles before confirming.'
+            : 'None of your assigned trucks meet this job\u2019s requirements or are free on the job dates. Ask your fleet manager to assign you an eligible truck.'
+        );
+        return;
+      }
+      setBrokerTruckOptions(trucks);
+      const current = data?.currentTruckId ? String(data.currentTruckId) : null;
+      setSelectedBrokerTruckId(
+        current && eligible.some(t => String(t.id) === current)
+          ? current
+          : eligible.length === 1 ? String(eligible[0].id) : null
+      );
+      setBrokerTruckPickerVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to load your trucks');
+    } finally {
+      setLoadingBrokerTrucks(false);
+    }
+  }
+
+  async function respondToBrokerAssignment(action: 'confirm' | 'decline', fleetTruckId?: string) {
     if (!brokerAssignmentId || confirmingBroker) return;
+    if (action === 'confirm' && !fleetTruckId) return;
     setConfirmingBroker(true);
     try {
-      await apiRequest('POST', `/api/assignments/${brokerAssignmentId}/${action}`, {});
+      await apiRequest('POST', `/api/assignments/${brokerAssignmentId}/${action}`,
+        action === 'confirm' ? { fleetTruckId } : {});
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setBrokerTruckPickerVisible(false);
       queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
       queryClient.invalidateQueries({ queryKey: ['/api/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/contractor/calendar-capacity'] });
       queryClient.invalidateQueries({ queryKey: ['/api/broker/jobs'] });
       queryClient.invalidateQueries({ queryKey: ['/api/dashboard'] });
       if (action === 'decline') {
@@ -1660,10 +1704,10 @@ export default function JobDetailScreen() {
                 })}
                 onPress={() => {
                   if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  respondToBrokerAssignment('confirm');
+                  openBrokerTruckPicker();
                 }}
               >
-                {confirmingBroker ? (
+                {confirmingBroker || loadingBrokerTrucks ? (
                   <ActivityIndicator size="small" color={Colors.primaryForeground} />
                 ) : (
                   <Ionicons name="thumbs-up" size={20} color={Colors.primaryForeground} />
@@ -1671,6 +1715,42 @@ export default function JobDetailScreen() {
                 <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.primaryForeground, letterSpacing: 0.5 }}>CONFIRM</Text>
               </Pressable>
             </View>
+          </View>
+        )}
+        {!needsConfirmation && needsTruckSelection && brokerAssignmentId && (
+          <View style={{
+            backgroundColor: 'rgba(255,153,0,0.08)', borderWidth: 1, borderColor: Colors.primary,
+            borderRadius: 12, padding: 16, gap: 12, marginBottom: 12,
+          }} testID="broker-truck-select-block">
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="car" size={18} color={Colors.primary} />
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.primary, letterSpacing: 0.5, flex: 1 }}>
+                WHICH TRUCK WILL RUN THIS JOB?
+              </Text>
+            </View>
+            <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textSecondary }}>
+              You confirmed this job, but no truck is booked yet. Choose the truck so it shows on your fleet calendar.
+            </Text>
+            <Pressable
+              testID="broker-select-truck-btn"
+              disabled={confirmingBroker || loadingBrokerTrucks}
+              style={({ pressed }) => ({
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 14,
+                opacity: pressed || confirmingBroker || loadingBrokerTrucks ? 0.7 : 1,
+              })}
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                openBrokerTruckPicker();
+              }}
+            >
+              {loadingBrokerTrucks ? (
+                <ActivityIndicator size="small" color={Colors.primaryForeground} />
+              ) : (
+                <Ionicons name="checkmark-circle" size={20} color={Colors.primaryForeground} />
+              )}
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.primaryForeground, letterSpacing: 0.5 }}>SELECT TRUCK</Text>
+            </Pressable>
           </View>
         )}
         {(jobData?.includes_weekends ?? (jobData as any)?.includesWeekends) ? (() => {
@@ -4137,6 +4217,95 @@ export default function JobDetailScreen() {
               </View>
             );
           })()}
+        </View>
+      </Modal>
+
+      <Modal visible={brokerTruckPickerVisible} transparent animationType="fade" onRequestClose={() => setBrokerTruckPickerVisible(false)}>
+        <View style={styles.wtModalOverlay}>
+          <View style={[styles.wtModalContent, { paddingTop: 20, paddingBottom: 20 }]} onStartShouldSetResponder={() => true}>
+            <Text style={styles.wtModalTitle}>Choose Your Truck</Text>
+            <Text style={[styles.wtModalSubtitle, { marginBottom: 12 }]}>
+              This truck will be booked on your fleet calendar for every day of this job.
+            </Text>
+            <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+              {brokerTruckOptions.map((t: any) => {
+                const blocked = !t.eligible;
+                const selected = selectedBrokerTruckId === String(t.id);
+                const reason = t.wrongType
+                  ? 'Wrong truck type for this job'
+                  : t.lowCapacity
+                    ? 'Capacity below job requirement'
+                    : t.noTarp
+                      ? 'Job requires a tarp'
+                      : (t.conflictDates || []).length > 0
+                        ? `Booked ${t.conflictDates.join(', ')}`
+                        : null;
+                return (
+                  <Pressable
+                    key={String(t.id)}
+                    testID={`broker-truck-option-${t.id}`}
+                    disabled={blocked}
+                    onPress={() => setSelectedBrokerTruckId(String(t.id))}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row', alignItems: 'center', gap: 10,
+                      borderWidth: 1.5, borderColor: selected ? Colors.primary : Colors.border,
+                      backgroundColor: selected ? 'rgba(255,153,0,0.08)' : 'transparent',
+                      borderRadius: 12, padding: 12, marginBottom: 8,
+                      opacity: blocked ? 0.45 : pressed ? 0.8 : 1,
+                    })}
+                  >
+                    <Ionicons
+                      name={selected ? 'radio-button-on' : 'radio-button-off'}
+                      size={20}
+                      color={selected ? Colors.primary : Colors.textSecondary}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.text }}>
+                        {[t.truckNumber ? `#${t.truckNumber}` : '', [t.year, t.make, t.model].filter(Boolean).join(' ')].filter(Boolean).join(' — ')}
+                      </Text>
+                      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: blocked ? Colors.destructive : Colors.textSecondary }}>
+                        {reason || [t.truckType ? String(t.truckType).replace(/_/g, ' ') : '', t.licensePlate ? `Plate ${t.licensePlate}` : ''].filter(Boolean).join(' · ') || 'Available'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <Pressable
+                disabled={confirmingBroker}
+                onPress={() => setBrokerTruckPickerVisible(false)}
+                style={({ pressed }) => ({
+                  flex: 1, alignItems: 'center', justifyContent: 'center',
+                  borderWidth: 1.5, borderColor: Colors.border, borderRadius: 10, paddingVertical: 14,
+                  opacity: pressed ? 0.7 : 1,
+                })}
+              >
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.textSecondary, letterSpacing: 0.5 }}>CANCEL</Text>
+              </Pressable>
+              <Pressable
+                testID="broker-truck-picker-confirm"
+                disabled={confirmingBroker || !selectedBrokerTruckId}
+                onPress={() => {
+                  if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  if (selectedBrokerTruckId) respondToBrokerAssignment('confirm', selectedBrokerTruckId);
+                }}
+                style={({ pressed }) => ({
+                  flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  backgroundColor: selectedBrokerTruckId ? Colors.primary : Colors.border,
+                  borderRadius: 10, paddingVertical: 14,
+                  opacity: pressed || confirmingBroker ? 0.7 : 1,
+                })}
+              >
+                {confirmingBroker ? (
+                  <ActivityIndicator size="small" color={Colors.primaryForeground} />
+                ) : (
+                  <Ionicons name="thumbs-up" size={18} color={Colors.primaryForeground} />
+                )}
+                <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.primaryForeground, letterSpacing: 0.5 }}>CONFIRM JOB</Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       </Modal>
     </View>

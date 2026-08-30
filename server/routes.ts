@@ -2989,7 +2989,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     du.full_name as driver_full_name,
                     COALESCE(NULLIF(dutc.company, ''), NULLIF(du.company, '')) as driver_company
              FROM job_assignments ja
-             LEFT JOIN trucks t ON ja.vehicle_id = t.id
+             LEFT JOIN trucks t ON t.id::text = COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text
              LEFT JOIN users du ON ja.driver_id::text = du.id::text
              LEFT JOIN users dutc ON du.trucking_company_id::text = dutc.id::text
              WHERE ja.job_id = $1
@@ -2998,9 +2998,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const weightResult = await pool.query(`SELECT * FROM weight_tickets WHERE job_id = $1`, [req.params.id]);
           job.assignments = assignResult.rows.map(row => {
             const a = addDualKeys(row);
-            if (row.vehicle_id) {
+            if (row.fleet_truck_id || row.vehicle_id) {
               a.vehicle = {
-                id: row.vehicle_id,
+                id: row.fleet_truck_id || row.vehicle_id,
                 make: row.vehicle_make, model: row.vehicle_model, year: row.vehicle_year,
                 truck_number: row.vehicle_truck_number, truckNumber: row.vehicle_truck_number,
                 license_plate: row.vehicle_license_plate, licensePlate: row.vehicle_license_plate,
@@ -3093,6 +3093,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
               job.assignment_id = mine.rows[0].id;
               job.assignmentSentAt = mine.rows[0].sent_at;
               job.assignment_sent_at = mine.rows[0].sent_at;
+            } else {
+              // Repair path: this driver confirmed before truck selection
+              // existed, so no fleet truck is booked yet. Surface a "choose
+              // your truck" prompt until the booking is completed.
+              const unbooked = await pool.query(
+                `SELECT o.assignment_id AS id
+                   FROM broker_assignment_push_deliveries o
+                  WHERE o.job_id = $1 AND o.driver_id = $2
+                    AND o.responded_at IS NOT NULL
+                    AND o.response_action = 'confirm'
+                    AND NOT EXISTS (
+                      SELECT 1 FROM job_assignments ja
+                       WHERE ja.id::text = o.assignment_id
+                         AND ja.fleet_truck_id IS NOT NULL
+                    )
+                  LIMIT 1`,
+                [req.params.id, auth.userId]
+              );
+              if (unbooked.rows.length > 0) {
+                job.needsTruckSelection = true;
+                job.needs_truck_selection = true;
+                job.assignmentId = unbooked.rows[0].id;
+                job.assignment_id = unbooked.rows[0].id;
+              }
             }
           }
         } catch (e: any) {
@@ -3474,14 +3498,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             `SELECT ja.id, ja.job_id, ja.driver_id, ja.vehicle_id, ja.fleet_truck_id,
                     ja.status, ja.sent_at,
                     COALESCE(d.company, d.full_name, d.email, 'Driver') AS driver_name,
-                    v.id AS resolved_truck_id, v.truck_number, v.year AS truck_year,
-                    v.make AS truck_make, v.model AS truck_model,
-                    v.license_plate AS truck_license_plate, v.truck_type AS truck_type
+                    COALESCE(ft.id::text, v.id::text) AS resolved_truck_id,
+                    COALESCE(ft.truck_number, v.truck_number) AS truck_number,
+                    COALESCE(ft.year, v.year) AS truck_year,
+                    COALESCE(ft.make, v.make) AS truck_make,
+                    COALESCE(ft.model, v.model) AS truck_model,
+                    COALESCE(ft.license_plate, v.license_plate) AS truck_license_plate,
+                    COALESCE(ft.truck_type::text, v.truck_type::text) AS truck_type
                FROM job_assignments ja
                JOIN jobs j ON j.id = ja.job_id
                LEFT JOIN users d ON d.id::text = ja.driver_id::text
-               LEFT JOIN driver_vehicles v
-                 ON v.id::text = COALESCE(ja.vehicle_id::text, ja.fleet_truck_id::text)
+               LEFT JOIN trucks ft ON ft.id::text = ja.fleet_truck_id::text
+               LEFT JOIN driver_vehicles v ON v.id::text = ja.vehicle_id::text
               WHERE j.contractor_id = $1`,
             [auth.userId]
           )
@@ -4608,6 +4636,210 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Broker dashboard data + actions (broker-only enforcement is upstream).
   app.all(/^\/api\/broker\/.*/, requireAuth, proxyToWebsite);
+
+  // --- Fleet truck selection for assignment confirmation --------------------
+  // Confirming a broker assignment must book the EXACT fleet truck that will
+  // run the job (drivers can have several preassigned trucks and jobs require
+  // specific types). Eligible = trucks the fleet manager preassigned to this
+  // driver (trucks.assigned_driver_id), active and unarchived. Never guess.
+  async function loadAssignmentForResponse(assignmentId: string, driverId: string) {
+    const row = await pool.query(
+      `SELECT ja.id::text AS id, ja.job_id::text AS job_id, ja.status::text AS status,
+              ja.fleet_truck_id::text AS fleet_truck_id
+         FROM job_assignments ja
+        WHERE ja.id::text = $1 AND ja.driver_id::text = $2
+        LIMIT 1`,
+      [assignmentId, driverId]
+    );
+    if (row.rows[0]) return row.rows[0];
+    // Website-created assignments may exist only in the push outbox before the
+    // local mirror catches up — treat the outbox row as assignment identity.
+    const ob = await pool.query(
+      `SELECT o.assignment_id AS id, o.job_id, 'pending' AS status, NULL AS fleet_truck_id
+         FROM broker_assignment_push_deliveries o
+        WHERE o.assignment_id = $1 AND o.driver_id = $2
+        LIMIT 1`,
+      [assignmentId, driverId]
+    );
+    return ob.rows[0] || null;
+  }
+
+  // Returns the driver's preassigned trucks annotated with job compatibility
+  // and booking conflicts, mirroring the /api/jobs/:id/vehicle-conflicts rules
+  // exactly so the picker never disagrees with what the server will allow.
+  async function getEligibleTrucksForAssignment(driverId: string, jobId: string) {
+    const jr = await pool.query(`SELECT * FROM jobs WHERE id::text = $1`, [jobId]);
+    const job = jr.rows[0];
+    if (!job) return null;
+    const requiredCapacity = (() => {
+      if (!job.capacity_needed) return 0;
+      const match = String(job.capacity_needed).match(/([\d.]+)/);
+      return match ? parseFloat(match[1]) : 0;
+    })();
+    const requiresTarp = !!job.requires_tarp;
+    const requiredType = job.truck_type || null;
+    const trucksRes = await pool.query(
+      `SELECT id::text AS id, truck_number, year, make, model, license_plate,
+              truck_type::text AS truck_type, capacity, has_tarp,
+              trucking_company_id::text AS trucking_company_id
+         FROM trucks
+        WHERE assigned_driver_id::text = $1 AND is_active = true AND archived_at IS NULL
+        ORDER BY NULLIF(regexp_replace(COALESCE(truck_number, ''), '[^0-9]', '', 'g'), '')::int NULLS LAST, truck_number`,
+      [driverId]
+    );
+    const conflicts = await findApprovedTruckConflicts(
+      trucksRes.rows.map((t: any) => t.id),
+      jobId
+    );
+    const conflictMap = new Map(conflicts.map((c) => [String(c.vehicleId), c]));
+    const normType = (v: any) => String(v || "").toLowerCase().replace(/[\s_-]/g, "");
+    const trucks = trucksRes.rows.map((t: any) => {
+      const wrongType = !!(requiredType && t.truck_type && normType(t.truck_type) !== normType(requiredType));
+      const vCapacity = parseFloat(t.capacity) || 0;
+      const lowCapacity = requiredCapacity > 0 && vCapacity > 0 && vCapacity < requiredCapacity;
+      const noTarp = requiresTarp && !t.has_tarp;
+      const conflict = conflictMap.get(String(t.id));
+      return {
+        id: String(t.id),
+        truckNumber: t.truck_number,
+        year: t.year,
+        make: t.make,
+        model: t.model,
+        licensePlate: t.license_plate,
+        truckType: t.truck_type,
+        capacity: t.capacity,
+        hasTarp: !!t.has_tarp,
+        wrongType,
+        lowCapacity,
+        noTarp,
+        conflictDates: conflict?.conflictDates || [],
+        eligible: !wrongType && !lowCapacity && !noTarp && !conflict,
+      };
+    });
+    return { job, trucks };
+  }
+
+  // Validates the selected truck for this driver+job. Returns an error object
+  // or null when the truck may be booked.
+  async function validateTruckSelection(driverId: string, jobId: string, truckId: string):
+    Promise<{ status: number; message: string } | null> {
+    const options = await getEligibleTrucksForAssignment(driverId, jobId);
+    if (!options) return { status: 404, message: "Job not found for this assignment." };
+    const t = options.trucks.find((x) => x.id === String(truckId));
+    if (!t) return { status: 403, message: "That truck is not assigned to you. Ask your fleet manager to assign it to you first." };
+    if (t.wrongType) return { status: 409, message: "That truck's type does not meet this job's requirements." };
+    if (t.lowCapacity) return { status: 409, message: "That truck's capacity is below what this job requires." };
+    if (t.noTarp) return { status: 409, message: "This job requires a tarp and that truck does not have one." };
+    if (t.conflictDates.length > 0) {
+      return { status: 409, message: `That truck is already booked on another job for ${t.conflictDates.join(", ")}. Pick a different truck.` };
+    }
+    return null;
+  }
+
+  // Books the exact truck on the exact assignment row (upserting the row when
+  // the website created the assignment and the local mirror lacks it). The
+  // fleet_truck_id guard makes replays idempotent: re-booking the same truck
+  // is a no-op success, a different truck is rejected.
+  async function bookTruckOnAssignment(
+    assignmentId: string, jobId: string, driverId: string, truckId: string
+  ): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Per-truck advisory lock serializes concurrent confirmations of the
+      // same truck: the second booker waits here, then re-runs the conflict
+      // check below and sees the first booking (committed before the lock is
+      // released at COMMIT), so both can never book overlapping jobs.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('fleet_truck_booking:' || $1::text, 0))`, [truckId]);
+      const conflicts = await findApprovedTruckConflicts([truckId], jobId);
+      if (conflicts.length > 0) {
+        await client.query("ROLLBACK");
+        const c = conflicts[0];
+        return { ok: false, status: 409, message: `That truck is already booked on another job for ${(c.conflictDates || []).join(", ")}. Pick a different truck.` };
+      }
+      const updated = await client.query(
+        `UPDATE job_assignments
+            SET status = 'approved', approved_at = COALESCE(approved_at, NOW()), fleet_truck_id = $3
+          WHERE id::text = $1 AND driver_id::text = $2
+            AND (fleet_truck_id IS NULL OR fleet_truck_id::text = $3)
+          RETURNING id`,
+        [assignmentId, driverId, truckId]
+      );
+      if (updated.rowCount === 0) {
+        const existing = await client.query(
+          `SELECT fleet_truck_id::text AS fleet_truck_id FROM job_assignments
+            WHERE id::text = $1 AND driver_id::text = $2 LIMIT 1`,
+          [assignmentId, driverId]
+        );
+        if (existing.rows[0]) {
+          if (String(existing.rows[0].fleet_truck_id || "") !== String(truckId)) {
+            await client.query("ROLLBACK");
+            return { ok: false, status: 409, message: "This assignment is already booked with a different truck." };
+          }
+          // Same truck already booked — idempotent success.
+        } else {
+          await client.query(
+            `INSERT INTO job_assignments (id, job_id, driver_id, fleet_truck_id, status, approved_at, sent_at, created_at)
+             VALUES ($1, $2, $3, $4, 'approved', NOW(), NOW(), NOW())
+             ON CONFLICT (id) DO UPDATE SET
+               status = 'approved',
+               approved_at = COALESCE(job_assignments.approved_at, NOW()),
+               fleet_truck_id = COALESCE(job_assignments.fleet_truck_id, EXCLUDED.fleet_truck_id)`,
+            [assignmentId, jobId, driverId, truckId]
+          );
+          const check = await client.query(
+            `SELECT fleet_truck_id::text AS fleet_truck_id FROM job_assignments WHERE id::text = $1 LIMIT 1`,
+            [assignmentId]
+          );
+          if (String(check.rows[0]?.fleet_truck_id || "") !== String(truckId)) {
+            await client.query("ROLLBACK");
+            return { ok: false, status: 409, message: "This assignment is already booked with a different truck." };
+          }
+        }
+      }
+      await client.query(
+        `UPDATE jobs SET status = 'accepted', updated_at = NOW()
+          WHERE id::text = $1 AND status::text IN ('open', 'pending')`,
+        [jobId]
+      );
+      await client.query("COMMIT");
+      return { ok: true };
+    } catch (e: any) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("bookTruckOnAssignment error:", e.message);
+      return { ok: false, status: 500, message: "Could not book the truck. Please try again." };
+    } finally {
+      client.release();
+    }
+  }
+
+  // Eligible trucks for the confirm screen's picker. Also powers the repair
+  // path for assignments confirmed before truck selection existed.
+  app.get("/api/assignments/:id/response-options", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      const assignment = await loadAssignmentForResponse(String(req.params.id), auth.userId);
+      if (!assignment) return res.status(404).json({ message: "Assignment not found" });
+      const options = await getEligibleTrucksForAssignment(auth.userId, String(assignment.job_id));
+      if (!options) return res.status(404).json({ message: "Job not found" });
+      const responded = await pool.query(
+        `SELECT response_action FROM broker_assignment_push_deliveries
+          WHERE assignment_id = $1 AND driver_id = $2 AND responded_at IS NOT NULL LIMIT 1`,
+        [String(req.params.id), auth.userId]
+      );
+      return res.json({
+        assignmentId: String(assignment.id),
+        jobId: String(assignment.job_id),
+        currentTruckId: assignment.fleet_truck_id || null,
+        respondedAction: responded.rows[0]?.response_action || null,
+        trucks: options.trucks,
+      });
+    } catch (e: any) {
+      console.error("GET /api/assignments/:id/response-options error:", e.message);
+      return res.status(500).json({ message: "Failed to load truck options" });
+    }
+  });
+
   // Driver thumbs up/down on a sent broker assignment. Proxies upstream, then
   // (fire-and-forget) alerts the posting broker: running confirmed-count pushes
   // on thumbs up, and an immediate "reassign needed" alert on thumbs down.
@@ -4615,7 +4847,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: Request, res: Response) => {
       const auth = getWebsiteAuth(req)!;
       const assignmentId = String(req.params.id);
+      const selectedTruckId = String(
+        req.body?.fleetTruckId || req.body?.fleet_truck_id || req.body?.vehicleId || req.body?.vehicle_id || ""
+      ).trim();
       try {
+        // Confirming books a specific fleet truck, so the exact truck must be
+        // chosen by the driver — the server never guesses among their trucks.
+        let assignment: any = null;
+        if (action === "confirm") {
+          assignment = await loadAssignmentForResponse(assignmentId, auth.userId);
+          if (!assignment) {
+            return res.status(404).json({ message: "Assignment not found" });
+          }
+          if (!selectedTruckId) {
+            return res.status(400).json({
+              code: "TRUCK_REQUIRED",
+              message: "Choose which of your trucks will run this job before confirming.",
+            });
+          }
+          const truckError = await validateTruckSelection(auth.userId, String(assignment.job_id), selectedTruckId);
+          if (truckError) return res.status(truckError.status).json({ message: truckError.message });
+        }
         const prior = await pool.query(
           `SELECT response_action, responded_at
              FROM broker_assignment_push_deliveries
@@ -4625,6 +4877,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
         if (prior.rows[0]?.responded_at) {
           if (prior.rows[0].response_action === action) {
+            // Repair path: a confirmation saved before truck selection existed
+            // has no booked truck. Let the same confirmed driver bind their
+            // eligible truck now; a different truck after booking is rejected
+            // inside bookTruckOnAssignment.
+            if (action === "confirm") {
+              const booked = await bookTruckOnAssignment(
+                assignmentId, String(assignment.job_id), auth.userId, selectedTruckId
+              );
+              if (!booked.ok) return res.status(booked.status).json({ message: booked.message });
+              return res.json({ ok: true, alreadyResponded: true, truckBooked: true });
+            }
             return res.json({ ok: true, alreadyResponded: true });
           }
           return res.status(409).json({ message: "This assignment already has a different response." });
@@ -4750,6 +5013,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
               if (reconciled.rowCount !== 1) {
                 throw new Error("Could not persist the authoritative assignment response");
               }
+              if (action === "confirm") {
+                const booked = await bookTruckOnAssignment(assignmentId, selfJobId, auth.userId, selectedTruckId);
+                if (!booked.ok) return res.status(booked.status).json({ message: booked.message });
+              }
               return res.json({ ok: true, alreadyResponded: true, selfAssigned: true });
             }
             if (!["pending", "assigned"].includes(authoritativeStatus)) {
@@ -4829,6 +5096,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (finalized.rowCount !== 1) {
               throw new Error("Could not record the verified self-assignment response");
             }
+            if (action === "confirm") {
+              const booked = await bookTruckOnAssignment(assignmentId, selfJobId, auth.userId, selectedTruckId);
+              if (!booked.ok) return res.status(booked.status).json({ message: booked.message });
+            } else {
+              // The upstream broker assignment was deleted above — release the
+              // local mirror row so no stale booking lingers in calendars.
+              await pool.query(`DELETE FROM job_assignments WHERE id::text = $1 AND driver_id::text = $2`,
+                [assignmentId, auth.userId]).catch(() => {});
+            }
             return res.json({ ok: true, selfAssigned: true });
           }
         }
@@ -4843,6 +5119,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
               WHERE assignment_id = $1`,
             [assignmentId, action]
           );
+          if (action === "confirm" && assignment) {
+            const booked = await bookTruckOnAssignment(
+              assignmentId, String(assignment.job_id), auth.userId, selectedTruckId
+            );
+            if (!booked.ok) {
+              // The upstream confirm already succeeded and is recorded, but no
+              // truck is reserved. Surface an actionable failure — the job
+              // screen's "select truck" repair prompt lets the driver bind a
+              // different truck.
+              console.error(`[assignments/${action}] truck booking failed post-upstream:`, booked.message);
+              return res.status(booked.status).json({
+                message: `Your confirmation was recorded, but the truck could not be booked: ${booked.message}`,
+                responseRecorded: true,
+                needsTruckSelection: true,
+              });
+            }
+          } else if (action === "decline") {
+            // Release any local booking so the truck reopens in calendars.
+            await pool.query(
+              `UPDATE job_assignments SET status = 'rejected', fleet_truck_id = NULL
+                WHERE id::text = $1 AND driver_id::text = $2`,
+              [assignmentId, auth.userId]
+            ).catch(() => {});
+          }
           notifyBrokerAssignmentResponse(assignmentId, auth.userId, action).catch((e) =>
             console.error("Broker confirm-notify error:", e.message)
           );
@@ -5344,7 +5644,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `SELECT ja.*, j.scheduled_date, j.estimated_days, j.material as job_material,
                 j.includes_weekends, j.includes_saturday, j.includes_sunday FROM job_assignments ja
          JOIN jobs j ON ja.job_id = j.id
-         WHERE ja.vehicle_id IS NOT NULL AND ja.job_id != $1
+         WHERE COALESCE(ja.fleet_truck_id, ja.vehicle_id) IS NOT NULL AND ja.job_id != $1
          AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')
          AND ja.status::text = 'approved'`,
         [req.params.id]
@@ -5576,15 +5876,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 t.truck_type as vehicle_truck_type, t.capacity as vehicle_capacity, t.has_tarp as vehicle_has_tarp
          FROM job_assignments ja 
          LEFT JOIN users u ON ja.driver_id = u.id 
-         LEFT JOIN trucks t ON ja.vehicle_id = t.id
+         LEFT JOIN trucks t ON t.id::text = COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text
          WHERE ja.job_id = $1`,
         [req.params.id]
       );
       return res.json(result.rows.map(row => {
         const a = addDualKeys(row);
-        if (row.vehicle_id) {
+        const effVid = row.fleet_truck_id || row.vehicle_id;
+        if (effVid) {
           a.vehicle = {
-            id: row.vehicle_id,
+            id: effVid,
             make: row.vehicle_make, model: row.vehicle_model, year: row.vehicle_year,
             truck_number: row.vehicle_truck_number, truckNumber: row.vehicle_truck_number,
             license_plate: row.vehicle_license_plate, licensePlate: row.vehicle_license_plate,
@@ -5608,7 +5909,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Not authorized" });
       }
       // Double-booking guard: don't approve a truck OR driver already approved on an overlapping job.
-      const vRow = await pool.query(`SELECT vehicle_id, driver_id FROM job_assignments WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
+      const vRow = await pool.query(`SELECT COALESCE(fleet_truck_id, vehicle_id) AS vehicle_id, driver_id FROM job_assignments WHERE id = $1 AND job_id = $2`, [req.params.assignmentId, req.params.id]);
       const approveVid = vRow.rows[0]?.vehicle_id;
       const approveDid = vRow.rows[0]?.driver_id;
       // Fleets can run different trucks on overlapping jobs, so the driver-level guard
@@ -6759,7 +7060,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
       const result = await pool.query(
-        `SELECT j.* FROM jobs j JOIN job_assignments ja ON j.id = ja.job_id WHERE ja.vehicle_id = $1 ORDER BY j.scheduled_date DESC`,
+        `SELECT j.* FROM jobs j JOIN job_assignments ja ON j.id = ja.job_id WHERE COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text = $1::text ORDER BY j.scheduled_date DESC`,
         [req.params.vehicleId]
       );
       return res.json(result.rows.map(addDualKeys));
@@ -7289,7 +7590,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           const asmtRes = await pool.query(
             `SELECT
-               ja.vehicle_id, ja.job_id, ja.driver_id,
+               COALESCE(ja.fleet_truck_id, ja.vehicle_id) AS vehicle_id, ja.job_id, ja.driver_id,
                j.scheduled_date,
                COALESCE(j.estimated_days, 1)::numeric AS estimated_days,
                COALESCE(j.includes_weekends, false) AS includes_weekends,
@@ -7300,7 +7601,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                contractor.company   AS contractor_company,
                COALESCE(cp.name, bcp.name) AS project_name
              FROM job_assignments ja
-             JOIN trucks t ON ja.vehicle_id = t.id
+             JOIN trucks t ON t.id::text = COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text
              JOIN jobs   j ON ja.job_id     = j.id
              LEFT JOIN users               contractor ON j.contractor_id = contractor.id
              LEFT JOIN contractor_projects cp         ON j.project_id    = cp.id
@@ -7791,10 +8092,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     );
     if (targetDates.size === 0) return [];
     const other = await pool.query(
-      `SELECT ja.vehicle_id, j.material AS job_material, j.scheduled_date, j.estimated_days,
+      `SELECT COALESCE(ja.fleet_truck_id, ja.vehicle_id) AS vehicle_id, j.material AS job_material, j.scheduled_date, j.estimated_days,
               j.includes_weekends, j.includes_saturday, j.includes_sunday
        FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id
-       WHERE ja.vehicle_id::text = ANY($1::text[])
+       WHERE COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text = ANY($1::text[])
          AND ja.job_id <> $2
          AND ja.status::text = 'approved'
          AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
@@ -7960,7 +8261,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
          FROM job_assignments ja JOIN jobs j ON ja.job_id = j.id
          WHERE ja.job_id <> $1
            AND ja.status::text = 'pending'
-           AND ( ja.vehicle_id::text = ANY($2::text[]) OR ja.driver_id::text = ANY($3::text[]) )
+           AND ( COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text = ANY($2::text[]) OR ja.driver_id::text = ANY($3::text[]) )
            AND j.status::text IN ('open', 'in_progress', 'pending', 'accepted')`,
         [targetJobId, vIds, dIds]
       );
@@ -8043,7 +8344,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (userRole === 'trucking_company') {
         result = await pool.query(
           `SELECT DISTINCT j.*, COALESCE(cp.name, bcp.name) as project_name, u.company as contractor_name FROM jobs j LEFT JOIN contractor_projects cp ON j.project_id = cp.id LEFT JOIN broker_client_projects bcp ON j.project_id = bcp.id::text LEFT JOIN users u ON j.contractor_id::text = u.id::text
-           WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON ja.vehicle_id = t.id WHERE t.trucking_company_id = $1 AND ja.status::text NOT IN ('withdrawn', 'rejected'))
+           WHERE j.id IN (SELECT ja.job_id FROM job_assignments ja JOIN trucks t ON t.id::text = COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text WHERE t.trucking_company_id = $1 AND ja.status::text NOT IN ('withdrawn', 'rejected'))
            AND j.archived_at IS NULL
            ORDER BY j.scheduled_date DESC`,
           [auth.userId]
@@ -8105,8 +8406,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (jobIds.length > 0) {
         try {
           const assResult = await pool.query(
-            `SELECT ja.job_id, ja.vehicle_id, ja.driver_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type, t.trucking_company_id
-             FROM job_assignments ja LEFT JOIN trucks t ON ja.vehicle_id = t.id
+            `SELECT ja.job_id, COALESCE(ja.fleet_truck_id, ja.vehicle_id) AS vehicle_id, ja.driver_id, ja.status, t.make, t.model, t.year, t.truck_number, t.license_plate, t.truck_type, t.trucking_company_id
+             FROM job_assignments ja LEFT JOIN trucks t ON t.id::text = COALESCE(ja.fleet_truck_id, ja.vehicle_id)::text
              WHERE ja.job_id = ANY($1) AND ja.status::text NOT IN ('withdrawn', 'rejected')`,
             [jobIds]
           );
