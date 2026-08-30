@@ -336,6 +336,7 @@ export default function BrokerDashboardScreen() {
     typeof params.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : localDateKey(new Date())
   );
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
+  const [instructionConfirmation, setInstructionConfirmation] = useState<string | null>(null);
   // Roller time picker state for the "Send instructions at…" modal
   const [schedHour, setSchedHour] = useState(6);
   const [schedMinute, setSchedMinute] = useState(0);
@@ -562,12 +563,14 @@ export default function BrokerDashboardScreen() {
         openScheduleModal();
       } else {
         const msg = sendNow
-          ? `Instructions sent to ${ok} truck${ok === 1 ? '' : 's'}.`
+          ? 'Your instructions were sent.'
           : `${ok} truck${ok === 1 ? '' : 's'} added, but this job has no date. Add a job date before scheduling the instructions.`;
-        if (Platform.OS === 'web') {
+        if (sendNow) {
+          setInstructionConfirmation(msg);
+        } else if (Platform.OS === 'web') {
           if (typeof window !== 'undefined') window.alert(msg);
         } else {
-          Alert.alert(sendNow ? 'Instructions Sent' : 'Date Required', msg);
+          Alert.alert('Date Required', msg);
         }
       }
     } else if (count > 0 && failed.size > 0) {
@@ -632,9 +635,14 @@ export default function BrokerDashboardScreen() {
     mutationFn: async (sendAtIso: string) => {
       return apiRequest('POST', '/api/broker/scheduled-sends', { date: selectedDate, sendAt: sendAtIso, tzOffsetMin: new Date().getTimezoneOffset() });
     },
-    onSuccess: () => {
+    onSuccess: (_data, sendAtIso) => {
       queryClient.invalidateQueries({ queryKey: ['/api/broker/scheduled-sends'] });
       setScheduleModalVisible(false);
+      const sendTime = new Date(sendAtIso).toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      setInstructionConfirmation(`Your instructions will be sent at ${sendTime}.`);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: (e: any) => Alert.alert('Error', e.message || 'Failed to schedule send'),
@@ -1592,6 +1600,28 @@ export default function BrokerDashboardScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={!!instructionConfirmation}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInstructionConfirmation(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.confirmationDialog}>
+            <Ionicons name="checkmark-circle" size={48} color={Colors.success} />
+            <Text style={styles.confirmationTitle}>INSTRUCTIONS CONFIRMED</Text>
+            <Text style={styles.confirmationMessage}>{instructionConfirmation}</Text>
+            <Pressable
+              testID="instruction-confirmation-ok"
+              onPress={() => setInstructionConfirmation(null)}
+              style={({ pressed }) => [styles.confirmationOkBtn, pressed && { opacity: 0.75 }]}
+            >
+              <Text style={styles.confirmationOkText}>OK</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={!!inviteVisible} transparent animationType="slide" onRequestClose={() => setInviteVisible(null)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.modalOverlay}>
@@ -1757,6 +1787,49 @@ const styles = StyleSheet.create({
   sendAtTimeBtn: { marginTop: 14, borderRadius: 12, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', paddingVertical: 14 },
   sendAtTimeBtnText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 14, color: Colors.primaryForeground, letterSpacing: 0.5 },
   scheduleNote: { fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 14, lineHeight: 17 },
+  confirmationDialog: {
+    width: '86%',
+    maxWidth: 380,
+    alignSelf: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 24,
+    paddingTop: 28,
+    paddingBottom: 20,
+  },
+  confirmationTitle: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 18,
+    color: Colors.text,
+    letterSpacing: 0.6,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  confirmationMessage: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 16,
+    lineHeight: 23,
+    color: Colors.text,
+    textAlign: 'center',
+    marginTop: 10,
+    marginBottom: 22,
+  },
+  confirmationOkBtn: {
+    width: '100%',
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    paddingVertical: 13,
+  },
+  confirmationOkText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.primaryForeground,
+    letterSpacing: 0.8,
+  },
   jobActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   assignBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,

@@ -14,3 +14,7 @@ The companion owns driver phone delivery. Every instruction-send mode—send whi
 **Assignment-sheet rule:** An active assignment with no sent timestamp is both “already on this job” and a pending instruction-send target. Its checked row must count toward Send Now/Send Later; sent assignments remain checked for assignment state but are excluded from send counts.
 
 **Why:** Treating selection as only newly chosen drivers produced a checked held truck alongside disabled “(0)” send buttons, trapping brokers who assigned first and sent later.
+
+**Confirmation rule:** After a successful immediate send, close the truck sheet and require an explicit OK on “Your instructions were sent.” After scheduling succeeds, close the scheduler and require OK on a confirmation containing the localized send time.
+
+**Why:** The broker needs an unmistakable acknowledgement that the immediate send or saved schedule actually succeeded; silently returning to the job list leaves the outcome ambiguous.
