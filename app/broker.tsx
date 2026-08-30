@@ -1364,7 +1364,15 @@ export default function BrokerDashboardScreen() {
                 <Ionicons name="close" size={22} color={Colors.text} />
               </Pressable>
             </View>
-            <Text style={styles.modalSubtitle} numberOfLines={1}>{assignJob?.material || ''}</Text>
+            <View style={styles.modalSummaryRow}>
+              <Text style={[styles.modalSubtitle, styles.modalMaterial]} numberOfLines={1}>
+                {assignJob?.material || ''}
+              </Text>
+              <Text style={[styles.modalSubtitle, styles.modalTruckRequest]}>
+                {assignJob?.assignmentStats?.trucksNeeded ?? 0}{' '}
+                {(assignJob?.assignmentStats?.trucksNeeded ?? 0) === 1 ? 'truck' : 'trucks'} requested
+              </Text>
+            </View>
             <ScrollView style={{ maxHeight: 380 }} showsVerticalScrollIndicator={false}>
               {roster.length === 0 ? (
                 <View style={{ alignItems: 'center', marginVertical: 24, gap: 14 }}>
@@ -1963,7 +1971,10 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   modalTitle: { fontFamily: 'ChakraPetch_700Bold', fontSize: 16, color: Colors.text, letterSpacing: 0.5 },
   modalClose: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  modalSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textSecondary, marginBottom: 12 },
+  modalSummaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 12 },
+  modalSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textSecondary },
+  modalMaterial: { flex: 1 },
+  modalTruckRequest: { color: Colors.text, fontFamily: 'Inter_600SemiBold', flexShrink: 0 },
   assignRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border,
