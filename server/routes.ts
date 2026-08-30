@@ -750,11 +750,16 @@ async function sendBrokerJobInstructions(
   assignmentId?: string,
 ) {
   await enqueueHeldBrokerAssignments(jobId, brokerId, jwt, assignmentId);
+  // The website's single-assignment send lives under /api/broker/assignments,
+  // not under the job (POST /api/broker/jobs/:id/send does not exist there and
+  // returns an HTML 404 page).
   const response = await websiteFetch(
-    `/api/broker/jobs/${jobId}/${assignmentId ? "send" : "send-all"}`,
+    assignmentId
+      ? `/api/broker/assignments/${encodeURIComponent(assignmentId)}/send`
+      : `/api/broker/jobs/${jobId}/send-all`,
     {
       method: "POST",
-      body: assignmentId ? { assignmentId } : {},
+      body: {},
       jwt,
     }
   );

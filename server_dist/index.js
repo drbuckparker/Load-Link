@@ -2061,10 +2061,10 @@ async function deliverPendingBrokerInstructionPushes(jobId, assignmentId) {
 async function sendBrokerJobInstructions(jobId, brokerId, jwt, assignmentId) {
   await enqueueHeldBrokerAssignments(jobId, brokerId, jwt, assignmentId);
   const response = await websiteFetch(
-    `/api/broker/jobs/${jobId}/${assignmentId ? "send" : "send-all"}`,
+    assignmentId ? `/api/broker/assignments/${encodeURIComponent(assignmentId)}/send` : `/api/broker/jobs/${jobId}/send-all`,
     {
       method: "POST",
-      body: assignmentId ? { assignmentId } : {},
+      body: {},
       jwt
     }
   );

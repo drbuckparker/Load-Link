@@ -124,7 +124,12 @@ async function throwIfResNotOk(res: Response) {
       }
     } catch {}
     if (message.includes('<!DOCTYPE') || message.includes('<html') || message.includes('<head')) {
-      message = 'The LoadLink service is temporarily unavailable. Please try again.';
+      // An HTML body means we got an error page rather than an API response.
+      // Only 5xx (or upstream 502) indicates the service itself is down; a
+      // 404/405 HTML page means the specific record or action wasn't found.
+      message = res.status === 404 || res.status === 405
+        ? 'That job or assignment could not be found on LoadLink. Refresh and try again.'
+        : 'The LoadLink service is temporarily unavailable. Please try again.';
     }
     throw new Error(message);
   }
