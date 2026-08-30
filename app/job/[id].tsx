@@ -326,6 +326,8 @@ export default function JobDetailScreen() {
   const [confirmBackOut, setConfirmBackOut] = useState(false);
   const [removingAssignmentId, setRemovingAssignmentId] = useState<string | null>(null);
   const [reassigningAssignmentId, setReassigningAssignmentId] = useState<string | null>(null);
+  const [showTruckDownOptions, setShowTruckDownOptions] = useState(false);
+  const [truckDownLoading, setTruckDownLoading] = useState(false);
   const [fleetTruckPickerVisible, setFleetTruckPickerVisible] = useState(false);
   const [pendingApproveAssignment, setPendingApproveAssignment] = useState<Assignment | null>(null);
   const [selectedFleetVehicleId, setSelectedFleetVehicleId] = useState<string | null>(null);
@@ -580,6 +582,24 @@ export default function JobDetailScreen() {
   const canStart = isMyJob && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
   // Truck Down — available to the assigned driver anytime the job is live
   // (even before clocking in), never in contractor mode.
+  const canTruckDown = isMyJob && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && jobStatus !== 'expired';
+  const truckDownStatus: string | null = myAssignment?.truck_down_status ?? myAssignment?.truckDownStatus ?? null;
+
+  async function handleTruckDown(status: string | null) {
+    if (!id) return;
+    setTruckDownLoading(true);
+    try {
+      await apiRequest('POST', `/api/jobs/${id}/truck-down`, { status });
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/jobs/${id}/data`] });
+      setShowTruckDownOptions(false);
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e: any) {
+      Alert.alert('Truck Status Error', e?.message || 'Failed to update truck status');
+    } finally {
+      setTruckDownLoading(false);
+    }
+  }
 
   const clockInRestriction = (() => {
     if (!canStart || isRunning) return null;
@@ -3247,6 +3267,83 @@ export default function JobDetailScreen() {
             <Ionicons name="stop-circle" size={20} color="#fff" />
             <Text style={styles.stopBtnText}>CLOCK OUT</Text>
           </Pressable>
+        )}
+
+        {canTruckDown && truckDownStatus && !showTruckDownOptions && (
+          <View style={styles.truckDownBanner}>
+            <View style={styles.truckDownBannerRow}>
+              <Ionicons name="warning" size={18} color={Colors.warning} />
+              <Text style={styles.truckDownBannerText}>
+                {truckDownStatus === 'out_for_day' ? 'TRUCK DOWN — OUT FOR THE DAY' : 'TRUCK DOWN — BACK SHORTLY'}
+              </Text>
+            </View>
+            <Text style={styles.truckDownBannerSub}>
+              {truckDownStatus === 'out_for_day'
+                ? 'You have reported your truck is out for the day. The contractor has been notified.'
+                : 'You have reported your truck will be back shortly. The contractor has been notified.'}
+            </Text>
+            <Pressable
+              style={({ pressed }) => [styles.truckUpBtn, pressed && { opacity: 0.8 }]}
+              onPress={() => handleTruckDown(null)}
+              disabled={truckDownLoading}
+            >
+              {truckDownLoading ? (
+                <ActivityIndicator size="small" color={Colors.success} />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
+                  <Text style={styles.truckUpBtnText}>TRUCK BACK UP</Text>
+                </>
+              )}
+            </Pressable>
+          </View>
+        )}
+
+        {canTruckDown && !truckDownStatus && !showTruckDownOptions && (
+          <Pressable
+            style={({ pressed }) => [styles.truckDownBtn, pressed && { opacity: 0.8 }]}
+            onPress={() => setShowTruckDownOptions(true)}
+          >
+            <Ionicons name="warning-outline" size={18} color={Colors.warning} />
+            <Text style={styles.truckDownBtnText}>TRUCK DOWN</Text>
+          </Pressable>
+        )}
+
+        {canTruckDown && showTruckDownOptions && (
+          <View style={styles.truckDownBanner}>
+            <View style={styles.truckDownBannerRow}>
+              <Ionicons name="warning" size={16} color={Colors.warning} />
+              <Text style={styles.truckDownBannerText}>REPORT TRUCK DOWN</Text>
+            </View>
+            <Pressable
+              style={({ pressed }) => [styles.truckDownOptionBtn, pressed && { opacity: 0.8 }]}
+              onPress={() => handleTruckDown('back_shortly')}
+              disabled={truckDownLoading}
+            >
+              <Ionicons name="time-outline" size={20} color={Colors.text} />
+              <View>
+                <Text style={styles.truckDownOptionText}>BACK SHORTLY</Text>
+                <Text style={styles.truckDownOptionHint}>Mechanical issue — will be back soon</Text>
+              </View>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.truckDownOptionBtn, pressed && { opacity: 0.8 }]}
+              onPress={() => handleTruckDown('out_for_day')}
+              disabled={truckDownLoading}
+            >
+              <Ionicons name="moon-outline" size={20} color={Colors.text} />
+              <View>
+                <Text style={styles.truckDownOptionText}>OUT FOR THE DAY</Text>
+                <Text style={styles.truckDownOptionHint}>Cannot return today</Text>
+              </View>
+            </Pressable>
+            <Pressable
+              onPress={() => setShowTruckDownOptions(false)}
+              style={{ alignSelf: 'center', paddingVertical: 8 }}
+            >
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted }}>Cancel</Text>
+            </Pressable>
+          </View>
         )}
 
         {removingAssignmentId && !isRunning && !isContractor && jobStatus !== 'completed' && jobStatus !== 'cancelled' && (

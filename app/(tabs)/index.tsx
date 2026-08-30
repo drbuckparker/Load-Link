@@ -4,7 +4,7 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import Colors from '@/constants/colors';
@@ -90,6 +90,35 @@ export default function DashboardScreen() {
   const { data: contractorJobs } = useQuery<any[]>({
     queryKey: ['/api/contractor/jobs'],
     enabled: contractor,
+  });
+
+  // Pending broker roster invites for THIS user. Drivers see these on the
+  // Jobs tab, but contractor-style roles (trucking_company / contractor /
+  // broker) have that tab hidden — so surface the invite here too, or an
+  // invited owner-operator can never accept it in the app. Dev-local demo
+  // sessions get a 400 from this proxy route, so swallow errors quietly.
+  const rosterInvitesQuery = useQuery<any[]>({
+    queryKey: ['/api/invitations/pending', '?type=broker_roster'],
+    enabled: !!user,
+    retry: false,
+  });
+  const pendingRosterInvites = Array.isArray(rosterInvitesQuery.data) ? rosterInvitesQuery.data : [];
+
+  const acceptRosterInviteMutation = useMutation({
+    mutationFn: async (inviteId: string) => {
+      return apiRequest('POST', `/api/invitations/${inviteId}/accept`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/invitations/pending'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (e: any) => {
+      const msg = e?.message || 'Failed to accept invite';
+      Alert.alert('Could Not Accept Invite', msg.includes('live website account')
+        ? 'Please log in with your email and password (not Replit login) to accept roster invites.'
+        : msg);
+    },
   });
 
   const unreadCount = (notifsData || []).filter((n: any) => !(n.is_read ?? n.isRead)).length;
@@ -350,6 +379,46 @@ export default function DashboardScreen() {
           </Pressable>
         </View>
       </View>
+
+      {pendingRosterInvites.length > 0 && (
+        <View
+          testID="roster-invite-banner"
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 10,
+            marginHorizontal: 16, marginBottom: 12,
+            backgroundColor: 'rgba(255,153,0,0.1)',
+            borderWidth: 1, borderColor: Colors.primary, borderRadius: 12,
+            paddingVertical: 12, paddingHorizontal: 14,
+          }}
+        >
+          <Ionicons name="people" size={20} color={Colors.primary} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primary, letterSpacing: 0.5 }}>ROSTER INVITE</Text>
+            <Text style={{ fontFamily: 'Rajdhani_500Medium', fontSize: 13, color: Colors.text }} numberOfLines={2}>
+              {(pendingRosterInvites[0].inviterName || pendingRosterInvites[0].inviter_name || pendingRosterInvites[0].brokerName || pendingRosterInvites[0].broker_name || 'A broker')} wants to add you to their driver roster.
+            </Text>
+          </View>
+          <Pressable
+            testID="roster-invite-accept"
+            disabled={acceptRosterInviteMutation.isPending}
+            style={({ pressed }) => ({
+              backgroundColor: Colors.primary, borderRadius: 8,
+              paddingVertical: 8, paddingHorizontal: 14,
+              opacity: pressed || acceptRosterInviteMutation.isPending ? 0.7 : 1,
+            })}
+            onPress={() => {
+              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              acceptRosterInviteMutation.mutate(pendingRosterInvites[0].id);
+            }}
+          >
+            {acceptRosterInviteMutation.isPending ? (
+              <ActivityIndicator size="small" color={Colors.primaryForeground} />
+            ) : (
+              <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 12, color: Colors.primaryForeground, letterSpacing: 0.5 }}>ACCEPT</Text>
+            )}
+          </Pressable>
+        </View>
+      )}
 
       {role === 'broker' && (
         <Pressable

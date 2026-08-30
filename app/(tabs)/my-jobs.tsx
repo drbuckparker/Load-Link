@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, Modal, RefreshControl } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, Platform, ActivityIndicator, Modal, RefreshControl, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import TruckIcon from '@/components/TruckIcon';
@@ -96,6 +96,12 @@ export default function MyJobsScreen() {
       queryClient.invalidateQueries({ queryKey: ['/api/invitations/pending'] });
       queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] });
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (e: any) => {
+      const msg = e?.message || 'Failed to accept invite';
+      Alert.alert('Could Not Accept Invite', msg.includes('live website account')
+        ? 'Please log in with your email and password (not Replit login) to accept roster invites.'
+        : msg);
     },
   });
 
