@@ -76,7 +76,17 @@ export default function VehiclesScreen() {
       try {
         const resp = await apiRequest('GET', `/api/drivers/search?q=${encodeURIComponent(query)}`);
         const data = await resp.json();
-        setDriverResults(Array.isArray(data) ? data : []);
+        setDriverResults(
+          Array.isArray(data)
+            ? data
+                .filter((driver: any) => driver && driver.id)
+                .map((driver: any) => ({
+                  id: String(driver.id),
+                  name: String(driver.name || driver.fullName || driver.full_name || driver.email || 'Driver'),
+                  email: String(driver.email || ''),
+                }))
+            : []
+        );
       } catch { setDriverResults([]); }
       setSearchingDrivers(false);
     }, 300);
