@@ -23,11 +23,11 @@ The companion owns driver phone delivery. Every instruction-send mode—send whi
 
 **How to apply:** serialize self-responses with a durable claim, bound remote request time, recheck authoritative status before every transition, make same-action retries idempotent, and reject opposite-action replays.
 
-**Driver-response endpoint:** Proxy confirm/decline to website `/api/job-assignments/:id/...`, never legacy `/api/assignments/:id/...`.
+**Driver-response compatibility:** Try website `/api/job-assignments/:id/...`, but fall back on an HTML 404 to legacy `/api/assignments/:id/...`; current production exposes only the legacy response path.
 
-**Why:** The legacy namespace can route an owner-driver response into contractor approval, making the active dashboard role incorrectly control whether the assigned driver can respond.
+**Why:** Current website production has no role-independent broker-owner/driver confirm route: the audited namespace 404s, while legacy routes self-response into contractor-only approval.
 
-**How to apply:** all driver responses remain identity-based; active broker, contractor, fleet, or driver view must not select a different response endpoint.
+**How to apply:** ordinary responses use the live website route. For a verified broker self-assignment only, persist confirmation in the companion response ledger and overlay it in broker/driver reads; decline must delete upstream first.
 
 **Assignment-sheet rule:** An active assignment with no sent timestamp is both “already on this job” and a pending instruction-send target. Its checked row must count toward Send Now/Send Later; sent assignments remain checked for assignment state but are excluded from send counts.
 
