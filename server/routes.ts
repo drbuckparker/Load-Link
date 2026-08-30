@@ -3802,6 +3802,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // At-a-glance nightly-send health, independent of the day the broker has
+  // selected: the next pending occurrence and the most recent resolved one
+  // (sent or failed) so the broker can trust the nightly chain is alive.
+  app.get("/api/broker/scheduled-sends/overview", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
+    const auth = getWebsiteAuth(req)!;
+    try {
+      const mapRow = (row: any) => row ? ({
+        id: row.id,
+        date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
+        sendAt: row.send_at,
+        status: row.status,
+        error: row.error ?? null,
+        sentJobs: row.sent_jobs ?? 0,
+      }) : null;
+      const [nextR, latestR] = await Promise.all([
+        pool.query(
+          `SELECT id, date, send_at, status, error, sent_jobs FROM broker_scheduled_sends
+            WHERE broker_id = $1 AND status = 'pending'
+            ORDER BY send_at ASC LIMIT 1`,
+          [auth.userId]
+        ),
+        pool.query(
+          `SELECT id, date, send_at, status, error, sent_jobs FROM broker_scheduled_sends
+            WHERE broker_id = $1 AND status IN ('sent', 'failed')
+            ORDER BY send_at DESC LIMIT 1`,
+          [auth.userId]
+        ),
+      ]);
+      return res.json({ next: mapRow(nextR.rows[0]), latest: mapRow(latestR.rows[0]) });
+    } catch (e: any) {
+      console.error("GET /api/broker/scheduled-sends/overview error:", e.message);
+      return res.status(500).json({ message: "Failed to load send overview" });
+    }
+  });
+
   app.post("/api/broker/scheduled-sends", requireAuth, requireBrokerRole, async (req: Request, res: Response) => {
     const auth = getWebsiteAuth(req)!;
     if (auth.jwt && auth.jwt.startsWith("dev-local:")) {

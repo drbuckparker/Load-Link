@@ -623,6 +623,22 @@ export default function BrokerDashboardScreen() {
     // 60s) surfaces without needing to navigate away and back.
     refetchInterval: 60000,
   });
+  // At-a-glance nightly-send health across all dates: next pending occurrence
+  // and the most recent resolved (sent/failed) one, regardless of the day the
+  // broker is viewing, so the nightly chain is visibly alive (or broken).
+  type SchedOccurrence = { id: string; date: string; sendAt: string; status: string; error?: string | null; sentJobs?: number };
+  const sendOverviewQuery = useQuery<{ next: SchedOccurrence | null; latest: SchedOccurrence | null }>({
+    queryKey: ['/api/broker/scheduled-sends', 'overview'],
+    queryFn: async () => {
+      const res = await apiRequest('GET', '/api/broker/scheduled-sends/overview');
+      return res.json();
+    },
+    enabled: !!user && tab === 'today',
+    refetchInterval: 60000,
+  });
+  const overviewNext = sendOverviewQuery.data?.next || null;
+  const overviewLatest = sendOverviewQuery.data?.latest || null;
+
   const pendingSchedule = (scheduledSendQuery.data || []).find(s => s.status === 'pending');
   const failedSchedule = (scheduledSendQuery.data || []).find(s => s.status === 'failed');
   // Most recent successfully-fired schedule for this day (server returns sent
@@ -1090,6 +1106,53 @@ export default function BrokerDashboardScreen() {
                         <Ionicons name="chevron-forward" size={20} color={Colors.text} />
                       </Pressable>
                     </View>
+                    {(overviewNext || overviewLatest) ? (() => {
+                      // "Today"/"Tomorrow"/weekday label for a YYYY-MM-DD key.
+                      const dayLabel = (key: string) => {
+                        const today = localDateKey(new Date());
+                        const tmr = new Date(); tmr.setDate(tmr.getDate() + 1);
+                        if (key === today) return 'today';
+                        if (key === localDateKey(tmr)) return 'tomorrow';
+                        return new Date(`${key}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+                      };
+                      const timeOf = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+                      const latestFailed = overviewLatest?.status === 'failed';
+                      return (
+                        <View style={[styles.nightlyCard, latestFailed && styles.nightlyCardFailed]} testID="nightly-send-overview">
+                          <Text style={styles.nightlyTitle}>NIGHTLY INSTRUCTIONS</Text>
+                          {overviewNext ? (
+                            <View style={styles.nightlyRow}>
+                              <Ionicons name="time-outline" size={15} color={Colors.primary} />
+                              <Text style={styles.nightlyText}>
+                                Next send: {dayLabel(overviewNext.date)} at {timeOf(overviewNext.sendAt)}
+                              </Text>
+                            </View>
+                          ) : (
+                            <View style={styles.nightlyRow}>
+                              <Ionicons name="moon-outline" size={15} color={Colors.textSecondary} />
+                              <Text style={[styles.nightlyText, { color: Colors.textSecondary }]}>No send scheduled</Text>
+                            </View>
+                          )}
+                          {overviewLatest ? (
+                            latestFailed ? (
+                              <View style={styles.nightlyRow} testID="nightly-last-failed">
+                                <Ionicons name="alert-circle" size={15} color={Colors.destructive} />
+                                <Text style={[styles.nightlyText, { color: Colors.destructive }]}>
+                                  Last send ({dayLabel(overviewLatest.date)}) failed{overviewLatest.error ? `: ${overviewLatest.error}` : ''} — re-save the schedule or send now.
+                                </Text>
+                              </View>
+                            ) : (
+                              <View style={styles.nightlyRow} testID="nightly-last-sent">
+                                <Ionicons name="checkmark-circle" size={15} color={Colors.success} />
+                                <Text style={styles.nightlyText}>
+                                  Last send ({dayLabel(overviewLatest.date)}): {overviewLatest.sentJobs || 0} job{(overviewLatest.sentJobs || 0) === 1 ? '' : 's'} sent
+                                </Text>
+                              </View>
+                            )
+                          ) : null}
+                        </View>
+                      );
+                    })() : null}
                     {failedSchedule ? (
                       <View style={styles.failedBanner} testID="failed-send-banner">
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -1764,6 +1827,11 @@ const styles = StyleSheet.create({
   daySummaryText: { fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.textSecondary },
   filledBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(34,197,94,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   filledBadgeText: { fontFamily: 'ChakraPetch_700Bold', fontSize: 10, color: Colors.success, letterSpacing: 0.5 },
+  nightlyCard: { backgroundColor: Colors.card, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, padding: 10, gap: 6, marginBottom: 12 },
+  nightlyCardFailed: { borderColor: 'rgba(239,68,68,0.5)', backgroundColor: Colors.destructiveBg },
+  nightlyTitle: { fontFamily: 'ChakraPetch_700Bold', fontSize: 11, color: Colors.textSecondary, letterSpacing: 0.8 },
+  nightlyRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  nightlyText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
   failedBanner: { backgroundColor: Colors.destructiveBg, borderRadius: 10, padding: 12, gap: 6, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(239,68,68,0.4)' },
   failedBannerTitle: { fontFamily: 'ChakraPetch_700Bold', fontSize: 13, color: Colors.destructive, letterSpacing: 0.5 },
   failedBannerText: { fontFamily: 'Inter_500Medium', fontSize: 13, color: Colors.text },
