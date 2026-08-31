@@ -289,16 +289,21 @@ export default function JobsBrowseScreen() {
     }
   }, [params.clientId, params.clientEmail, brokerClients]);
 
-  // Projects belonging to the selected client (broker projects carry
-  // client_user_id; contractor projects don't and are excluded here).
+  // Projects belonging to the selected client, from the broker client-project
+  // feed: broker-created projects plus a registered client's own projects.
+  const selectedClientKey = selectedClient
+    ? String(selectedClient.clientUserId || selectedClient.client_user_id || '')
+    : '';
+  const clientProjectsQueryUrl = `/api/broker/client-projects?clientUserId=${encodeURIComponent(selectedClientKey)}`;
+  const { data: _clientProjects, isLoading: clientProjectsLoading, refetch: refetchClientProjects } = useQuery<any[]>({
+    queryKey: [clientProjectsQueryUrl],
+    enabled: !!user && isBroker && !!selectedClientKey,
+    refetchOnMount: 'always',
+  });
   const selectedClientProjects = useMemo(() => {
-    if (!selectedClient) return [];
-    const cid = String(selectedClient.clientUserId || selectedClient.client_user_id || '');
-    if (!cid) return [];
-    return projects.filter((p: any) =>
-      !p.deleted_at && String(p.client_user_id || p.clientUserId || '') === cid
-    );
-  }, [selectedClient, projects]);
+    if (!selectedClient || !Array.isArray(_clientProjects)) return [];
+    return _clientProjects.filter((p: any) => !p.deleted_at && !p.deletedAt);
+  }, [selectedClient, _clientProjects]);
 
   const jobsForClient = (c: any): any[] => {
     const cUserId = c.clientUserId || c.client_user_id;
@@ -320,6 +325,23 @@ export default function JobsBrowseScreen() {
       .map(mapDbJob)
       .filter(j => !['completed', 'cancelled', 'canceled'].includes(String(j.status || '').toLowerCase()));
   }, [selectedClient, brokerJobs]);
+
+  // Jobs inside the project the broker drilled into from the client view.
+  const selectedClientProjectJobs = useMemo<Job[]>(() => {
+    if (!selectedClient || !selectedProjectFilter) return [];
+    return selectedClientJobs.filter((j: any) => String(j.projectId || '') === String(selectedProjectFilter));
+  }, [selectedClient, selectedProjectFilter, selectedClientJobs]);
+
+  // Job counts per project for this client's project cards.
+  const clientProjectJobCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const j of selectedClientJobs as any[]) {
+      const pid = String(j.projectId || '');
+      if (!pid) continue;
+      m.set(pid, (m.get(pid) || 0) + 1);
+    }
+    return m;
+  }, [selectedClientJobs]);
 
   const inviteClientMutation = useMutation({
     mutationFn: async (data: { name: string; email?: string; contactName?: string; phone?: string; address?: string; notes?: string }) => {
@@ -440,11 +462,15 @@ export default function JobsBrowseScreen() {
 
   const createProjectMutation = useMutation({
     mutationFn: async (data: { name: string; job_number?: string; site_address?: string; site_lat?: number; site_lng?: number; notes?: string }) => {
-      const res = await apiRequest('POST', '/api/projects', data);
+      // From inside a client, the project belongs to that client — save it
+      // through the broker client-project flow so it stays tied to them.
+      const res = (isBroker && selectedClientKey)
+        ? await apiRequest('POST', '/api/broker/client-projects', { ...data, clientUserId: selectedClientKey })
+        : await apiRequest('POST', '/api/projects', data);
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && (k.includes('/api/projects') || k.includes('/api/broker/client-projects'))) });
       setShowCreateProject(false);
       setNewProjectName('');
       setNewProjectJobNumber('');
@@ -669,8 +695,10 @@ export default function JobsBrowseScreen() {
 
   const selectedProjectData = useMemo(() => {
     if (!selectedProjectFilter) return null;
-    return projects.find(p => String(p.id) === selectedProjectFilter) || null;
-  }, [selectedProjectFilter, projects]);
+    return projects.find(p => String(p.id) === selectedProjectFilter)
+      || (selectedClientProjects as any[]).find((p: any) => String(p.id) === selectedProjectFilter)
+      || null;
+  }, [selectedProjectFilter, projects, selectedClientProjects]);
 
   const topPadding = Platform.OS === 'web' ? 67 : insets.top;
   const filters = isContractor ? CONTRACTOR_FILTERS : DRIVER_FILTERS;
@@ -1096,15 +1124,17 @@ export default function JobsBrowseScreen() {
           <Text style={styles.projectBannerText} numberOfLines={1}>
             Showing jobs in "{selectedProjectData.name}"
           </Text>
-          <Pressable
-            onPress={() => {
-              if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              openEditProject(selectedProjectData);
-            }}
-            hitSlop={8}
-          >
-            <Ionicons name="create-outline" size={20} color={Colors.primary} />
-          </Pressable>
+          {!selectedClient && (
+            <Pressable
+              onPress={() => {
+                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                openEditProject(selectedProjectData);
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="create-outline" size={20} color={Colors.primary} />
+            </Pressable>
+          )}
         </View>
       )}
 
@@ -1112,7 +1142,7 @@ export default function JobsBrowseScreen() {
         <View style={styles.projectBanner}>
           <Ionicons name="business" size={16} color={Colors.primary} />
           <Text style={styles.projectBannerText} numberOfLines={1}>
-            Showing jobs for "{selectedClient.name || selectedClient.client_name || selectedClient.clientName || selectedClient.email || 'Client'}"
+            Showing projects for "{selectedClient.name || selectedClient.client_name || selectedClient.clientName || selectedClient.email || 'Client'}"
           </Text>
         </View>
       )}
@@ -1306,9 +1336,84 @@ export default function JobsBrowseScreen() {
         </>
       )}
 
-      {activeTab === 'clients' && isBroker && selectedClient && (
+      {activeTab === 'clients' && isBroker && selectedClient && !selectedProjectFilter && (
         <FlatList
-          data={selectedClientJobs}
+          data={selectedClientProjects}
+          keyExtractor={(item: any) => String(item.id)}
+          renderItem={({ item }: any) => {
+            const jobCount = clientProjectJobCounts.get(String(item.id)) || 0;
+            return (
+              <View style={styles.projectCard}>
+                <Pressable
+                  testID={`client-project-${item.id}`}
+                  style={({ pressed }) => [{ flex: 1 }, pressed && styles.cardPressed]}
+                  onPress={() => {
+                    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    // Drill into the project's jobs while keeping the client
+                    // selected so back returns to this project list.
+                    setSelectedProjectFilter(String(item.id));
+                  }}
+                >
+                  <View style={styles.projectCardHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.projectCardName} numberOfLines={1}>{item.name}</Text>
+                      {item.job_number ? (
+                        <Text style={styles.projectJobNumber}>#{item.job_number}</Text>
+                      ) : null}
+                    </View>
+                    {item.is_broker_project === false || item.isBrokerProject === false ? (
+                      <View style={[styles.projectStatusBadge, { backgroundColor: Colors.muted }]}>
+                        <Text style={[styles.projectStatusText, { color: Colors.textMuted }]}>CLIENT'S</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  {item.site_address ? (
+                    <View style={styles.projectDetailRow}>
+                      <Ionicons name="location-outline" size={14} color={Colors.textMuted} />
+                      <Text style={styles.projectDetailText} numberOfLines={1}>{item.site_address}</Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.projectFooter}>
+                    <View style={styles.projectStat}>
+                      <Ionicons name="briefcase-outline" size={15} color={Colors.primary} />
+                      <Text style={styles.projectStatText}>{jobCount} active job{jobCount !== 1 ? 's' : ''}</Text>
+                    </View>
+                    <Text style={styles.timeAgoText}>{timeAgo(item.created_at)}</Text>
+                    <Ionicons name="chevron-forward" size={14} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
+                  </View>
+                </Pressable>
+              </View>
+            );
+          }}
+          contentContainerStyle={styles.listContent}
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          showsVerticalScrollIndicator={false}
+          onRefresh={() => {
+            refetchClientProjects();
+            queryClient.invalidateQueries({ queryKey: [brokerClientJobsQueryUrl] });
+          }}
+          refreshing={false}
+          ListEmptyComponent={
+            clientProjectsLoading ? (
+              <View style={styles.emptyContainer}>
+                <ActivityIndicator color={Colors.primary} />
+                <Text style={styles.emptySubtitle}>Loading projects...</Text>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="folder-outline" size={48} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No projects yet</Text>
+                <Text style={styles.emptySubtitle}>Tap + to add a project for this client</Text>
+              </View>
+            )
+          }
+          ListFooterComponent={<View style={{ height: 80 }} />}
+        />
+      )}
+
+      {activeTab === 'clients' && isBroker && selectedClient && selectedProjectFilter && (
+        <FlatList
+          data={selectedClientProjectJobs}
           keyExtractor={(item: any) => String(item.id)}
           renderItem={({ item }: any) => (isContractor ? renderContractorCard({ item }) : renderDriverCard({ item }))}
           contentContainerStyle={styles.listContent}
@@ -1316,22 +1421,9 @@ export default function JobsBrowseScreen() {
           showsVerticalScrollIndicator={false}
           onRefresh={() => {
             queryClient.invalidateQueries({ queryKey: [brokerClientJobsQueryUrl] });
-            queryClient.invalidateQueries({ queryKey: [projectsQueryUrl] });
+            refetchClientProjects();
           }}
           refreshing={false}
-          ListHeaderComponent={
-            selectedClientProjects.length > 0 ? (
-              <View style={{ marginBottom: 16 }}>
-                <Text style={styles.clientSectionLabel}>PROJECTS</Text>
-                <View style={{ gap: 12 }}>
-                  {selectedClientProjects.map((p: any) => (
-                    <View key={String(p.id)}>{renderProjectCard({ item: p })}</View>
-                  ))}
-                </View>
-                <Text style={[styles.clientSectionLabel, { marginTop: 16 }]}>JOBS</Text>
-              </View>
-            ) : null
-          }
           ListEmptyComponent={
             brokerJobsLoading ? (
               <View style={styles.emptyContainer}>
@@ -1341,8 +1433,8 @@ export default function JobsBrowseScreen() {
             ) : (
               <View style={styles.emptyContainer}>
                 <Ionicons name="briefcase-outline" size={48} color={Colors.textMuted} />
-                <Text style={styles.emptyTitle}>No jobs yet</Text>
-                <Text style={styles.emptySubtitle}>Tap + to add a job for this client</Text>
+                <Text style={styles.emptyTitle}>No jobs in this project yet</Text>
+                <Text style={styles.emptySubtitle}>Tap + to add a job to this project</Text>
               </View>
             )
           }
@@ -1562,14 +1654,25 @@ export default function JobsBrowseScreen() {
           style={[styles.fab, { bottom: Platform.OS === 'web' ? 34 + 20 : insets.bottom + 20 }]}
           onPress={() => {
             if (activeTab === 'clients') {
-              if (selectedClient) {
+              if (selectedClient && selectedProjectFilter) {
+                // Inside a project: new job goes into this project for this client.
                 router.push({
                   pathname: '/create-job',
                   params: {
+                    projectId: selectedProjectFilter,
                     clientName: selectedClient.name || selectedClient.client_name || selectedClient.clientName || '',
                     clientEmail: selectedClient.email || '',
                   },
                 } as any);
+                return;
+              }
+              if (selectedClient) {
+                // Client level: new projects, not loose jobs.
+                if (!selectedClientKey) {
+                  Alert.alert('Client pending', 'This client has not accepted their invite yet, so projects can\'t be added for them.');
+                  return;
+                }
+                setShowCreateProject(true);
                 return;
               }
               setShowInviteClient(true);
