@@ -12,6 +12,7 @@ interface AssignedDriver {
   id: string;
   name: string;
   email: string;
+  phone?: string;
 }
 
 interface Vehicle {
@@ -54,6 +55,7 @@ const EMPTY_FORM = {
   has_tarp: false,
   assigned_driver_id: '' as string,
   assigned_driver_name: '' as string,
+  assigned_driver_phone: '' as string,
 };
 
 export default function VehiclesScreen() {
@@ -84,6 +86,7 @@ export default function VehiclesScreen() {
                   id: String(driver.id),
                   name: String(driver.name || driver.fullName || driver.full_name || driver.email || 'Driver'),
                   email: String(driver.email || ''),
+                  phone: String(driver.phone || ''),
                 }))
             : []
         );
@@ -126,10 +129,12 @@ export default function VehiclesScreen() {
   function handleSave() {
     if (!form.assigned_driver_id && driverSearch.trim()) {
       const needle = driverSearch.trim().toLowerCase();
+      const needlePhone = driverSearch.replace(/\D/g, '');
       const results = Array.isArray(driverResults) ? driverResults : [];
       const exactMatches = results.filter(d =>
         d.name?.trim().toLowerCase() === needle ||
-        d.email?.trim().toLowerCase() === needle
+        d.email?.trim().toLowerCase() === needle ||
+        (!!needlePhone && d.phone?.replace(/\D/g, '') === needlePhone)
       );
       if (exactMatches.length === 1) {
         saveMutation.mutate(exactMatches[0].id);
@@ -202,6 +207,7 @@ export default function VehiclesScreen() {
       has_tarp: !!v.has_tarp,
       assigned_driver_id: v.assigned_driver_id || '',
       assigned_driver_name: v.assigned_driver?.name || '',
+      assigned_driver_phone: v.assigned_driver?.phone || '',
     });
     setDriverSearch('');
     setDriverResults([]);
@@ -379,9 +385,14 @@ export default function VehiclesScreen() {
           <View style={styles.assignedDriverRow}>
             <View style={styles.assignedDriverInfo}>
               <Ionicons name="person" size={16} color={Colors.primary} />
-              <Text style={styles.assignedDriverName}>{form.assigned_driver_name}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.assignedDriverName}>{form.assigned_driver_name}</Text>
+                {!!form.assigned_driver_phone && (
+                  <Text style={styles.driverOptionEmail}>{form.assigned_driver_phone}</Text>
+                )}
+              </View>
             </View>
-            <Pressable onPress={() => setForm(f => ({ ...f, assigned_driver_id: '', assigned_driver_name: '' }))} hitSlop={8}>
+            <Pressable onPress={() => setForm(f => ({ ...f, assigned_driver_id: '', assigned_driver_name: '', assigned_driver_phone: '' }))} hitSlop={8}>
               <Ionicons name="close-circle" size={22} color={Colors.destructive} />
             </Pressable>
           </View>
@@ -391,7 +402,7 @@ export default function VehiclesScreen() {
               style={styles.input}
               value={driverSearch}
               onChangeText={searchDrivers}
-              placeholder="Search by name or email..."
+              placeholder="Search by name, email, or phone..."
               placeholderTextColor={Colors.textMuted}
             />
             {searchingDrivers && (
@@ -404,7 +415,12 @@ export default function VehiclesScreen() {
                     key={d.id}
                     style={styles.driverOption}
                     onPress={() => {
-                      setForm(f => ({ ...f, assigned_driver_id: d.id, assigned_driver_name: d.name }));
+                      setForm(f => ({
+                        ...f,
+                        assigned_driver_id: d.id,
+                        assigned_driver_name: d.name,
+                        assigned_driver_phone: d.phone || '',
+                      }));
                       setDriverSearch('');
                       setDriverResults([]);
                     }}
@@ -412,7 +428,8 @@ export default function VehiclesScreen() {
                     <Ionicons name="person-outline" size={16} color={Colors.textSecondary} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.driverOptionName}>{d.name}</Text>
-                      <Text style={styles.driverOptionEmail}>{d.email}</Text>
+                      {!!d.email && <Text style={styles.driverOptionEmail}>{d.email}</Text>}
+                      {!!d.phone && <Text style={styles.driverOptionEmail}>{d.phone}</Text>}
                     </View>
                   </Pressable>
                 ))}

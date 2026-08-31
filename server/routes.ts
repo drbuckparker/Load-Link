@@ -6843,18 +6843,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       const search = (req.query.q || req.query.search || '') as string;
       // Only return contact details to users who already have an operational
-      // relationship (shared job) with the driver. For callers with no such
-      // relationship, omit email and phone to prevent cross-tenant harvesting.
+      // relationship (shared job or fleet membership) with the driver. For
+      // unrelated callers, omit email and phone to prevent harvesting.
       let query = `
         SELECT
           u.id, u.full_name, u.truck_type, u.rating, u.total_jobs,
           u.profile_image_url, u.is_connected,
-          CASE WHEN EXISTS (
+          CASE WHEN u.trucking_company_id::text = $1 OR EXISTS (
             SELECT 1 FROM jobs j
             WHERE (j.contractor_id = $1 OR j.driver_id = $1)
               AND (j.contractor_id = u.id OR j.driver_id = u.id)
           ) THEN u.email ELSE NULL END AS email,
-          CASE WHEN EXISTS (
+          CASE WHEN u.trucking_company_id::text = $1 OR EXISTS (
             SELECT 1 FROM jobs j
             WHERE (j.contractor_id = $1 OR j.driver_id = $1)
               AND (j.contractor_id = u.id OR j.driver_id = u.id)
@@ -6863,7 +6863,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         WHERE (u.role LIKE '%driver%' OR u.also_driver = true OR u.id = $1)`;
       const params: any[] = [auth.userId];
       if (search) {
-        query += ` AND (u.full_name ILIKE $2)`;
+        query += ` AND (
+          u.full_name ILIKE $2
+          OR u.email ILIKE $2
+          OR (
+            regexp_replace($2, '[^0-9]', '', 'g') <> ''
+            AND regexp_replace(COALESCE(u.phone, ''), '[^0-9]', '', 'g')
+                LIKE '%' || regexp_replace($2, '[^0-9]', '', 'g') || '%'
+          )
+        )`;
         params.push(`%${search}%`);
       }
       query += ` ORDER BY u.rating DESC LIMIT 50`;
@@ -6882,7 +6890,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 CASE WHEN d.id IS NOT NULL THEN json_build_object(
                   'id', d.id::text,
                   'name', COALESCE(d.full_name, d.email, 'Driver'),
-                  'email', d.email
+                  'email', d.email,
+                  'phone', d.phone
                 ) ELSE NULL END AS assigned_driver
            FROM trucks t
            LEFT JOIN users d ON d.id::text = t.assigned_driver_id::text
@@ -6982,7 +6991,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 CASE WHEN d.id IS NOT NULL THEN json_build_object(
                   'id', d.id::text,
                   'name', COALESCE(d.full_name, d.email, 'Driver'),
-                  'email', d.email
+                  'email', d.email,
+                  'phone', d.phone
                 ) ELSE NULL END AS assigned_driver
            FROM trucks t
            LEFT JOIN users d ON d.id::text = t.assigned_driver_id::text
