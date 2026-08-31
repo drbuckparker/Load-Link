@@ -148,6 +148,9 @@ export default function JobsBrowseScreen() {
   const [searchRadius, setSearchRadius] = useState<number | null>(null);
   const [userCoord, setUserCoord] = useState<{ lat: number; lng: number } | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectClient, setNewProjectClient] = useState<any | null>(null);
+  const [newProjectClientSearch, setNewProjectClientSearch] = useState('');
+  const [showProjectClientDropdown, setShowProjectClientDropdown] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectJobNumber, setNewProjectJobNumber] = useState('');
   const [newProjectSiteAddress, setNewProjectSiteAddress] = useState('');
@@ -260,6 +263,19 @@ export default function JobsBrowseScreen() {
       `${c.name || c.client_name || c.clientName || ''} ${c.email || ''}`.toLowerCase().includes(q)
     );
   }, [brokerClients, clientSearch, showInactiveClients]);
+
+  const projectClientOptions = useMemo(() => {
+    const q = newProjectClientSearch.trim().toLowerCase();
+    return brokerClients
+      .filter((c: any) => !c.archived)
+      .filter((c: any) => !!(c.clientUserId || c.client_user_id))
+      .filter((c: any) => {
+        if (!q) return true;
+        return `${c.name || c.client_name || c.clientName || ''} ${c.email || ''}`
+          .toLowerCase()
+          .includes(q);
+      });
+  }, [brokerClients, newProjectClientSearch]);
 
   // Broker jobs, used to list each client's jobs inline under their card.
   const brokerClientJobsQueryUrl = '/api/broker/jobs?include_assignments=false';
@@ -461,11 +477,11 @@ export default function JobsBrowseScreen() {
   }, [editingClient, deleteClientMutation]);
 
   const createProjectMutation = useMutation({
-    mutationFn: async (data: { name: string; job_number?: string; site_address?: string; site_lat?: number; site_lng?: number; notes?: string }) => {
-      // From inside a client, the project belongs to that client — save it
-      // through the broker client-project flow so it stays tied to them.
-      const res = (isBroker && selectedClientKey)
-        ? await apiRequest('POST', '/api/broker/client-projects', { ...data, clientUserId: selectedClientKey })
+    mutationFn: async (data: { name: string; clientUserId?: string; job_number?: string; site_address?: string; site_lat?: number; site_lng?: number; notes?: string }) => {
+      const { clientUserId, ...projectData } = data;
+      // Every broker project belongs to an explicitly selected client.
+      const res = isBroker
+        ? await apiRequest('POST', '/api/broker/client-projects', { ...projectData, clientUserId })
         : await apiRequest('POST', '/api/projects', data);
       return res.json();
     },
@@ -476,6 +492,9 @@ export default function JobsBrowseScreen() {
       setNewProjectJobNumber('');
       setNewProjectSiteAddress('');
       setNewProjectNotes('');
+      setNewProjectClient(null);
+      setNewProjectClientSearch('');
+      setShowProjectClientDropdown(false);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: () => {
@@ -968,15 +987,37 @@ export default function JobsBrowseScreen() {
 
   const handleCreateProject = useCallback(() => {
     if (!newProjectName.trim()) return;
+    const projectClientKey = String(
+      newProjectClient?.clientUserId ||
+      newProjectClient?.client_user_id ||
+      ''
+    );
+    if (isBroker && !projectClientKey) {
+      Alert.alert('Client Required', 'Select the client this project belongs to.');
+      return;
+    }
     createProjectMutation.mutate({
       name: newProjectName.trim(),
+      ...(isBroker ? { clientUserId: projectClientKey } : {}),
       ...(newProjectJobNumber.trim() ? { job_number: newProjectJobNumber.trim() } : {}),
       ...(newProjectSiteAddress.trim() ? { site_address: newProjectSiteAddress.trim() } : {}),
       ...(newProjectSiteLat != null ? { site_lat: newProjectSiteLat } : {}),
       ...(newProjectSiteLng != null ? { site_lng: newProjectSiteLng } : {}),
       ...(newProjectNotes.trim() ? { notes: newProjectNotes.trim() } : {}),
     });
-  }, [newProjectName, newProjectJobNumber, newProjectSiteAddress, newProjectSiteLat, newProjectSiteLng, newProjectNotes]);
+  }, [newProjectName, newProjectClient, isBroker, newProjectJobNumber, newProjectSiteAddress, newProjectSiteLat, newProjectSiteLng, newProjectNotes]);
+
+  const openCreateProject = useCallback((client?: any | null) => {
+    const initialClient = client || null;
+    setNewProjectClient(initialClient);
+    setNewProjectClientSearch(
+      initialClient
+        ? String(initialClient.name || initialClient.client_name || initialClient.clientName || initialClient.email || '')
+        : ''
+    );
+    setShowProjectClientDropdown(false);
+    setShowCreateProject(true);
+  }, []);
 
   async function fetchSiteSuggestions(text: string, target: 'new' | 'edit') {
     if (text.trim().length < 2) {
@@ -1611,7 +1652,7 @@ export default function JobsBrowseScreen() {
               {!projectSearch && !showArchived && (
                 <Pressable
                   style={styles.emptyCreateBtn}
-                  onPress={() => setShowCreateProject(true)}
+                  onPress={() => openCreateProject(null)}
                 >
                   <Ionicons name="add" size={18} color={Colors.primaryForeground} />
                   <Text style={styles.emptyCreateBtnText}>Create Project</Text>
@@ -1672,12 +1713,12 @@ export default function JobsBrowseScreen() {
                   Alert.alert('Client pending', 'This client has not accepted their invite yet, so projects can\'t be added for them.');
                   return;
                 }
-                setShowCreateProject(true);
+                openCreateProject(selectedClient);
                 return;
               }
               setShowInviteClient(true);
             } else if (activeTab === 'projects') {
-              setShowCreateProject(true);
+              openCreateProject(null);
             } else {
               if (selectedProjectFilter) {
                 router.push({ pathname: '/create-job', params: { projectId: selectedProjectFilter } } as any);
@@ -1942,6 +1983,83 @@ export default function JobsBrowseScreen() {
               </Pressable>
             </View>
 
+            {isBroker && (
+              <View style={[styles.modalField, { zIndex: 200 }]}>
+                <Text style={styles.modalLabel}>Client *</Text>
+                <View style={{ position: 'relative' }}>
+                  <TextInput
+                    style={[styles.modalInput, { paddingRight: 42 }]}
+                    placeholder="Select or search for a client"
+                    placeholderTextColor={Colors.textMuted}
+                    value={newProjectClientSearch}
+                    onChangeText={(text) => {
+                      setNewProjectClientSearch(text);
+                      setNewProjectClient(null);
+                      setShowProjectClientDropdown(true);
+                    }}
+                    onFocus={() => setShowProjectClientDropdown(true)}
+                    autoFocus
+                    testID="new-project-client-search"
+                  />
+                  <Pressable
+                    onPress={() => setShowProjectClientDropdown(v => !v)}
+                    hitSlop={8}
+                    style={{ position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' }}
+                  >
+                    <Ionicons
+                      name={showProjectClientDropdown ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color={Colors.textSecondary}
+                    />
+                  </Pressable>
+                </View>
+                {showProjectClientDropdown && (
+                  <View style={{
+                    borderWidth: 1, borderColor: Colors.border, borderRadius: 10,
+                    backgroundColor: Colors.card, overflow: 'hidden',
+                    position: 'absolute', top: 56, left: 0, right: 0,
+                    maxHeight: 190, zIndex: 300, elevation: 12,
+                  }}>
+                    <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+                      {projectClientOptions.length > 0 ? projectClientOptions.map((client: any) => {
+                        const key = String(client.clientUserId || client.client_user_id || '');
+                        const name = String(client.name || client.client_name || client.clientName || client.email || 'Client');
+                        return (
+                          <Pressable
+                            key={key || String(client.id || client.email)}
+                            testID={`new-project-client-${key}`}
+                            onPress={() => {
+                              setNewProjectClient(client);
+                              setNewProjectClientSearch(name);
+                              setShowProjectClientDropdown(false);
+                            }}
+                            style={({ pressed }) => ({
+                              paddingHorizontal: 14, paddingVertical: 12,
+                              borderBottomWidth: 1, borderBottomColor: Colors.border,
+                              backgroundColor: pressed ? Colors.surface : Colors.card,
+                            })}
+                          >
+                            <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 14, color: Colors.text }}>{name}</Text>
+                            {!!client.email && (
+                              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: Colors.textMuted, marginTop: 2 }}>
+                                {client.email}
+                              </Text>
+                            )}
+                          </Pressable>
+                        );
+                      }) : (
+                        <View style={{ padding: 14 }}>
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: Colors.textMuted }}>
+                            No matching clients
+                          </Text>
+                        </View>
+                      )}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            )}
+
             <View style={styles.modalField}>
               <Text style={styles.modalLabel}>Project Name *</Text>
               <TextInput
@@ -1950,7 +2068,7 @@ export default function JobsBrowseScreen() {
                 placeholderTextColor={Colors.textMuted}
                 value={newProjectName}
                 onChangeText={setNewProjectName}
-                autoFocus
+                autoFocus={!isBroker}
               />
             </View>
 
@@ -2013,9 +2131,12 @@ export default function JobsBrowseScreen() {
             </View>
 
             <Pressable
-              style={[styles.modalCreateBtn, !newProjectName.trim() && { opacity: 0.5 }]}
+              style={[
+                styles.modalCreateBtn,
+                (!newProjectName.trim() || (isBroker && !newProjectClient)) && { opacity: 0.5 },
+              ]}
               onPress={handleCreateProject}
-              disabled={!newProjectName.trim() || createProjectMutation.isPending}
+              disabled={!newProjectName.trim() || (isBroker && !newProjectClient) || createProjectMutation.isPending}
             >
               {createProjectMutation.isPending ? (
                 <ActivityIndicator size="small" color={Colors.primaryForeground} />
