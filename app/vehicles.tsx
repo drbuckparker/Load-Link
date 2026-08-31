@@ -30,7 +30,6 @@ interface Vehicle {
   is_active: boolean;
   has_tarp?: boolean;
   created_at: string;
-  has_tarp?: boolean;
   assigned_driver_id: string | null;
   assigned_driver: AssignedDriver | null;
 }
