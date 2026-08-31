@@ -811,14 +811,26 @@ export default function BrokerDashboardScreen() {
               const assignedTruckId = String(
                 a.vehicleId || a.vehicle_id || a.fleetTruckId || a.fleet_truck_id || a.truck?.id || ''
               );
-              const assignedTruck = (rosterDriver?.trucks || []).find(
+              // Prefer whichever truck record actually carries identifying
+              // details (#number / make / model) — the assignment's resolved
+              // fleet truck usually does, the roster copy may be stale/sparse.
+              const rosterTruck = (rosterDriver?.trucks || []).find(
                 (truck: RosterTruck) => String(truck.id) === assignedTruckId
-              ) || a.truck;
+              );
+              const hasDetails = (t?: RosterTruck) =>
+                !!t && !!((t as any).truckNumber ?? (t as any).truck_number ?? t.make ?? t.model);
+              const assignedTruck = hasDetails(a.truck)
+                ? a.truck
+                : hasDetails(rosterTruck)
+                  ? rosterTruck
+                  : (a.truck || rosterTruck);
+              const truckNumber = (assignedTruck as any)?.truckNumber ?? (assignedTruck as any)?.truck_number;
+              const licensePlate = (assignedTruck as any)?.licensePlate ?? (assignedTruck as any)?.license_plate;
               const truckLabel = assignedTruck ? truckTitle(assignedTruck) : driverLabel;
               const truckDetails = assignedTruck
                 ? [
-                    assignedTruck.truckNumber ? `#${assignedTruck.truckNumber}` : '',
-                    assignedTruck.licensePlate ? `Plate ${assignedTruck.licensePlate}` : '',
+                    truckNumber ? `#${truckNumber}` : '',
+                    licensePlate ? `Plate ${licensePlate}` : '',
                     driverLabel,
                   ].filter(Boolean).join(' · ')
                 : 'Vehicle details not provided';
@@ -1403,7 +1415,7 @@ export default function BrokerDashboardScreen() {
                   : undefined;
                 const pendingInvite = d.status === 'pending';
                 const unavailable = !already && !onOtherJob && !!availabilityMap[driverId]?.unavailable;
-                const selectable = !already && !onOtherJob && !pendingInvite && !unavailable;
+                const baseSelectable = !already && !onOtherJob && !pendingInvite && !unavailable;
                 // Already-assigned trucks show as checked+highlighted; tapping
                 // them (unchecking) offers to take the truck off the job so a
                 // different truck can be assigned in its place.
@@ -1413,6 +1425,10 @@ export default function BrokerDashboardScreen() {
                 const trucks: (RosterTruck | null)[] = (d.trucks && d.trucks.length > 0) ? d.trucks : [null];
                 return trucks.map((t, ti) => {
                   const rowKey = `${d.id}-${t?.id || ti}`;
+                  const truckNumber = t
+                    ? ((t as any).truckNumber ?? (t as any).truck_number)
+                    : null;
+                  const selectable = baseSelectable && !!String(truckNumber ?? '').trim();
                   return (
                     <Pressable
                       key={rowKey}
@@ -1420,7 +1436,7 @@ export default function BrokerDashboardScreen() {
                       disabled={!selectable && !already}
                       style={[
                         styles.assignRow,
-                        (unavailable || pendingInvite || onOtherJob) && { opacity: 0.55 },
+                        (!selectable && !already) && { opacity: 0.55 },
                         already && styles.assignRowAssigned,
                       ]}
                       onPress={() => {
@@ -1456,7 +1472,7 @@ export default function BrokerDashboardScreen() {
                             {[
                               t.capacity ? `${t.capacity}T` : '',
                               truckTypeLabel(t.truckType),
-                              t.truckNumber ? `#${t.truckNumber}` : '',
+                              String(truckNumber ?? '').trim() ? `#${truckNumber}` : '',
                               t.licensePlate ? `Plate: ${t.licensePlate}` : '',
                             ].filter(Boolean).join('  ')}
                           </Text>
@@ -1468,11 +1484,16 @@ export default function BrokerDashboardScreen() {
                            </Text>
                          ) :
                          pendingInvite ? <Text style={[styles.personEmail, { color: Colors.warning }]}>Invite pending</Text> :
-                         unavailable ? (
+                          unavailable ? (
                           <Text style={[styles.personEmail, { color: Colors.destructive }]}>
                             Unavailable this day{availabilityMap[driverId]?.notes ? ` — ${availabilityMap[driverId]!.notes}` : ''}
                           </Text>
-                         ) : null}
+                          ) :
+                          !truckNumber ? (
+                            <Text style={[styles.personEmail, { color: Colors.destructive }]}>
+                              Assign a truck number to this driver before booking
+                            </Text>
+                          ) : null}
                       </View>
                       {already && ti === 0 && (
                         <Pressable

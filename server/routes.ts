@@ -3562,9 +3562,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const sentAt = authoritative
             ? authoritativeSentAt
             : a.sentAt ?? a.sent_at ?? existing.sentAt ?? existing.sent_at ?? null;
+          // Never let a sparse/absent upstream truck object clobber the
+          // locally-resolved fleet truck details (number, make/model).
+          const truckOf = (t: any) =>
+            t && typeof t === "object" && (t.truckNumber ?? t.truck_number ?? t.make ?? t.model)
+              ? t
+              : null;
+          const mergedTruck = truckOf(a.truck) || truckOf(existing.truck) || a.truck || existing.truck;
           assignmentById.set(id, {
             ...existing,
             ...a,
+            ...(mergedTruck ? { truck: mergedTruck } : {}),
             id,
             driverId: String(a.driverId || a.driver_id || existing.driverId || existing.driver_id || ""),
             driver_id: String(a.driverId || a.driver_id || existing.driverId || existing.driver_id || ""),
@@ -4313,6 +4321,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!a.driver_id || !b.driver_id) {
         return res.status(409).json({ message: "One of these assignments has no driver" });
       }
+      const numberedTruckDrivers = await pool.query(
+        `SELECT DISTINCT assigned_driver_id::text AS driver_id
+           FROM trucks
+          WHERE assigned_driver_id::text = ANY($1::text[])
+            AND archived_at IS NULL
+            AND is_active = true
+            AND NULLIF(BTRIM(truck_number::text), '') IS NOT NULL`,
+        [[a.driver_id, b.driver_id]]
+      );
+      const eligibleDriverIds = new Set(
+        numberedTruckDrivers.rows.map((row: any) => String(row.driver_id))
+      );
+      if (!eligibleDriverIds.has(a.driver_id) || !eligibleDriverIds.has(b.driver_id)) {
+        return res.status(400).json({
+          message: "Each driver needs an assigned truck with a truck number before switching bookings.",
+        });
+      }
       const activeStatuses = ["pending", "accepted", "approved", "confirmed", "assigned"];
       if (!activeStatuses.includes(String(a.status)) || !activeStatuses.includes(String(b.status))) {
         return res.status(400).json({ message: "Only active assignments can be switched" });
@@ -4507,6 +4532,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
           return res.json({ assignmentId: existingId, alreadyAssigned: true, sent: !!sentAt });
         }
+      }
+
+      // A broker books a specific, identifiable truck through its assigned
+      // driver. Do not create an assignment until that driver has an active
+      // truck with a real truck number assigned to them.
+      const eligibleTruck = await pool.query(
+        `SELECT id
+           FROM trucks
+          WHERE assigned_driver_id::text = $1
+            AND archived_at IS NULL
+            AND is_active = true
+            AND NULLIF(BTRIM(truck_number::text), '') IS NOT NULL
+          LIMIT 1`,
+        [driverId]
+      );
+      if (eligibleTruck.rows.length === 0) {
+        return res.status(400).json({
+          message: "Assign a numbered truck to this driver in My Vehicles before booking it.",
+        });
       }
 
       const before = await pool.query(
