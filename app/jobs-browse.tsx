@@ -513,7 +513,7 @@ export default function JobsBrowseScreen() {
       // Refresh projects AND the views that show a project's site address on a
       // map (job lists + calendar) so a saved address change propagates there
       // too — the backend cascades the new address/coords onto linked jobs.
-      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && (k.includes('/api/projects') || k.includes('/api/jobs') || k.includes('/api/contractor') || k.includes('/api/calendar'))) });
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && (k.includes('/api/projects') || k.includes('/api/jobs') || k.includes('/api/contractor') || k.includes('/api/calendar') || k.includes('/api/broker/client-projects'))) });
       setEditingProject(null);
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
@@ -533,10 +533,12 @@ export default function JobsBrowseScreen() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && k.includes('/api/projects')) });
+      queryClient.invalidateQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === 'string' && (k.includes('/api/projects') || k.includes('/api/broker/client-projects'))) });
       setEditingProject(null);
       setSelectedProjectFilter(null);
-      setActiveTab('projects');
+      // In client context, stay on the client's project list instead of
+      // jumping to the broker's own Projects tab.
+      if (!selectedClient) setActiveTab('projects');
       if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     },
     onError: () => {
@@ -560,7 +562,10 @@ export default function JobsBrowseScreen() {
 
   const handleDeleteProject = useCallback(() => {
     if (!editingProject) return;
-    const message = `Are you sure you want to delete "${editingProject.name}"? All jobs in this project will be cancelled. You can restore it later from the Archived section.`;
+    const isClientProject = (editingProject as any).is_broker_project === true || (editingProject as any).isBrokerProject === true;
+    const message = isClientProject
+      ? `Remove "${editingProject.name}" from this client's project list? Jobs already posted are not affected.`
+      : `Are you sure you want to delete "${editingProject.name}"? All jobs in this project will be cancelled. You can restore it later from the Archived section.`;
     if (Platform.OS === 'web') {
       if (typeof window !== 'undefined' && window.confirm(message)) {
         deleteProjectMutation.mutate(String(editingProject.id));
@@ -1165,7 +1170,7 @@ export default function JobsBrowseScreen() {
           <Text style={styles.projectBannerText} numberOfLines={1}>
             Showing jobs in "{selectedProjectData.name}"
           </Text>
-          {!selectedClient && (
+          {(!selectedClient || !((selectedProjectData as any).is_broker_project === false || (selectedProjectData as any).isBrokerProject === false)) && (
             <Pressable
               onPress={() => {
                 if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1406,7 +1411,19 @@ export default function JobsBrowseScreen() {
                       <View style={[styles.projectStatusBadge, { backgroundColor: Colors.muted }]}>
                         <Text style={[styles.projectStatusText, { color: Colors.textMuted }]}>CLIENT'S</Text>
                       </View>
-                    ) : null}
+                    ) : (
+                      <Pressable
+                        testID={`edit-client-project-${item.id}`}
+                        onPress={() => {
+                          if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          openEditProject(item);
+                        }}
+                        hitSlop={8}
+                        style={{ padding: 2 }}
+                      >
+                        <Ionicons name="create-outline" size={20} color={Colors.primary} />
+                      </Pressable>
+                    )}
                   </View>
                   {item.site_address ? (
                     <View style={styles.projectDetailRow}>
@@ -2227,6 +2244,8 @@ export default function JobsBrowseScreen() {
                 </Pressable>
               </View>
 
+              {/* Broker client projects have no awarded-amount column — hide the field. */}
+              {!((editingProject as any)?.is_broker_project === true || (editingProject as any)?.isBrokerProject === true) && (
               <View style={styles.modalField}>
                 <Text style={styles.modalLabel}>Awarded Amount</Text>
                 <TextInput
@@ -2238,6 +2257,7 @@ export default function JobsBrowseScreen() {
                   keyboardType="numeric"
                 />
               </View>
+              )}
 
               <View style={styles.modalField}>
                 <Text style={styles.modalLabel}>Notes</Text>
