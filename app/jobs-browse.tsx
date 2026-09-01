@@ -76,6 +76,43 @@ function mapDbJob(raw: any): Job {
   };
 }
 
+// Keep broker client/project drill-downs aligned with the broker Jobs screen:
+// "active" ends after the job's final scheduled working day, even when an old
+// job was never manually marked completed.
+function isCurrentBrokerJob(raw: any): boolean {
+  const status = String(raw.status || '').toLowerCase();
+  if (['completed', 'cancelled', 'canceled', 'expired'].includes(status)) return false;
+  if (status === 'in_progress') return true;
+  const start = String(raw.scheduled_date || raw.scheduledDate || '').slice(0, 10);
+  if (!start) return true;
+  const days = Math.max(1, Math.ceil(Number(raw.estimated_days ?? raw.estimatedDays) || 1));
+  const weekends = !!(raw.includes_weekends ?? raw.includesWeekends);
+  const saturday = weekends || !!(raw.includes_saturday ?? raw.includesSaturday);
+  const sunday = weekends || !!(raw.includes_sunday ?? raw.includesSunday);
+  const date = new Date(`${start}T12:00:00`);
+  let counted = 0;
+  let last = start;
+  for (let i = 0; i < 400 && counted < days; i++) {
+    const day = date.getDay();
+    if ((day !== 6 || saturday) && (day !== 0 || sunday)) {
+      counted++;
+      last = [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, '0'),
+        String(date.getDate()).padStart(2, '0'),
+      ].join('-');
+    }
+    date.setDate(date.getDate() + 1);
+  }
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+  return last >= today;
+}
+
 interface ProjectItem {
   id: string;
   name: string;
@@ -338,8 +375,9 @@ export default function JobsBrowseScreen() {
   const selectedClientJobs = useMemo<Job[]>(() => {
     if (!selectedClient) return [];
     return jobsForClient(selectedClient)
+      .filter(isCurrentBrokerJob)
       .map(mapDbJob)
-      .filter(j => !['completed', 'cancelled', 'canceled'].includes(String(j.status || '').toLowerCase()));
+      ;
   }, [selectedClient, brokerJobs]);
 
   // Jobs inside the project the broker drilled into from the client view.
