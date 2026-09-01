@@ -7524,10 +7524,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const msg = data?.message || data?.error || "Could not send the invitation. Please try again.";
         return res.status(400).json({ message: msg });
       }
+      // Record the invite locally too (the website keeps invitations in its
+      // own DB, so this shared table is otherwise empty). This is the signup
+      // hint that lets the register screen preselect the right account type
+      // when the invitee signs up with this email.
+      try {
+        await pool.query(
+          `INSERT INTO driver_invitations (id, trucking_company_id, contractor_id, driver_email, driver_name, driver_first_name, driver_last_name, driver_phone, invitation_type, status, message, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, NOW(), NOW())`,
+          [
+            crypto.randomUUID(),
+            type === 'driver' ? auth.userId : null,
+            type === 'foreman' ? auth.userId : null,
+            email,
+            fullName || null, firstName || null, lastName || null, phone || null,
+            type, message || null,
+          ]
+        );
+      } catch (e: any) {
+        console.error("Local invitation record error:", e.message);
+      }
       return res.json(addDualKeys(data?.invitation || data || { ok: true }));
     } catch (e: any) {
       console.error("Invitation send error:", e.message);
       return res.status(502).json({ message: "Could not reach the LoadLink service to send the invitation." });
+    }
+  });
+
+  // PUBLIC (pre-auth): tells the register screen whether an email was invited
+  // as a driver/foreman so it can preselect that account type. Reveals only
+  // the invitation type — no inviter or personal details.
+  app.get("/api/auth/invited-role", async (req: Request, res: Response) => {
+    try {
+      const email = String(req.query.email || '').trim().toLowerCase();
+      if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.json({ invitedAs: null });
+      const r = await pool.query(
+        `SELECT invitation_type FROM driver_invitations
+          WHERE LOWER(driver_email) = $1 AND status = 'pending'
+          ORDER BY created_at DESC LIMIT 1`,
+        [email]
+      );
+      const t = String(r.rows[0]?.invitation_type || '').toLowerCase();
+      return res.json({ invitedAs: t === 'driver' || t === 'foreman' ? t : null });
+    } catch {
+      return res.json({ invitedAs: null });
     }
   });
 

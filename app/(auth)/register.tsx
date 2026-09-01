@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,12 +7,21 @@ import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiRequest } from '@/lib/query-client';
 
 const ROLES = [
   { key: 'trucking_company', label: 'Trucking Company', desc: 'Fleet manager', icon: 'bus' as const },
   { key: 'contractor', label: 'Contractor', desc: 'Post jobs & projects', icon: 'construct' as const },
   { key: 'trucking_company_contractor', label: 'Trucking Co. + Contractor', desc: 'Fleet & post jobs', icon: 'business' as const },
 ];
+
+// Shown only when the entered email has a pending invitation of that type —
+// invited drivers/foremen get their role preselected instead of defaulting
+// to Trucking Company.
+const INVITED_ROLES: Record<string, { key: string; label: string; desc: string; icon: 'car' | 'clipboard' }> = {
+  driver: { key: 'driver', label: 'Driver', desc: 'You were invited as a driver', icon: 'car' },
+  foreman: { key: 'foreman', label: 'Foreman', desc: 'You were invited as a foreman', icon: 'clipboard' },
+};
 
 export default function RegisterScreen() {
   const insets = useSafeAreaInsets();
@@ -24,6 +33,28 @@ export default function RegisterScreen() {
   const [role, setRole] = useState('trucking_company');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [invitedAs, setInvitedAs] = useState<string | null>(null);
+  const inviteCheckTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // When the typed email has a pending driver/foreman invitation, surface
+  // that role card and select it automatically.
+  useEffect(() => {
+    if (inviteCheckTimeout.current) clearTimeout(inviteCheckTimeout.current);
+    const candidate = email.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(candidate)) { setInvitedAs(null); return; }
+    inviteCheckTimeout.current = setTimeout(async () => {
+      try {
+        const resp = await apiRequest('GET', `/api/auth/invited-role?email=${encodeURIComponent(candidate)}`);
+        const data = await resp.json();
+        const t = data?.invitedAs && INVITED_ROLES[data.invitedAs] ? data.invitedAs : null;
+        setInvitedAs(t);
+        if (t) setRole(t);
+      } catch { setInvitedAs(null); }
+    }, 500);
+    return () => { if (inviteCheckTimeout.current) clearTimeout(inviteCheckTimeout.current); };
+  }, [email]);
+
+  const roleOptions = invitedAs ? [INVITED_ROLES[invitedAs], ...ROLES] : ROLES;
 
   async function handleRegister() {
     if (!fullName || !email || !password || !phone) {
@@ -62,8 +93,16 @@ export default function RegisterScreen() {
       ) : null}
 
       <Text style={styles.sectionLabel}>YOUR ROLE</Text>
+      {invitedAs && (
+        <View style={styles.invitedBanner}>
+          <Ionicons name="mail-open-outline" size={16} color={Colors.primary} />
+          <Text style={styles.invitedBannerText}>
+            This email was invited as a {invitedAs === 'driver' ? 'driver' : 'foreman'} — we've selected that for you.
+          </Text>
+        </View>
+      )}
       <View style={styles.roleGrid}>
-        {ROLES.map(r => (
+        {roleOptions.map(r => (
           <Pressable
             key={r.key}
             style={[styles.roleCard, role === r.key && styles.roleCardActive]}
@@ -166,13 +205,30 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 10,
   },
+  invitedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  invitedBannerText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: Colors.primary,
+    flex: 1,
+  },
   roleGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginBottom: 24,
   },
   roleCard: {
     flex: 1,
+    minWidth: '28%',
     backgroundColor: Colors.card,
     borderRadius: 10,
     padding: 12,
