@@ -1168,7 +1168,17 @@ export default function CreateJobScreen() {
   const [validationErrors, setValidationErrors] = useState<Set<string>>(new Set());
   const scrollRef = useRef<ScrollView>(null);
 
-  async function handleSubmit() {
+  // Which posting path is running: brokers choose whether to open the roster
+  // picker right after the job is created ('now') or just save it ('later').
+  const [submittingAction, setSubmittingAction] = useState<'now' | 'later' | null>(null);
+
+  // Synchronous re-entry lock: `submitting` state commits asynchronously, so
+  // two quick taps (especially across the two broker buttons) could both run
+  // before the disabled prop takes effect and double-create the job.
+  const submitLockRef = useRef(false);
+
+  async function handleSubmit(assignNow: boolean = true) {
+    if (submitLockRef.current) return;
     // Billing-info gate: anyone who accepts this job needs to know who they're
     // working for and how to reach the poster to get paid. Require the poster's
     // company name + phone on their account before they can post.
@@ -1235,7 +1245,9 @@ export default function CreateJobScreen() {
     }
     setValidationErrors(new Set());
 
+    submitLockRef.current = true;
     setSubmitting(true);
+    setSubmittingAction(assignNow ? 'now' : 'later');
     try {
       // Brokers can attach the job to one of the client's existing projects or
       // type a new name to create one for the client (companion-local).
@@ -1350,13 +1362,29 @@ export default function CreateJobScreen() {
         return key.includes('/api/jobs') || key.includes('/api/contractor/jobs') || key.includes('/api/broker/');
       }});
 
-      if (isBroker && createdJobId) {
-        router.replace({ pathname: '/broker', params: { assign: createdJobId, tab: 'jobs' } } as any);
+      if (isBroker && assignNow) {
+        if (createdJobId) {
+          // Open the new job's roster picker immediately.
+          router.replace({ pathname: '/broker', params: { assign: createdJobId, tab: 'jobs' } } as any);
+        } else {
+          // The job was created but the response didn't include its ID — don't
+          // silently downgrade the requested "assign now" action.
+          Alert.alert(
+            'Job Posted',
+            'The job was posted, but the truck picker could not open automatically. Tap the job in your list to assign trucks.'
+          );
+          router.replace({ pathname: '/broker', params: { tab: 'jobs' } } as any);
+        }
+      } else if (isBroker) {
+        // Assign trucks later — land on the jobs list without the picker.
+        router.replace({ pathname: '/broker', params: { tab: 'jobs' } } as any);
       } else if (router.canGoBack()) { router.back(); } else { router.replace('/(tabs)'); }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create job.');
     } finally {
+      submitLockRef.current = false;
       setSubmitting(false);
+      setSubmittingAction(null);
     }
   }
 
@@ -2450,17 +2478,46 @@ export default function CreateJobScreen() {
           </View>
         </View>
 
-        <Pressable
-          style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
-          onPress={handleSubmit}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color={Colors.primaryForeground} />
-          ) : (
-            <Text style={styles.submitBtnText}>POST JOB</Text>
-          )}
-        </Pressable>
+        {isBroker ? (
+          <View style={{ gap: 10 }}>
+            <Pressable
+              testID="post-job-assign-now"
+              style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
+              onPress={() => handleSubmit(true)}
+              disabled={submitting}
+            >
+              {submittingAction === 'now' ? (
+                <ActivityIndicator color={Colors.primaryForeground} />
+              ) : (
+                <Text style={styles.submitBtnText}>ASSIGN TRUCKS NOW</Text>
+              )}
+            </Pressable>
+            <Pressable
+              testID="post-job-assign-later"
+              style={[styles.submitBtnSecondary, submitting && { opacity: 0.7 }]}
+              onPress={() => handleSubmit(false)}
+              disabled={submitting}
+            >
+              {submittingAction === 'later' ? (
+                <ActivityIndicator color={Colors.primary} />
+              ) : (
+                <Text style={styles.submitBtnSecondaryText}>ASSIGN TRUCKS LATER</Text>
+              )}
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable
+            style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
+            onPress={() => handleSubmit(true)}
+            disabled={submitting}
+          >
+            {submitting ? (
+              <ActivityIndicator color={Colors.primaryForeground} />
+            ) : (
+              <Text style={styles.submitBtnText}>POST JOB</Text>
+            )}
+          </Pressable>
+        )}
 
         <View style={{ height: 40 }} />
       </KeyboardAwareScrollViewCompat>
@@ -3016,6 +3073,20 @@ const styles = StyleSheet.create({
     fontFamily: 'ChakraPetch_700Bold',
     fontSize: 16,
     color: Colors.primaryForeground,
+  },
+  submitBtnSecondary: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    borderRadius: 10,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitBtnSecondaryText: {
+    fontFamily: 'ChakraPetch_700Bold',
+    fontSize: 16,
+    color: Colors.primary,
   },
   labelRow: {
     flexDirection: 'row',
