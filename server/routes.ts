@@ -3328,20 +3328,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [auth.userId]
       );
       // Active-job counts come from the companion-side job→client links
-      // (the website strips client fields off broker jobs entirely).
+      // (the website strips client fields off broker jobs entirely). Apply the
+      // same whole-working-span rule as the broker Jobs screen: once every
+      // scheduled workday is behind the broker's local date, it is no longer
+      // active even if its status was never manually completed.
       const countMap = new Map<string, number>();
       try {
-        const counts = await pool.query(
-          `SELECT l.client_key, COUNT(*)::int AS n
+        const candidates = await pool.query(
+          `SELECT l.client_key, j.scheduled_date, j.estimated_days,
+                  j.includes_weekends, j.includes_saturday, j.includes_sunday,
+                  j.status::text AS status
              FROM broker_job_clients l
              JOIN jobs j ON j.id::text = l.job_id
             WHERE l.broker_id = $1 AND l.client_key <> ''
               AND j.archived_at IS NULL
-              AND j.status::text NOT IN ('cancelled', 'completed')
-            GROUP BY l.client_key`,
+              AND j.status::text NOT IN ('cancelled', 'completed', 'expired')`,
           [auth.userId]
         );
-        for (const row of counts.rows) countMap.set(String(row.client_key), Number(row.n));
+        const rawOffset = Number(req.header("X-TZ-Offset"));
+        const tzOffsetMin = Number.isFinite(rawOffset) ? rawOffset : 0;
+        const brokerNow = new Date(Date.now() - tzOffsetMin * 60_000);
+        const todayKey = brokerNow.toISOString().slice(0, 10);
+        const lastWorkDay = (row: any): string => {
+          const start = row.scheduled_date
+            ? new Date(row.scheduled_date).toISOString().slice(0, 10)
+            : "";
+          if (!start) return "";
+          const days = Math.max(1, Math.ceil(Number(row.estimated_days) || 1));
+          if (days === 1) return start;
+          const includesWeekends = !!row.includes_weekends;
+          const includesSaturday = includesWeekends || !!row.includes_saturday;
+          const includesSunday = includesWeekends || !!row.includes_sunday;
+          const date = new Date(`${start}T12:00:00Z`);
+          let counted = 0;
+          let last = start;
+          for (let i = 0; i < 400 && counted < days; i++) {
+            const day = date.getUTCDay();
+            if ((day !== 6 || includesSaturday) && (day !== 0 || includesSunday)) {
+              counted++;
+              last = date.toISOString().slice(0, 10);
+            }
+            date.setUTCDate(date.getUTCDate() + 1);
+          }
+          return last;
+        };
+        for (const row of candidates.rows) {
+          const isRunning = String(row.status || "").toLowerCase() === "in_progress";
+          const lastDay = lastWorkDay(row);
+          if (!isRunning && lastDay && lastDay < todayKey) continue;
+          const key = String(row.client_key);
+          countMap.set(key, (countMap.get(key) || 0) + 1);
+        }
       } catch (e: any) {
         console.error("[BrokerClients] job counts failed:", e.message);
       }
