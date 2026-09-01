@@ -6927,6 +6927,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // One driver per truck: a driver may only be the assigned driver of a single
+  // non-archived truck in the caller's fleet. Returns a user-facing message
+  // naming the conflicting truck, or null when the assignment is allowed.
+  async function findDriverTruckConflict(ownerId: string, driverId: string, excludeTruckId: string | null): Promise<string | null> {
+    try {
+      const r = await pool.query(
+        `SELECT id, truck_number, year, make, model FROM trucks
+          WHERE trucking_company_id::text = $1 AND assigned_driver_id::text = $2
+            AND archived_at IS NULL AND ($3::text IS NULL OR id::text <> $3)
+          LIMIT 1`,
+        [ownerId, driverId, excludeTruckId]
+      );
+      const t = r.rows[0];
+      if (!t) return null;
+      const label = t.truck_number ? `Truck #${t.truck_number}` : [t.year, t.make, t.model].filter(Boolean).join(' ') || 'another truck';
+      return `This driver is already assigned to ${label}. Remove them from that truck first — each driver can only be on one truck.`;
+    } catch (e: any) {
+      console.error('Driver-truck conflict check error:', e.message);
+      return null;
+    }
+  }
+
   // Tell a driver they've been put on a truck: in-app notification row plus a
   // push, so the assignment is visible even if the app is closed. Fire-and-forget.
   async function notifyDriverTruckAssigned(driverId: string, truck: any) {
@@ -7065,6 +7087,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const capacity = b.maxCapacityTons || b.max_capacity_tons || b.capacity || null;
       const assignedDriverId = b.assignedDriverId || b.assigned_driver_id || null;
       const hasTarp = b.has_tarp || b.hasTarp || false;
+      if (assignedDriverId) {
+        const conflict = await findDriverTruckConflict(String(auth.userId), String(assignedDriverId), null);
+        if (conflict) return res.status(409).json({ message: conflict });
+      }
       await pool.query(
         `INSERT INTO trucks (id, trucking_company_id, truck_type, make, model, year, license_plate, vin_number, truck_number, capacity, assigned_driver_id, has_tarp, is_active, created_at, updated_at)
          VALUES ($1, $2, $3::truck_type, $4, $5, $6, $7, $8, $9, $10, $11, $12, true, NOW(), NOW())`,
@@ -7131,6 +7157,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           values.push(v);
           idx++;
         }
+      }
+      const requestedDriverId = req.body.assigned_driver_id ?? req.body.assignedDriverId;
+      if (requestedDriverId) {
+        const conflict = await findDriverTruckConflict(String(auth.userId), String(requestedDriverId), String(req.params.id));
+        if (conflict) return res.status(409).json({ message: conflict });
       }
       if (updates.length > 0) {
         updates.push(`updated_at = NOW()`);
