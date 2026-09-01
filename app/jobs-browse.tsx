@@ -79,12 +79,9 @@ function mapDbJob(raw: any): Job {
 // Keep broker client/project drill-downs aligned with the broker Jobs screen:
 // "active" ends after the job's final scheduled working day, even when an old
 // job was never manually marked completed.
-function isCurrentBrokerJob(raw: any): boolean {
-  const status = String(raw.status || '').toLowerCase();
-  if (['completed', 'cancelled', 'canceled', 'expired'].includes(status)) return false;
-  if (status === 'in_progress') return true;
+function brokerJobLastDay(raw: any): string {
   const start = String(raw.scheduled_date || raw.scheduledDate || '').slice(0, 10);
-  if (!start) return true;
+  if (!start) return '';
   const days = Math.max(1, Math.ceil(Number(raw.estimated_days ?? raw.estimatedDays) || 1));
   const weekends = !!(raw.includes_weekends ?? raw.includesWeekends);
   const saturday = weekends || !!(raw.includes_saturday ?? raw.includesSaturday);
@@ -104,13 +101,24 @@ function isCurrentBrokerJob(raw: any): boolean {
     }
     date.setDate(date.getDate() + 1);
   }
+  return last;
+}
+
+function localTodayKey(): string {
   const now = new Date();
-  const today = [
+  return [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, '0'),
     String(now.getDate()).padStart(2, '0'),
   ].join('-');
-  return last >= today;
+}
+
+function isCurrentBrokerJob(raw: any): boolean {
+  const status = String(raw.status || '').toLowerCase();
+  if (['completed', 'cancelled', 'canceled', 'expired'].includes(status)) return false;
+  if (status === 'in_progress') return true;
+  const last = brokerJobLastDay(raw);
+  return !last || last >= localTodayKey();
 }
 
 interface ProjectItem {
@@ -396,6 +404,55 @@ export default function JobsBrowseScreen() {
     }
     return m;
   }, [selectedClientJobs]);
+
+  // Keep every project visible without adding another tab. Projects with the
+  // most current work rise to the top; recently used projects follow; projects
+  // inactive for more than two months naturally roll to the bottom.
+  const orderedSelectedClientProjects = useMemo(() => {
+    const allClientJobs = selectedClient ? jobsForClient(selectedClient) : [];
+    const today = new Date(`${localTodayKey()}T12:00:00`);
+    const recentCutoff = new Date(today);
+    recentCutoff.setMonth(recentCutoff.getMonth() - 2);
+    const cutoffKey = [
+      recentCutoff.getFullYear(),
+      String(recentCutoff.getMonth() + 1).padStart(2, '0'),
+      String(recentCutoff.getDate()).padStart(2, '0'),
+    ].join('-');
+
+    const rank = (project: any) => {
+      const projectJobs = allClientJobs.filter((j: any) =>
+        String(j.project_id || j.projectId || '') === String(project.id)
+      );
+      const active = projectJobs.filter(isCurrentBrokerJob);
+      const activityDates = projectJobs
+        .map((j: any) => brokerJobLastDay(j) || String(j.created_at || j.createdAt || '').slice(0, 10))
+        .filter(Boolean)
+        .sort();
+      const latestActivity = activityDates[activityDates.length - 1]
+        || String(project.updated_at || project.updatedAt || project.created_at || project.createdAt || '').slice(0, 10);
+      const upcomingDates = active
+        .map((j: any) => String(j.scheduled_date || j.scheduledDate || '').slice(0, 10))
+        .filter(Boolean)
+        .sort();
+      return {
+        group: active.length > 0 ? 0 : latestActivity >= cutoffKey ? 1 : 2,
+        activeCount: active.length,
+        nextDate: upcomingDates[0] || '',
+        latestActivity,
+      };
+    };
+
+    return [...selectedClientProjects].sort((a: any, b: any) => {
+      const ar = rank(a);
+      const br = rank(b);
+      if (ar.group !== br.group) return ar.group - br.group;
+      if (ar.group === 0) {
+        if (ar.activeCount !== br.activeCount) return br.activeCount - ar.activeCount;
+        if (ar.nextDate !== br.nextDate) return ar.nextDate.localeCompare(br.nextDate);
+      }
+      return br.latestActivity.localeCompare(ar.latestActivity);
+    });
+  }, [selectedClientProjects, selectedClient, brokerJobs]);
 
   const inviteClientMutation = useMutation({
     mutationFn: async (data: { name: string; email?: string; contactName?: string; phone?: string; address?: string; notes?: string }) => {
@@ -1422,7 +1479,7 @@ export default function JobsBrowseScreen() {
 
       {activeTab === 'clients' && isBroker && selectedClient && !selectedProjectFilter && (
         <FlatList
-          data={selectedClientProjects}
+          data={orderedSelectedClientProjects}
           keyExtractor={(item: any) => String(item.id)}
           renderItem={({ item }: any) => {
             const jobCount = clientProjectJobCounts.get(String(item.id)) || 0;
