@@ -99,6 +99,15 @@ export default function VehiclesScreen() {
   });
   const vehicles = _vehicles || [];
 
+  // Drivers linked to this account (accepted invites, company drivers,
+  // drivers already on my trucks) plus their still-pending invitations.
+  const { data: _myDrivers } = useQuery<{ drivers: AssignedDriver[]; pendingInvites: any[] }>({
+    queryKey: ['/api/my-drivers'],
+  });
+  const myDrivers = _myDrivers?.drivers || [];
+  const pendingInvites = _myDrivers?.pendingInvites || [];
+  const [showDriverPicker, setShowDriverPicker] = useState(false);
+
   const saveMutation = useMutation({
     mutationFn: async (assignedDriverId?: string) => {
       const payload: any = {
@@ -397,11 +406,52 @@ export default function VehiclesScreen() {
           </View>
         ) : (
           <View>
+            {myDrivers.length > 0 && (
+              <View style={{ marginBottom: 8 }}>
+                <Pressable
+                  style={[styles.input, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
+                  onPress={() => setShowDriverPicker(v => !v)}
+                  testID="my-drivers-dropdown"
+                >
+                  <Text style={{ color: Colors.textMuted, fontSize: 14 }}>Choose from your drivers ({myDrivers.length})</Text>
+                  <Ionicons name={showDriverPicker ? 'chevron-up' : 'chevron-down'} size={18} color={Colors.textSecondary} />
+                </Pressable>
+                {showDriverPicker && (
+                  <View style={styles.driverDropdown}>
+                    {myDrivers.map(d => (
+                      <Pressable
+                        key={d.id}
+                        style={styles.driverOption}
+                        testID={`my-driver-${d.id}`}
+                        onPress={() => {
+                          setForm(f => ({
+                            ...f,
+                            assigned_driver_id: d.id,
+                            assigned_driver_name: d.name,
+                            assigned_driver_phone: d.phone || '',
+                          }));
+                          setShowDriverPicker(false);
+                          setDriverSearch('');
+                          setDriverResults([]);
+                        }}
+                      >
+                        <Ionicons name="person-outline" size={16} color={Colors.primary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.driverOptionName}>{d.name}</Text>
+                          {!!d.email && <Text style={styles.driverOptionEmail}>{d.email}</Text>}
+                          {!!d.phone && <Text style={styles.driverOptionEmail}>{d.phone}</Text>}
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
             <TextInput
               style={styles.input}
               value={driverSearch}
               onChangeText={searchDrivers}
-              placeholder="Search by name, email, or phone..."
+              placeholder={myDrivers.length > 0 ? 'Or search all drivers...' : 'Search by name, email, or phone...'}
               placeholderTextColor={Colors.textMuted}
             />
             {searchingDrivers && (
@@ -557,6 +607,60 @@ export default function VehiclesScreen() {
         }
         ListFooterComponent={
           <View>
+            <View style={styles.myDriversSection}>
+              <View style={styles.myDriversHeader}>
+                <Text style={styles.myDriversTitle}>MY DRIVERS</Text>
+                <Pressable style={styles.inviteDriverBtn} onPress={() => router.push('/invite' as any)} testID="invite-driver-btn">
+                  <Ionicons name="person-add-outline" size={16} color={Colors.primary} />
+                  <Text style={styles.inviteDriverBtnText}>INVITE DRIVER</Text>
+                </Pressable>
+              </View>
+              {myDrivers.length === 0 && pendingInvites.length === 0 ? (
+                <Text style={styles.myDriversEmpty}>
+                  No drivers linked to your account yet. Invite a driver — once they sign up, they'll show here and you can assign them to a truck.
+                </Text>
+              ) : (
+                <>
+                  {myDrivers.map(d => {
+                    const truck = vehicles.find(v => String(v.assigned_driver_id || '') === String(d.id));
+                    return (
+                      <View key={`drv-${d.id}`} style={styles.myDriverRow}>
+                        <Ionicons name="person" size={18} color={Colors.primary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.driverOptionName}>{d.name}</Text>
+                          {!!d.email && <Text style={styles.driverOptionEmail}>{d.email}</Text>}
+                        </View>
+                        {truck ? (
+                          <Text style={styles.myDriverTruck}>
+                            {truck.truck_number ? `Truck #${truck.truck_number}` : `${truck.make} ${truck.model}`.trim()}
+                          </Text>
+                        ) : (
+                          <View style={styles.signedUpBadge}>
+                            <Text style={styles.signedUpBadgeText}>SIGNED UP</Text>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
+                  {pendingInvites.map((inv: any, i: number) => {
+                    const name = inv.driver_name || [inv.driver_first_name, inv.driver_last_name].filter(Boolean).join(' ').trim() || inv.driver_email || inv.email || 'Invited driver';
+                    const email = inv.driver_email || inv.email || '';
+                    return (
+                      <View key={`inv-${inv.id || i}`} style={styles.myDriverRow}>
+                        <Ionicons name="mail-outline" size={18} color={Colors.warning} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.driverOptionName}>{name}</Text>
+                          {!!email && email !== name && <Text style={styles.driverOptionEmail}>{email}</Text>}
+                        </View>
+                        <View style={styles.pendingBadge}>
+                          <Text style={styles.pendingBadgeText}>INVITE PENDING</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </>
+              )}
+            </View>
             <Pressable
               style={[styles.archivedToggle, showArchived && styles.archivedToggleActive]}
               onPress={() => setShowArchived(!showArchived)}
@@ -904,6 +1008,81 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 12,
     color: Colors.primary,
+  },
+  myDriversSection: {
+    marginTop: 20,
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 14,
+  },
+  myDriversHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  myDriversTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+    letterSpacing: 0.5,
+  },
+  inviteDriverBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  inviteDriverBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  myDriversEmpty: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    lineHeight: 19,
+  },
+  myDriverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  myDriverTruck: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  signedUpBadge: {
+    backgroundColor: 'rgba(34,197,94,0.15)',
+    borderRadius: 6,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+  },
+  signedUpBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#22c55e',
+  },
+  pendingBadge: {
+    backgroundColor: 'rgba(245,158,11,0.15)',
+    borderRadius: 6,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+  },
+  pendingBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#f59e0b',
   },
   archivedToggle: {
     flexDirection: 'row' as const,

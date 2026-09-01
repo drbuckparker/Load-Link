@@ -47,7 +47,7 @@ export default function InviteScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const role = (user?.role || '') as string;
-  const canInviteDriver = role.includes('trucking_company');
+  const canInviteDriver = role.includes('trucking_company') || role.includes('broker');
   const canInviteForeman = role.includes('contractor');
   const allowedTypes: InviteType[] = [
     ...(canInviteDriver ? (['driver'] as InviteType[]) : []),

@@ -6926,6 +6926,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Tell a driver they've been put on a truck: in-app notification row plus a
+  // push, so the assignment is visible even if the app is closed. Fire-and-forget.
+  async function notifyDriverTruckAssigned(driverId: string, truck: any) {
+    try {
+      const label = [
+        truck?.truck_number ? `Truck #${truck.truck_number}` : null,
+        [truck?.year, truck?.make, truck?.model].filter(Boolean).join(' ') || null,
+      ].filter(Boolean).join(' — ') || 'a truck';
+      const title = 'Truck Assigned to You';
+      const body = `You've been assigned to ${label}. You'll get job instructions when work is scheduled.`;
+      try {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, type, title, message, is_read, created_at)
+           VALUES ($1, $2, 'new_load', $3, $4, false, NOW())`,
+          [crypto.randomUUID(), driverId, title, body]
+        );
+      } catch (e: any) {
+        console.error('Truck-assigned notification insert error:', e.message);
+      }
+      await sendPushNotification(driverId, title, body, { type: 'truck_assigned', truckId: String(truck?.id || '') });
+    } catch (e: any) {
+      console.error('Truck-assigned push error:', e.message);
+    }
+  }
+
+  // Drivers actually linked to the caller: accepted invitees, own-company
+  // drivers (users.trucking_company_id), and drivers already assigned to the
+  // caller's trucks — plus their still-pending invitations. Feeds the "My
+  // Drivers" section and the assign-driver dropdown in Manage Trucks.
+  app.get("/api/my-drivers", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const auth = getWebsiteAuth(req)!;
+      // Invitations live on the website; pull them to learn accepted emails
+      // and pending rows. Tolerate website outages — company/truck-linked
+      // drivers still resolve locally.
+      let invitations: any[] = [];
+      if (auth.jwt) {
+        try {
+          const websiteRes = await websiteFetch("/api/invitations", { jwt: auth.jwt });
+          if (websiteRes.ok) {
+            const data = await websiteRes.json();
+            const list = Array.isArray(data) ? data : (data?.invitations || []);
+            const seen = new Set<string>();
+            invitations = list.filter((inv: any) => {
+              const id = String(inv?.id ?? "");
+              if (!id || seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+          }
+        } catch (e: any) {
+          console.error("[my-drivers] website invitation fetch failed:", e.message);
+        }
+      }
+      // Only DRIVER invitations count here, and only ACCEPTED ones may link an
+      // invitation email to a local account (otherwise inviting an arbitrary
+      // email would expose that account's contact info while still pending).
+      const invEmail = (inv: any) => String(inv.driver_email || inv.driverEmail || inv.email || '').trim().toLowerCase();
+      const invType = (inv: any) => String(inv.invitation_type || inv.invitationType || inv.type || 'driver').toLowerCase();
+      const invStatus = (inv: any) => String(inv.status || '').toLowerCase();
+      const driverInvitations = invitations.filter((inv: any) => invType(inv) === 'driver');
+      const invitedEmails = driverInvitations
+        .filter((inv: any) => invStatus(inv) === 'accepted')
+        .map(invEmail)
+        .filter(Boolean);
+      const result = await pool.query(
+        `SELECT DISTINCT u.id::text AS id, COALESCE(u.full_name, u.email, 'Driver') AS name,
+                u.email, u.phone, u.role, u.also_driver
+           FROM users u
+          WHERE u.id::text <> $1
+            AND (u.role LIKE '%driver%' OR u.also_driver = true)
+            AND (
+              u.trucking_company_id::text = $1
+              OR EXISTS (SELECT 1 FROM trucks t WHERE t.trucking_company_id::text = $1
+                           AND t.assigned_driver_id::text = u.id::text AND t.archived_at IS NULL)
+              OR ($2::text[] <> '{}' AND LOWER(u.email) = ANY($2::text[]))
+            )
+          ORDER BY name`,
+        [auth.userId, invitedEmails]
+      );
+      const linkedEmails = new Set(result.rows.map((r: any) => String(r.email || '').toLowerCase()));
+      const pendingInvites = driverInvitations.filter((inv: any) => {
+        const status = invStatus(inv);
+        const email = invEmail(inv);
+        // Explicitly-pending driver invites only; an invite whose email already
+        // resolves to a linked account is no longer pending for the user.
+        const isPending = status === 'pending' || status === 'sent' || status === '';
+        return isPending && email && !linkedEmails.has(email);
+      }).map((inv: any) => addDualKeys(inv));
+      return res.json({ drivers: result.rows.map(addDualKeys), pendingInvites });
+    } catch (e: any) {
+      console.error("GET /api/my-drivers error:", e.message);
+      return res.status(500).json({ message: "Failed to load your drivers" });
+    }
+  });
+
   app.get("/api/vehicles", requireAuth, async (req: Request, res: Response) => {
     try {
       const auth = getWebsiteAuth(req)!;
@@ -6968,6 +7064,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         [id, auth.userId, truckType, b.make, b.model, b.year, licensePlate, vinNumber, truckNumber, capacity, assignedDriverId, hasTarp]
       );
       const result = await pool.query(`SELECT * FROM trucks WHERE id = $1`, [id]);
+      if (assignedDriverId && String(assignedDriverId) !== String(auth.userId)) {
+        notifyDriverTruckAssigned(String(assignedDriverId), result.rows[0]);
+      }
       return res.status(201).json(addDualKeys(result.rows[0]));
     } catch (e: any) {
       console.error("POST vehicle error:", e.message);
@@ -6980,10 +7079,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const auth = getWebsiteAuth(req)!;
       // Ownership check — caller must own this truck.
       const owned = await pool.query(
-        `SELECT id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
+        `SELECT id, assigned_driver_id FROM trucks WHERE id = $1 AND (trucking_company_id = $2 OR assigned_driver_id = $2)`,
         [req.params.id, auth.userId]
       );
       if (owned.rows.length === 0) return res.status(404).json({ message: "Vehicle not found" });
+      const previousDriverId = owned.rows[0].assigned_driver_id ? String(owned.rows[0].assigned_driver_id) : null;
 
       const fieldMap: Record<string, string> = {
         truck_type: 'truck_type',
@@ -7043,7 +7143,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           WHERE t.id = $1`,
         [req.params.id]
       );
-      return res.json(addDualKeys(result.rows[0] || {}));
+      const savedRow = result.rows[0] || {};
+      const newDriverId = savedRow.assigned_driver_id ? String(savedRow.assigned_driver_id) : null;
+      if (newDriverId && newDriverId !== previousDriverId && newDriverId !== String(auth.userId)) {
+        notifyDriverTruckAssigned(newDriverId, savedRow);
+      }
+      return res.json(addDualKeys(savedRow));
     } catch (e: any) {
       console.error("PUT vehicle error:", e.message, e.detail || '');
       return res.status(500).json({ message: "Failed to update vehicle" });
@@ -7356,9 +7461,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const r = (dbRole.rows[0]?.role || '').toLowerCase();
       if (r) role = r.includes(role) || !role ? r : `${r}_${role}`;
     } catch {}
-    const canInvite = role.includes('contractor') || role.includes('trucking_company');
+    const canInvite = role.includes('contractor') || role.includes('trucking_company') || role.includes('broker');
     if (!canInvite) {
-      return res.status(403).json({ message: "Only contractors and trucking companies can send invitations." });
+      return res.status(403).json({ message: "Only contractors, trucking companies, and brokers can send invitations." });
     }
     const email = (req.body?.email || req.body?.driverEmail || "").trim().toLowerCase();
     const type = (req.body?.type || req.body?.invitationType || "driver").trim();
@@ -7372,8 +7477,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // contractors invite foremen (a combined role can do both). Client-side
     // gating is UX only; this server check is the source of truth so a crafted
     // request can't create an orphaned (unlinked) driver/foreman account.
-    if (type === "driver" && !role.includes("trucking_company")) {
-      return res.status(403).json({ message: "Only trucking companies can invite drivers." });
+    if (type === "driver" && !role.includes("trucking_company") && !role.includes("broker")) {
+      return res.status(403).json({ message: "Only trucking companies and brokers can invite drivers." });
     }
     if (type === "foreman" && !role.includes("contractor")) {
       return res.status(403).json({ message: "Only contractors can invite foremen." });
@@ -7423,7 +7528,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const auth = getWebsiteAuth(req)!;
       const role = (auth.user?.role || '').toLowerCase();
-      if (!(role.includes('contractor') || role.includes('trucking_company'))) {
+      if (!(role.includes('contractor') || role.includes('trucking_company') || role.includes('broker'))) {
         return res.json([]);
       }
       // The website stores invitations in its own database (not the shared
