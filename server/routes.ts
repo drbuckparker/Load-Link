@@ -3665,6 +3665,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         `SELECT DISTINCT u.id, u.email, u.full_name FROM users u
          WHERE u.email IS NOT NULL AND (
            (u.id::text <> $1 AND u.trucking_company_id::text = $1)
+           OR (u.id::text = $1 AND u.also_driver = true)
            OR u.id::text IN (
              SELECT assigned_driver_id::text FROM trucks
              WHERE trucking_company_id::text = $1 AND assigned_driver_id IS NOT NULL AND archived_at IS NULL
@@ -6773,8 +6774,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // gating is not a security control. Reject the write for any other account.
     if ('also_driver' in safeBody || 'alsoDriver' in safeBody) {
       const accountRole = String(auth.originalRole || auth.user?.role || '');
-      if (!accountRole.includes('trucking_company')) {
-        return res.status(403).json({ message: "Only trucking company accounts can enable 'I also drive'." });
+      if (!accountRole.includes('trucking_company') && !accountRole.includes('broker')) {
+        return res.status(403).json({ message: "Only trucking company and broker accounts can enable 'I also drive'." });
       }
     }
 
@@ -6993,17 +6994,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .filter(Boolean);
       const result = await pool.query(
         `SELECT DISTINCT u.id::text AS id, COALESCE(u.full_name, u.email, 'Driver') AS name,
-                u.email, u.phone, u.role, u.also_driver
+                u.email, u.phone, u.role, u.also_driver,
+                (u.id::text = $1) AS is_self
            FROM users u
-          WHERE u.id::text <> $1
-            AND (u.role LIKE '%driver%' OR u.also_driver = true)
-            AND (
-              u.trucking_company_id::text = $1
-              OR EXISTS (SELECT 1 FROM trucks t WHERE t.trucking_company_id::text = $1
-                           AND t.assigned_driver_id::text = u.id::text AND t.archived_at IS NULL)
-              OR ($2::text[] <> '{}' AND LOWER(u.email) = ANY($2::text[]))
-            )
-          ORDER BY name`,
+          WHERE
+            -- The caller themselves, when they drive ("I also drive" or a driver role)
+            (u.id::text = $1 AND (u.role LIKE '%driver%' OR u.also_driver = true))
+            -- Own-company drivers
+            OR (u.id::text <> $1 AND u.trucking_company_id::text = $1
+                AND (u.role LIKE '%driver%' OR u.also_driver = true))
+            -- Drivers already on my trucks
+            OR (u.id::text <> $1 AND EXISTS (
+                  SELECT 1 FROM trucks t WHERE t.trucking_company_id::text = $1
+                    AND t.assigned_driver_id::text = u.id::text AND t.archived_at IS NULL))
+            -- Accepted driver invitees (no role requirement — some invitees sign
+            -- up with the wrong account type but were explicitly invited as drivers)
+            OR (u.id::text <> $1 AND $2::text[] <> '{}' AND LOWER(u.email) = ANY($2::text[]))
+          ORDER BY is_self DESC, name`,
         [auth.userId, invitedEmails]
       );
       const linkedEmails = new Set(result.rows.map((r: any) => String(r.email || '').toLowerCase()));

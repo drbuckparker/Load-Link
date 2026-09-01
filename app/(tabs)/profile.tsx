@@ -539,7 +539,14 @@ export default function ProfileScreen() {
           <Text style={styles.roleHeaderDesc}>Change how you use LoadLink. Your current role is highlighted.</Text>
         </View>
 
-        {(() => { const ar = getAccountRoleKey(user); return ar === 'trucking_company' || ar === 'trucking_company_contractor'; })() && (
+        {(() => {
+          // Available for trucking-company and broker views, and for any
+          // account whose underlying role includes trucking_company (so it
+          // stays visible while switched into another view like broker).
+          const ar = getAccountRoleKey(user);
+          const baseRole = String((user as any)?.role || '');
+          return ar === 'trucking_company' || ar === 'trucking_company_contractor' || ar === 'broker' || baseRole.includes('trucking_company');
+        })() && (
           <View style={styles.statusCard}>
             <View style={styles.statusLeft}>
               <Ionicons name="car" size={20} color={Colors.success} />

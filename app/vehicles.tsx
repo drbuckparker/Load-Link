@@ -13,6 +13,7 @@ interface AssignedDriver {
   name: string;
   email: string;
   phone?: string;
+  is_self?: boolean;
 }
 
 interface Vehicle {
@@ -437,7 +438,7 @@ export default function VehiclesScreen() {
                       >
                         <Ionicons name="person-outline" size={16} color={Colors.primary} />
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.driverOptionName}>{d.name}</Text>
+                          <Text style={styles.driverOptionName}>{d.name}{d.is_self ? ' (You)' : ''}</Text>
                           {!!d.email && <Text style={styles.driverOptionEmail}>{d.email}</Text>}
                           {!!d.phone && <Text style={styles.driverOptionEmail}>{d.phone}</Text>}
                         </View>
@@ -627,7 +628,7 @@ export default function VehiclesScreen() {
                       <View key={`drv-${d.id}`} style={styles.myDriverRow}>
                         <Ionicons name="person" size={18} color={Colors.primary} />
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.driverOptionName}>{d.name}</Text>
+                          <Text style={styles.driverOptionName}>{d.name}{d.is_self ? ' (You)' : ''}</Text>
                           {!!d.email && <Text style={styles.driverOptionEmail}>{d.email}</Text>}
                         </View>
                         {truck ? (
