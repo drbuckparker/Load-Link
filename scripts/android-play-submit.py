@@ -38,6 +38,7 @@ def redact(text: str) -> str:
         text,
     )
     text = re.sub(r'"keyJson"\s*:\s*"(?:\\.|[^"\\])*"', '"keyJson":"[redacted]"', text)
+    text = re.sub(r'"private_key"\s*:\s*"(?:\\.|[^"\\])*"', '"private_key":"[redacted]"', text)
     return text
 
 
@@ -301,6 +302,72 @@ def schedule_submit() -> str:
     return submission_id
 
 
+def dump_submission_logs() -> None:
+    data = graphql(
+        """
+        query($submissionId: ID!) {
+          submissions {
+            byId(submissionId: $submissionId) {
+              id
+              status
+              logFiles
+            }
+          }
+        }
+        """,
+        {"submissionId": SUBMISSION_ID},
+    )
+    logs = data["submissions"]["byId"].get("logFiles") or []
+    print(f"LOG_FILES {len(logs)}", flush=True)
+    for index, url in enumerate(logs):
+        result = subprocess.run(
+            [
+                "node",
+                "-e",
+                """
+                const url = process.argv[1];
+                fetch(url, { headers: { "user-agent": "node-fetch/2.7.0" } })
+                  .then(async (res) => {
+                    const text = await res.text();
+                    if (!res.ok) {
+                      process.stderr.write("LOG_HTTP " + res.status);
+                      process.exit(2);
+                    }
+                    process.stdout.write(text);
+                  })
+                  .catch((err) => {
+                    process.stderr.write(String(err));
+                    process.exit(2);
+                  });
+                """,
+                url,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            print(f"LOG_FETCH_FAILED {index} {redact(result.stderr)[:200]}", flush=True)
+            continue
+        lines = redact(result.stdout).splitlines()
+        needles = (
+            "error",
+            "google api",
+            "version code",
+            "certificate",
+            "permission",
+            "forbidden",
+            "track",
+            "supply",
+            "rejected",
+        )
+        interesting = [line for line in lines if any(needle in line.lower() for needle in needles)]
+        print(f"----- log {index} interesting -----", flush=True)
+        print("\n".join(interesting[-60:]), flush=True)
+        print(f"----- log {index} tail -----", flush=True)
+        print("\n".join(lines[-30:]), flush=True)
+
+
 def print_submission(submission: dict) -> str:
     submission_status = status_of(submission)
     print(f"SUBMISSION_STATUS {submission_status}", flush=True)
@@ -349,6 +416,7 @@ def main() -> int:
             return 1
         if submission_status in {"ERRORED", "CANCELED", "CANCELLED"}:
             print("SUBMISSION_FAILED", flush=True)
+            dump_submission_logs()
             return 1
         if build_status == "FINISHED" and submission_status == "FINISHED":
             print("ANDROID_INTERNAL_DRAFT_SUBMITTED", flush=True)
