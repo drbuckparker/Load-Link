@@ -98,6 +98,16 @@ def main() -> int:
             print("BOTH_TERMINAL", flush=True)
             print(f"FINAL_BUILD_STATUS {build_status}", flush=True)
             print(f"FINAL_SUBMISSION_STATUS {submission_status}", flush=True)
+            store = subprocess.run(
+                ["eas", "submit:status", "-p", "ios", "--json", "--non-interactive"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if store.stderr.strip():
+                print(store.stderr.strip(), flush=True)
+            print(f"STORE_STATUS_EXIT {store.returncode}", flush=True)
+            print(store.stdout[:4000], flush=True)
             return 0
         if os.environ.get("EAS_WATCH_ONCE") == "1":
             print("STILL_RUNNING", flush=True)
