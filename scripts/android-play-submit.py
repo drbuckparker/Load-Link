@@ -127,6 +127,7 @@ def list_credentials() -> tuple[list[dict], list[dict]]:
                 applicationIdentifier
                 isLegacy
                 googleServiceAccountKeyForSubmissions {{ {SAFE_KEY_FIELDS} }}
+                googleServiceAccountKeyForFcmV1 {{ {SAFE_KEY_FIELDS} }}
               }}
             }}
           }}
@@ -151,9 +152,11 @@ def list_credentials() -> tuple[list[dict], list[dict]]:
     print(f"ANDROID_CREDENTIALS {len(credentials)}", flush=True)
     for item in credentials:
         assigned = item.get("googleServiceAccountKeyForSubmissions")
-        assigned_id = assigned["id"] if assigned else "none"
+        fcm = item.get("googleServiceAccountKeyForFcmV1")
         print(
-            f"CRED id={item['id']} legacy={item['isLegacy']} submissionsKey={assigned_id}",
+            f"CRED id={item['id']} legacy={item['isLegacy']} "
+            f"submissionsKey={assigned['id'] if assigned else 'none'} "
+            f"fcmKey={fcm['id'] if fcm else 'none'}",
             flush=True,
         )
     return keys, credentials
@@ -168,10 +171,13 @@ def assign_key(keys: list[dict], credentials: list[dict]) -> None:
     if assigned:
         print(f"KEY_ALREADY_ASSIGNED id={assigned['id']}", flush=True)
         return
-    if len(keys) != 1:
-        print("REFUSING_ASSIGN expected exactly one account key", flush=True)
+    play_keys = [key for key in keys if "firebase-adminsdk" not in key["clientEmail"]]
+    firebase_keys = [key for key in keys if "firebase-adminsdk" in key["clientEmail"]]
+    if len(play_keys) != 1 or len(play_keys) + len(firebase_keys) != len(keys):
+        print("REFUSING_ASSIGN could not identify the Play submission key", flush=True)
         sys.exit(1)
-    key = keys[0]
+    key = play_keys[0]
+    print(f"CHOSE_PLAY_KEY id={key['id']} email={key['clientEmail']}", flush=True)
     graphql(
         f"""
         mutation($androidAppCredentialsId: ID!, $googleServiceAccountKeyId: ID!) {{
