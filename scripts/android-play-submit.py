@@ -11,8 +11,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 
 BUILD_ID = "557f42d2-ef15-4b88-8d7e-7eb1f251a4d4"
@@ -60,27 +58,46 @@ def require_submit_profile() -> None:
 
 
 def graphql(query: str, variables: dict) -> dict:
-    token = os.environ.get("EXPO_TOKEN", "")
-    if not token:
+    if not os.environ.get("EXPO_TOKEN"):
         print("EXPO_TOKEN missing", flush=True)
         sys.exit(1)
-    body = json.dumps({"query": query, "variables": variables}).encode()
-    request = urllib.request.Request(
-        "https://api.expo.dev/graphql",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
-        method="POST",
+    result = subprocess.run(
+        [
+            "node",
+            "-e",
+            """
+            const fs = require("fs");
+            const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+            fetch("https://api.expo.dev/graphql", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: "Bearer " + process.env.EXPO_TOKEN,
+                "user-agent": "node-fetch/2.7.0",
+              },
+              body: JSON.stringify(payload),
+            }).then(async (res) => {
+              const text = await res.text();
+              if (!res.ok) {
+                process.stderr.write("GRAPHQL_HTTP " + res.status + " " + text.slice(0, 400));
+                process.exit(2);
+              }
+              process.stdout.write(text);
+            }).catch((err) => {
+              process.stderr.write(String(err));
+              process.exit(2);
+            });
+            """,
+        ],
+        input=json.dumps({"query": query, "variables": variables}),
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            payload = json.loads(response.read().decode())
-    except urllib.error.HTTPError as error:
-        detail = redact(error.read().decode(errors="replace")[:500])
-        print(f"GRAPHQL_HTTP {error.code} {detail}", flush=True)
+    if result.returncode != 0:
+        print(redact((result.stderr or result.stdout or "graphql failed")[:500]), flush=True)
         sys.exit(1)
+    payload = json.loads(result.stdout)
     errors = payload.get("errors") or []
     if errors:
         messages = "; ".join(redact(str(item.get("message", item))) for item in errors)
