@@ -35,7 +35,7 @@ Do this once before the first tagged build.
 
    Use the version you actually put in `app.json`. Any tag matching `v*` starts the workflow. You can also open the Actions tab and run **iOS TestFlight** by hand (`workflow_dispatch`).
 
-The workflow checks out the tag, installs dependencies with `npm ci` on Node 20, then runs:
+The workflow checks out the tag, installs dependencies with `npm ci` on Node 22, then runs:
 
 ```bash
 eas build -p ios --profile production --non-interactive --no-wait --auto-submit
