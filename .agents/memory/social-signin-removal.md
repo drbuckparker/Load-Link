@@ -20,5 +20,6 @@ App Store. Re-adding requires: the `expo-apple-authentication` plugin in
 app.json, server token-verification + session-minting endpoints (previously
 `/api/auth/social-login` and `/api/auth/apple/register`), and the social UI in
 `app/(auth)/login.tsx` + AuthContext methods. The packages
-(expo-apple-authentication, expo-auth-session) are still installed but unused.
+(expo-apple-authentication, expo-auth-session) were removed from package.json;
+nothing in the app imported them.
 `deleteAccount` was intentionally KEPT (Apple requires in-app account deletion).
