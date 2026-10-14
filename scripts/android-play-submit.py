@@ -397,6 +397,15 @@ def main() -> int:
         print("BUILD_FAILED", flush=True)
         return 1
     submission_id = SUBMISSION_ID
+    if submission_id and "android-resubmit" in os.environ.get("GITHUB_REF", ""):
+        existing = eas_json(["submit:view", submission_id])
+        existing_status = status_of(existing)
+        print(f"PREVIOUS_SUBMISSION_STATUS {existing_status}", flush=True)
+        if existing_status == "ERRORED":
+            print("RESUBMITTING_EXISTING_BUILD", flush=True)
+            submission_id = schedule_submit()
+        else:
+            print("NOT_RESUBMITTING", flush=True)
     if not submission_id:
         if build_status == "FINISHED":
             submission_id = schedule_submit()
