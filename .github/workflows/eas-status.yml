@@ -1,0 +1,29 @@
+name: EAS status
+
+on:
+  push:
+    tags:
+      - "status-*"
+
+jobs:
+  status:
+    name: Watch EAS build and submission
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Watch build and TestFlight upload
+        run: python3 scripts/eas-watch.py
