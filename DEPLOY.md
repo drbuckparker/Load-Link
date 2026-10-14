@@ -41,7 +41,7 @@ The workflow checks out the tag, installs dependencies with `npm ci` on Node 22,
 eas build -p ios --profile production --non-interactive --no-wait --auto-submit
 ```
 
-EAS builds the iOS app in the cloud. `autoIncrement` and `appVersionSource: remote` in `eas.json` bump the build number for you. When the build finishes, EAS submits it to App Store Connect. After Apple finishes processing, the build shows up in TestFlight for that app. It is not released to the public.
+EAS builds the iOS app in the cloud. The iOS build number is `expo.ios.buildNumber` in `app.json` (`appVersionSource` is `local`). Bump that number by hand before each iOS build so Apple gets a higher build than the last one. Android `versionCode` is not set in `app.json`; a future Android production build no longer continues the remote Play counter. When the build finishes, EAS submits it to App Store Connect. After Apple finishes processing, the build shows up in TestFlight for that app. It is not released to the public.
 
 ## Public App Store release
 

@@ -2,13 +2,13 @@
   "expo": {
     "name": "LoadLink",
     "slug": "loadlink",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "loadlink",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
-    "runtimeVersion": "1.0.7",
+    "runtimeVersion": "1.0.8",
     "updates": {
       "enabled": true,
       "checkAutomatically": "ON_LOAD",
@@ -24,6 +24,7 @@
       "supportsTablet": false,
       "requireFullScreen": true,
       "bundleIdentifier": "app.replit.loadlink",
+      "buildNumber": "26",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
