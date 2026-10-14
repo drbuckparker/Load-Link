@@ -30,6 +30,7 @@
       }
     },
     "android": {
+      "versionCode": 18,
       "package": "com.loadlink.app",
       "googleServicesFile": "./google-services.json",
       "config": {

@@ -1,8 +1,8 @@
 # Shipping LoadLink to the App Store
 
-The iOS app on the App Store is **Load Link**, Apple app `6773393098`, on Apple team `DA2568YFHY`. Its bundle id is `app.replit.loadlink`. Android is a different package, `com.loadlink.app`, and this guide does not change that.
+The iOS app on the App Store is **Load Link**, Apple app `6773393098`, on Apple team `DA2568YFHY`. Its bundle id is `app.replit.loadlink`. Android is package `com.loadlink.app`.
 
-GitHub Actions can build the iOS app and send the build to **TestFlight**. A public App Store release is a separate click you make yourself in App Store Connect. This workflow never publishes the app to the public store.
+GitHub Actions can build the iOS app and send it to **TestFlight**, and build the Android app and upload it as a **draft on the Play internal testing track**. A public App Store or Play Store release is a separate click you make yourself. These workflows do not publish the app to the public, and the Android workflow does not touch the production or open testing tracks or the store listing.
 
 ## One-time setup
 
@@ -22,9 +22,11 @@ Do this once before the first tagged build.
 
 4. **App Store Connect API key.** In App Store Connect, open Users and Access → Integrations → App Store Connect API, and create a key that can submit builds. Then upload it to EAS (same `eas credentials -p ios` command, App Store Connect API key). EAS needs the key id, the issuer id, and the `.p8` file so a non-interactive submit can sign in. The production submit profile already targets App Store Connect app `6773393098` and team `DA2568YFHY`.
 
+5. **Google Play service account.** In Play Console, create a service account that can upload releases, and upload that JSON key to EAS with `npx eas-cli credentials -p android`. The production submit profile sends the app to the **internal** track as a **draft**, and it tells Play not to send listing changes for review. The key stays on EAS. Do not commit it to the repo.
+
 ## How to ship a TestFlight build
 
-1. Bump the user-facing version in `app.json` (`expo.version`). This project keeps `runtimeVersion` equal to that same version, so bump both together. Apple rejects a build whose version matches one already approved.
+1. Bump the user-facing version in `app.json` (`expo.version`). This project keeps `runtimeVersion` equal to that same version, so bump both together. Apple rejects a build whose version matches one already approved. On every release, also bump `expo.ios.buildNumber` and `expo.android.versionCode` to numbers higher than the last build Apple or Play already accepted. Those two counters are independent. Reusing either one makes the store reject the upload.
 2. Commit that change and push it to GitHub.
 3. Push a git tag that starts with `v`:
 
@@ -41,8 +43,33 @@ The workflow checks out the tag, installs dependencies with `npm ci` on Node 22,
 eas build -p ios --profile production --non-interactive --no-wait --auto-submit
 ```
 
-EAS builds the iOS app in the cloud. The iOS build number is `expo.ios.buildNumber` in `app.json` (`appVersionSource` is `local`). Bump that number by hand before each iOS build so Apple gets a higher build than the last one. Android `versionCode` is not set in `app.json`; a future Android production build no longer continues the remote Play counter. When the build finishes, EAS submits it to App Store Connect. After Apple finishes processing, the build shows up in TestFlight for that app. It is not released to the public.
+EAS builds the iOS app in the cloud. The iOS build number is `expo.ios.buildNumber` in `app.json` (`appVersionSource` is `local`). When the build finishes, EAS submits it to App Store Connect. After Apple finishes processing, the build shows up in TestFlight for that app. It is not released to the public.
 
-## Public App Store release
+## How to ship an Android internal build
 
-When you want customers to get that build, open App Store Connect, select the Load Link app, and attach the TestFlight build to the App Store version. Submit it for review, then release it after Apple approves. That step is manual. The GitHub workflow does not do it.
+1. Use the same version bump as iOS, including a new `expo.android.versionCode` higher than Play’s current highest. Play’s highest version code before this release was 17, so 1.0.8 uses 18.
+2. Commit and push.
+3. Push a git tag that starts with `android-v`:
+
+   ```bash
+   git tag android-v1.0.8
+   git push origin android-v1.0.8
+   ```
+
+   A tag matching `android-v*` starts the Android workflow. A tag matching `v*` starts the iOS workflow. You can also run **Android Play internal** by hand from the Actions tab.
+
+The workflow checks out the tag, installs dependencies with `npm ci` on Node 22, then runs:
+
+```bash
+eas build -p android --profile production --non-interactive --no-wait --auto-submit
+```
+
+EAS builds the Android app bundle and uploads it to the Play **internal** track as a **draft**. It does not roll the build out, and it does not send store-listing changes for review. Promoting that draft, or moving it to open testing or production, is a manual step in Play Console.
+
+## Public store release
+
+When you want customers to get an iOS build, open App Store Connect, select the Load Link app, and attach the TestFlight build to the App Store version. Submit it for review, then release it after Apple approves.
+
+When you want customers to get an Android build, open Play Console and promote the internal draft yourself. Do not use these workflows for the production or open testing tracks.
+
+Those steps are manual. The GitHub workflows do not do them.
