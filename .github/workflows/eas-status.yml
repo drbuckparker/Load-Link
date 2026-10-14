@@ -26,4 +26,6 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Watch build and TestFlight upload
+        env:
+          EAS_WATCH_ONCE: ${{ contains(github.ref, 'status-once') && '1' || '0' }}
         run: python3 scripts/eas-watch.py

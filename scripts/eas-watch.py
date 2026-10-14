@@ -2,6 +2,7 @@
 """Poll one EAS build and one submission until both are finished."""
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -11,7 +12,7 @@ BUILD_ID = "cdad8132-db72-49f3-840d-cd68823e13a1"
 SUBMISSION_ID = "da66270a-408f-46f6-b0bc-03d4914d4ac5"
 TERMINAL = {"FINISHED", "ERRORED", "CANCELED", "CANCELLED"}
 INTERVAL_SECONDS = 180
-MAX_CHECKS = 30
+MAX_CHECKS = 1 if os.environ.get("EAS_WATCH_ONCE") == "1" else 30
 
 
 def now() -> str:
