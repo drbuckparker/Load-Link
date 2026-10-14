@@ -45,6 +45,20 @@ def status_of(payload: dict) -> str:
     return str(value).upper()
 
 
+def summary_lines(label: str, payload: dict) -> None:
+    for key in (
+        "appVersion",
+        "appBuildVersion",
+        "platform",
+        "createdAt",
+        "updatedAt",
+        "completedAt",
+        "queueStartedAt",
+    ):
+        if payload.get(key):
+            print(f"{label}_{key} {payload[key]}", flush=True)
+
+
 def error_text(payload: dict) -> str:
     error = payload.get("error")
     if not error:
@@ -65,10 +79,12 @@ def main() -> int:
         build_status = status_of(build)
         submission_status = status_of(submission)
         print(f"BUILD_STATUS {build_status}", flush=True)
+        summary_lines("BUILD", build)
         build_error = error_text(build)
         if build_error:
             print(f"BUILD_ERROR {build_error}", flush=True)
         print(f"SUBMISSION_STATUS {submission_status}", flush=True)
+        summary_lines("SUBMISSION", submission)
         submission_error = error_text(submission)
         if submission_error:
             print(f"SUBMISSION_ERROR {submission_error}", flush=True)
@@ -80,6 +96,9 @@ def main() -> int:
             print(f"FINAL_BUILD_STATUS {build_status}", flush=True)
             print(f"FINAL_SUBMISSION_STATUS {submission_status}", flush=True)
             return 0
+        if os.environ.get("EAS_WATCH_ONCE") == "1":
+            print("STILL_RUNNING", flush=True)
+            return 0 if build_status or submission_status else 1
         if attempt == MAX_CHECKS:
             break
         print(f"still running; next check in {INTERVAL_SECONDS}s", flush=True)
