@@ -28,7 +28,8 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Watch build and TestFlight upload
+      - name: Assign Play key and submit the Android build
         env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EAS_WATCH_ONCE: ${{ contains(github.ref, 'status-once') && '1' || '0' }}
-        run: python3 scripts/eas-watch.py
+        run: python3 scripts/android-play-submit.py
