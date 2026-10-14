@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 BUILD_ID = "557f42d2-ef15-4b88-8d7e-7eb1f251a4d4"
 # Filled in after the first successful schedule. Empty means "submit if needed".
-SUBMISSION_ID = ""
+SUBMISSION_ID = "66535480-da89-4ff9-ad95-006bc75d3ead"
 ACCOUNT = "load-link"
 PROJECT = "@load-link/loadlink"
 PACKAGE = "com.loadlink.app"
