@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 BUILD_ID = "557f42d2-ef15-4b88-8d7e-7eb1f251a4d4"
 # Filled in after the first successful schedule. Empty means "submit if needed".
-SUBMISSION_ID = "66535480-da89-4ff9-ad95-006bc75d3ead"
+SUBMISSION_ID = "6a9d7076-37ee-4030-9b81-1b37630b579a"
 ACCOUNT = "load-link"
 PROJECT = "@load-link/loadlink"
 PACKAGE = "com.loadlink.app"
@@ -302,7 +302,7 @@ def schedule_submit() -> str:
     return submission_id
 
 
-def dump_submission_logs() -> None:
+def dump_submission_logs(submission_id: str) -> None:
     data = graphql(
         """
         query($submissionId: ID!) {
@@ -315,7 +315,7 @@ def dump_submission_logs() -> None:
           }
         }
         """,
-        {"submissionId": SUBMISSION_ID},
+        {"submissionId": submission_id},
     )
     logs = data["submissions"]["byId"].get("logFiles") or []
     print(f"LOG_FILES {len(logs)}", flush=True)
@@ -350,17 +350,7 @@ def dump_submission_logs() -> None:
             print(f"LOG_FETCH_FAILED {index} {redact(result.stderr)[:200]}", flush=True)
             continue
         lines = redact(result.stdout).splitlines()
-        needles = (
-            "error",
-            "google api",
-            "version code",
-            "certificate",
-            "permission",
-            "forbidden",
-            "track",
-            "supply",
-            "rejected",
-        )
+        needles = ("google api error", "permission_denied", "[!]")
         interesting = [line for line in lines if any(needle in line.lower() for needle in needles)]
         print(f"----- log {index} interesting -----", flush=True)
         print("\n".join(interesting[-60:]), flush=True)
@@ -425,7 +415,7 @@ def main() -> int:
             return 1
         if submission_status in {"ERRORED", "CANCELED", "CANCELLED"}:
             print("SUBMISSION_FAILED", flush=True)
-            dump_submission_logs()
+            dump_submission_logs(submission_id)
             return 1
         if build_status == "FINISHED" and submission_status == "FINISHED":
             print("ANDROID_INTERNAL_DRAFT_SUBMITTED", flush=True)
