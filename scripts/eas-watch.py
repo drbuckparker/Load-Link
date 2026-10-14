@@ -88,9 +88,9 @@ def main() -> int:
         submission_error = error_text(submission)
         if submission_error:
             print(f"SUBMISSION_ERROR {submission_error}", flush=True)
-        if submission and submission_status not in TERMINAL:
+        if submission:
             compact = json.dumps(submission, default=str)
-            print(f"SUBMISSION_JSON {compact[:2500]}", flush=True)
+            print(f"SUBMISSION_JSON {compact[:6000]}", flush=True)
 
         build_done = build_status in TERMINAL
         submission_done = submission_status in TERMINAL
