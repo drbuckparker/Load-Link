@@ -1,0 +1,9 @@
+appId: com.loadlink.app
+name: foreman-settings
+---
+- runFlow:
+    file: subflows/ensure-session.yaml
+    env:
+      MAESTRO_EMAIL: ${MAESTRO_FOREMAN_EMAIL}
+      MAESTRO_PASSWORD: ${MAESTRO_FOREMAN_PASSWORD}
+- runFlow: subflows/feature-settings.yaml

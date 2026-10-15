@@ -1,0 +1,56 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Already on the loads list, and a job card is visible.
+# Read only: do not accept, assign, clock in, or open the route map.
+# Opening the map calls the directions API.
+- tapOn:
+    id: "job-card-.*"
+    index: 0
+- extendedWaitUntil:
+    visible:
+      id: job-detail-screen
+    timeout: 30000
+- assertVisible: JOB DETAILS
+- scrollUntilVisible:
+    element:
+      id: job-route-card
+    direction: DOWN
+    timeout: 20000
+    speed: 70
+    visibilityPercentage: 40
+- assertVisible: PICKUP
+- assertVisible: DROPOFF
+- assertVisible: "View Map"
+- runFlow:
+    when:
+      visible:
+        id: accept-job-btn
+    commands:
+      - assertVisible: "ACCEPT JOB"
+- runFlow:
+    when:
+      visible:
+        id: assign-trucks-btn
+    commands:
+      - assertVisible: "ASSIGN TRUCKS TO JOB"
+- runFlow:
+    when:
+      visible:
+        id: clock-in-btn
+    commands:
+      - assertVisible:
+          id: clock-in-btn
+- tapOn:
+    id: job-message-btn
+- extendedWaitUntil:
+    visible:
+      id: message-input
+    timeout: 20000
+- assertVisible:
+    id: message-send-btn
+- tapOn:
+    id: chat-back
+- tapOn:
+    id: job-detail-back

@@ -10,16 +10,4 @@ name: contractor
 - runFlow:
     file: subflows/assert-role.yaml
     env:
-      ROLE_LABEL: CONTRACTOR
-- runFlow: subflows/open-messages.yaml
-- runFlow:
-    file: subflows/open-first-job.yaml
-    env:
-      LOADS_LABEL: MY JOBS
-- runFlow: subflows/send-message.yaml
-- runFlow:
-    file: subflows/view-documents.yaml
-    env:
-      EXPECT_INVOICES: "yes"
-- runFlow: subflows/view-activity-billing.yaml
-- runFlow: subflows/logout.yaml
+      ROLE_LABEL: "CONTRACTOR"

@@ -6,13 +6,28 @@ These tests do not send the app to the Play Store or the App Store. They do not 
 
 ## What each test does
 
-1. **Show and hide password.** On the login screen, type the driver account's password, tap the eye button, and check that the password is shown and then hidden again. It does not sign in.
-2. **Driver.** Sign in as the driver demo account. Check the role says DRIVER. Open Messages. Open Find Loads, open the first open load, and accept it with a truck. Send a chat message on that job. Check that the Invoices tab is not there. Open notifications (that is the activity list) and the Billing tab. Sign out.
-3. **Contractor.** Sign in as the contractor demo account. Check the role says CONTRACTOR. Open Messages. Open My Jobs and open the first open job. Send a chat message. Open the Invoices tab (that is the document list). Open notifications and Billing. Sign out. A contractor does not accept a load.
-4. **Trucking company.** Sign in as the trucking company demo account. Check the role says TRUCKING COMPANY. Open Messages. Open Find Jobs, open the first open job, and accept it with a truck. Send a chat message. Open Invoices, notifications, and Billing. Sign out.
-5. **Foreman.** Sign in as the foreman demo account. Check the role says FOREMAN. Open Messages. Open Find Loads and open the first open load. Send a chat message. Check that Invoices is not there. Open notifications and Billing. Sign out. A foreman does not accept a load.
+The password is never written in these files. Each flow reads it from the environment. One failure does not skip the other flows.
 
-The password is never written in these files. Each flow reads it from the environment.
+The flows use the four demo accounts only. They do not accept a load, assign a truck, clock in, send a chat, open mail, or open the route map. Opening the route map would call Google directions. Tapping Accept would change a real load.
+
+For each role the separate flows are:
+
+1. **Sign in.** Fresh launch, sign in, check the role name on the profile.
+2. **Home.** Dashboard, the Find Loads / Find Jobs / My Jobs button, and the Calendar tab.
+3. **Loads or jobs.** The jobs list and, when a card is on screen, its detail: route (pickup, dropoff, View Map), Accept or Assign when that button is on screen, and Clock in when that button is on screen. The job chat composer is opened and not sent.
+4. **Messages.** The Messages tab and the notifications list.
+5. **Money.** Invoices for contractor and trucking company. My Jobs for driver and foreman. Earnings in Settings.
+6. **Settings.** Profile, Switch Role, Help (Contact and Tutorials, not opened), Account (security and the delete button, not tapped), Billing, then sign out.
+
+Show and hide password still runs first. It types the driver password, taps the eye, and does not sign in.
+
+There is no privacy-consent screen in the app. The Account tab is the screen those flows open instead. The API check records whether the login payload includes privacy fields.
+
+## Companion API check
+
+The same workflow runs `scripts/companion-api-smoke.mjs` against `https://loadlinkmobile.replit.app`. It signs in as each demo account and calls the read endpoints the app uses. A 4xx or 5xx fails that check.
+
+The only write is a project named `E2E-TEST-<timestamp>`. The script deletes that project, and any older `E2E-TEST-` project still on the account, before it finishes. It does not post a job, send email or SMS, clock in, accept a load, or call Google.
 
 ## Secrets to add
 
@@ -37,12 +52,11 @@ The accounts have to exist on the server the app already uses (`loadlinkmobile.r
 
 Each account also needs a little data, or the taps have nothing to open:
 
-- **Driver:** at least one open load they can accept (not their own posting, and not one they already took). The first load in the Open list is the one the test opens. They also need a truck that is allowed on that load.
-- **Trucking company:** the same as the driver. One open load they can accept, and a truck that can take it.
-- **Contractor:** at least one open job on My Jobs, so the test can open it. Invoices can be empty.
-- **Foreman:** at least one open load to open. The test does not accept it.
+- **Driver and foreman:** an open load on Find Loads, so the detail screen has something to open. The test does not accept it.
+- **Trucking company:** an open job on Find Jobs. The test does not accept it.
+- **Contractor:** a job on My Jobs. Invoices can be empty.
 
-Accepting a load and sending a chat message really happen on that server. Use demo accounts, not a customer's login.
+An empty list does not fail the loads flow. The screen still has to open. Use demo accounts, not a customer's login.
 
 ## How GitHub runs the tests
 
@@ -55,8 +69,9 @@ On the GitHub runner it:
 3. Turns off over-the-air updates for this test build only, so the phone runs the code from the pull request. The file `app.json` in git is not changed, and store builds are not changed.
 4. Builds a release-style Android APK on the runner. The APK is for the emulator (x86_64) and is signed with the debug key. It is not a Play Store upload.
 5. Starts an Android emulator, installs that APK, and runs `maestro test .maestro`.
+6. In parallel, signs in to the production companion API with the same demo accounts and checks the endpoints above.
 
-The check on the pull request turns green when every flow passes. If it is red, open the job log. The log names the flow that failed (driver, contractor, trucking company, foreman, or show/hide password).
+The check on the pull request turns green when every Maestro flow passes and the companion API check has no 4xx or 5xx. If it is red, open the job log. Maestro names the flow that failed. The API log lists each path and status.
 
 A pull request from a fork cannot read these secrets, so that check will fail the secret step. That is expected.
 

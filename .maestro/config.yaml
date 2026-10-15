@@ -3,18 +3,57 @@
 flows:
   - show-hide-password.yaml
   - driver.yaml
+  - driver-home.yaml
+  - driver-loads.yaml
+  - driver-messages.yaml
+  - driver-money.yaml
+  - driver-settings.yaml
   - contractor.yaml
+  - contractor-home.yaml
+  - contractor-jobs.yaml
+  - contractor-messages.yaml
+  - contractor-money.yaml
+  - contractor-settings.yaml
   - trucking-company.yaml
+  - trucking-company-home.yaml
+  - trucking-company-jobs.yaml
+  - trucking-company-messages.yaml
+  - trucking-company-money.yaml
+  - trucking-company-settings.yaml
   - foreman.yaml
+  - foreman-home.yaml
+  - foreman-loads.yaml
+  - foreman-messages.yaml
+  - foreman-money.yaml
+  - foreman-settings.yaml
 excludeTags:
   - util
-# Default order is non-deterministic. These flows are independent, so keep
-# going after a failure and always run them in this order.
+# Each file is one feature. A failure in one does not skip the rest.
 executionOrder:
   continueOnFailure: true
   flowsOrder:
     - show-hide-password
     - driver
+    - driver-home
+    - driver-loads
+    - driver-messages
+    - driver-money
+    - driver-settings
     - contractor
+    - contractor-home
+    - contractor-jobs
+    - contractor-messages
+    - contractor-money
+    - contractor-settings
     - trucking-company
+    - trucking-company-home
+    - trucking-company-jobs
+    - trucking-company-messages
+    - trucking-company-money
+    - trucking-company-settings
     - foreman
+    - foreman-home
+    - foreman-loads
+    - foreman-messages
+    - foreman-money
+    - foreman-settings

@@ -1,0 +1,21 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Bring the app forward without wiping the signed-in demo session.
+# Caller passes MAESTRO_EMAIL and MAESTRO_PASSWORD.
+- launchApp:
+    permissions:
+      location: deny
+      notifications: deny
+- runFlow: dismiss-permissions.yaml
+- runFlow:
+    when:
+      visible:
+        id: login-screen
+    file: login.yaml
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 60000
+- runFlow: dismiss-permissions.yaml

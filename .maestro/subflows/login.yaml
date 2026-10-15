@@ -21,19 +21,15 @@ tags:
     text: "WELCOME BACK"
 - tapOn:
     text: "SIGN IN"
-- tapOn:
-    text: Don't allow
-    optional: true
-- tapOn:
-    text: While using the app
-    optional: true
+- repeat:
+    times: 6
+    while:
+      notVisible:
+        id: dashboard-screen
+    commands:
+      - runFlow: dismiss-permissions.yaml
 - extendedWaitUntil:
     visible:
       id: dashboard-screen
-    timeout: 120000
-- tapOn:
-    text: Don't allow
-    optional: true
-- tapOn:
-    text: While using the app
-    optional: true
+    timeout: 60000
+- runFlow: dismiss-permissions.yaml

@@ -1648,7 +1648,7 @@ export default function JobDetailScreen() {
   return (
     <View testID="job-detail-screen" style={styles.container}>
       <View style={[styles.topBar, { paddingTop: Platform.OS === 'web' ? 67 : insets.top }]}>
-        <Pressable onPress={() => {
+        <Pressable testID="job-detail-back" onPress={() => {
           if (router.canGoBack()) {
             router.back();
           } else {
@@ -2248,7 +2248,7 @@ export default function JobDetailScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>ROUTE</Text>
-          <Pressable style={styles.routeCard} onPress={openRouteMap}>
+          <Pressable testID="job-route-card" style={styles.routeCard} onPress={openRouteMap}>
             <View style={styles.routeRow}>
               <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />
               <View style={styles.routeTextBlock}>
@@ -3318,6 +3318,7 @@ export default function JobDetailScreen() {
               </View>
             ) : (
               <Pressable
+                testID="clock-in-btn"
                 style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
                 onPress={handleStartJob}
               >
@@ -4142,13 +4143,13 @@ export default function JobDetailScreen() {
         animationType="slide"
         onRequestClose={() => { setMapVisible(false); setRouteCoords([]); }}
       >
-        <View style={{ flex: 1, backgroundColor: Colors.background }}>
+        <View testID="route-map-screen" style={{ flex: 1, backgroundColor: Colors.background }}>
           <View style={{
             flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
             paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8, paddingHorizontal: 16, paddingBottom: 12,
             backgroundColor: Colors.surface, borderBottomWidth: 1, borderBottomColor: Colors.border,
           }}>
-            <Pressable onPress={() => { setMapVisible(false); setRouteCoords([]); }} style={{ padding: 6 }}>
+            <Pressable testID="route-map-close" onPress={() => { setMapVisible(false); setRouteCoords([]); }} style={{ padding: 6 }}>
               <Ionicons name="close" size={26} color={Colors.text} />
             </Pressable>
             <Text style={{ fontFamily: 'ChakraPetch_700Bold', fontSize: 16, color: Colors.text, letterSpacing: 1 }}>ROUTE MAP</Text>

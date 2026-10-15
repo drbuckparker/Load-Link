@@ -1,0 +1,33 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Caller passes LOADS_LABEL (FIND LOADS, FIND JOBS, or MY JOBS).
+- extendedWaitUntil:
+    visible:
+      id: find-loads-btn
+    timeout: 20000
+- assertVisible: ${LOADS_LABEL}
+- tapOn:
+    id: find-loads-btn
+- extendedWaitUntil:
+    visible:
+      id: jobs-browse-screen
+    timeout: 30000
+- assertVisible:
+    id: jobs-filter-open
+- runFlow:
+    when:
+      visible:
+        id: "job-card-.*"
+    file: open-job-detail.yaml
+- tapOn:
+    id: quick-action-home
+    optional: true
+- tapOn:
+    id: tab-home
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 20000

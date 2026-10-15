@@ -1,0 +1,16 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Android's notification dialog uses a curly apostrophe in "Don't allow"
+# (U+2019). A straight-apostrophe match never taps it, and the dialog then
+# covers the dashboard. The permission-controller id is stable.
+- tapOn:
+    id: "com.android.permissioncontroller:id/permission_deny_button"
+    optional: true
+- tapOn:
+    text: "Don.t allow"
+    optional: true
+- tapOn:
+    id: "com.android.permissioncontroller:id/permission_deny_and_dont_ask_again_button"
+    optional: true

@@ -14,6 +14,59 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  api:
+    name: Companion API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MAESTRO_DRIVER_EMAIL: ${{ secrets.MAESTRO_DRIVER_EMAIL }}
+      MAESTRO_DRIVER_PASSWORD: ${{ secrets.MAESTRO_DRIVER_PASSWORD }}
+      MAESTRO_CONTRACTOR_EMAIL: ${{ secrets.MAESTRO_CONTRACTOR_EMAIL }}
+      MAESTRO_CONTRACTOR_PASSWORD: ${{ secrets.MAESTRO_CONTRACTOR_PASSWORD }}
+      MAESTRO_TRUCKING_COMPANY_EMAIL: ${{ secrets.MAESTRO_TRUCKING_COMPANY_EMAIL }}
+      MAESTRO_TRUCKING_COMPANY_PASSWORD: ${{ secrets.MAESTRO_TRUCKING_COMPANY_PASSWORD }}
+      MAESTRO_FOREMAN_EMAIL: ${{ secrets.MAESTRO_FOREMAN_EMAIL }}
+      MAESTRO_FOREMAN_PASSWORD: ${{ secrets.MAESTRO_FOREMAN_PASSWORD }}
+      API_SMOKE_REPORT: api-smoke-report.json
+    steps:
+      - name: Check demo account secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in \
+            MAESTRO_DRIVER_EMAIL \
+            MAESTRO_DRIVER_PASSWORD \
+            MAESTRO_CONTRACTOR_EMAIL \
+            MAESTRO_CONTRACTOR_PASSWORD \
+            MAESTRO_TRUCKING_COMPANY_EMAIL \
+            MAESTRO_TRUCKING_COMPANY_PASSWORD \
+            MAESTRO_FOREMAN_EMAIL \
+            MAESTRO_FOREMAN_PASSWORD
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "Add GitHub Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "The companion API check cannot log in until those secrets exist. The names are listed in TESTING.md."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Hit companion API endpoints
+        run: node scripts/companion-api-smoke.mjs
+
+      - name: Upload API report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-smoke-report
+          path: api-smoke-report.json
+          if-no-files-found: ignore
+
   android:
     name: Android emulator
     runs-on: ubuntu-latest

@@ -1,0 +1,12 @@
+appId: com.loadlink.app
+name: contractor-jobs
+---
+- runFlow:
+    file: subflows/ensure-session.yaml
+    env:
+      MAESTRO_EMAIL: ${MAESTRO_CONTRACTOR_EMAIL}
+      MAESTRO_PASSWORD: ${MAESTRO_CONTRACTOR_PASSWORD}
+- runFlow:
+    file: subflows/feature-loads.yaml
+    env:
+      LOADS_LABEL: "MY JOBS"

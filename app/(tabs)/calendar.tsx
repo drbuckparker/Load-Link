@@ -699,7 +699,7 @@ export default function CalendarScreen() {
   const selectedType = AVAILABILITY_TYPES.find(t => t.key === modalType);
 
   return (
-    <View style={styles.container}>
+    <View testID="calendar-screen" style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <Text style={styles.headerTitle}>{isContractor ? 'MY POSTED JOBS' : 'FLEET MANAGER'}</Text>
       </View>
