@@ -1,6 +1,11 @@
+import { requireDatabaseUrl } from "../server/databaseUrl";
 import { pool } from "../server/db";
 
 async function main() {
+  const databaseTarget = requireDatabaseUrl();
+  console.log(
+    `Updating broker_scheduled_sends on ${databaseTarget.host ?? "(unparseable)"} (${databaseTarget.source})`,
+  );
   // Create the table with all columns if it doesn't exist yet.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS broker_scheduled_sends (

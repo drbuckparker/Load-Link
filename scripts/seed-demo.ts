@@ -24,7 +24,10 @@
  *  - Evergreen: dates are relative to "today", so the demo always looks current.
  */
 import bcrypt from "bcrypt";
+import { requireDatabaseUrl } from "../server/databaseUrl";
 import { pool } from "../server/db";
+
+const databaseTarget = requireDatabaseUrl();
 
 const DEMO_EMAIL = "demo@loadlink.com";
 const DEMO_DRIVER_EMAIL = "demo-driver@loadlink.com";
@@ -470,7 +473,9 @@ async function main() {
     if (failures.length) {
       throw new Error(`Seed assertions failed:\n  ${failures.join("\n  ")}`);
     }
-    console.log("\nDemo seeded. Password is the DEMO_PASSWORD secret (not printed).");
+    console.log(
+      `\nDemo seeded on ${databaseTarget.host ?? "(unparseable)"} via ${databaseTarget.source}. Password is the DEMO_PASSWORD secret (not printed).`,
+    );
     console.log("Login emails:");
     for (const email of LOGIN_EMAILS) console.log(`  ${email}`);
   } catch (err) {

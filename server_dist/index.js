@@ -434,9 +434,116 @@ var conversationActions = pgTable("conversation_actions", {
   created_at: timestamp("created_at").defaultNow()
 });
 
+// server/databaseUrl.ts
+var DATABASE_URL_CANDIDATES = [
+  "SHARED_DATABASE_URL",
+  "EXTERNAL_DATABASE_URL",
+  "NEON_DATABASE_URL",
+  "DATABASE_URL"
+];
+function isProductionDatabaseEnv(env = process.env) {
+  if (env.NODE_ENV === "production") return true;
+  const deployment = env.REPLIT_DEPLOYMENT;
+  return typeof deployment === "string" && deployment.trim() !== "";
+}
+function isNeonHost(host) {
+  const normalized = host.trim().toLowerCase().replace(/\.$/, "");
+  return normalized === "neon.tech" || normalized.endsWith(".neon.tech");
+}
+function databaseHost(connectionString2) {
+  const trimmed = connectionString2.trim();
+  if (!trimmed) return null;
+  const fromUrl = hostFromUrl(trimmed);
+  if (fromUrl) return sanitizeHost(fromUrl);
+  const fromKeyword = hostFromKeywordForm(trimmed);
+  if (fromKeyword) return sanitizeHost(fromKeyword);
+  return null;
+}
+function sanitizeHost(host) {
+  const value = host.trim();
+  if (!value) return null;
+  if (value.includes("://") || value.includes("@") || value.includes("/") || value.includes("\\") || /\s/.test(value)) {
+    return null;
+  }
+  return value;
+}
+function resolveDatabaseUrl(env = process.env) {
+  for (const source of DATABASE_URL_CANDIDATES) {
+    const raw = env[source];
+    if (typeof raw !== "string") continue;
+    const connectionString2 = raw.trim();
+    if (!connectionString2) continue;
+    return {
+      connectionString: connectionString2,
+      source,
+      host: databaseHost(connectionString2)
+    };
+  }
+  throw new Error(
+    "No database URL is set. Set SHARED_DATABASE_URL, EXTERNAL_DATABASE_URL, NEON_DATABASE_URL, or DATABASE_URL (first non-empty value wins)."
+  );
+}
+function formatDatabaseHostLog(resolved) {
+  const host = resolved.host ?? "(unparseable)";
+  return `[db] database host=${host} source=${resolved.source}`;
+}
+function productionDatabaseHostError(resolved, env = process.env) {
+  if (!isProductionDatabaseEnv(env)) return null;
+  if (resolved.host !== null && isNeonHost(resolved.host)) return null;
+  const host = resolved.host ?? "(unparseable)";
+  return `Refusing to start: database host "${host}" from ${resolved.source} is not a *.neon.tech host. Production (NODE_ENV=production or REPLIT_DEPLOYMENT) must use the shared Neon database, not Replit's built-in database. Set SHARED_DATABASE_URL or EXTERNAL_DATABASE_URL to that Neon connection string. The password and connection string were not logged.`;
+}
+var loggedDatabaseKey = null;
+function logDatabaseHost(resolved) {
+  const key = `${resolved.source}\0${resolved.host ?? ""}`;
+  if (loggedDatabaseKey === key) return;
+  loggedDatabaseKey = key;
+  console.log(formatDatabaseHostLog(resolved));
+}
+function requireDatabaseUrl(env = process.env) {
+  const resolved = resolveDatabaseUrl(env);
+  const refusal = productionDatabaseHostError(resolved, env);
+  if (refusal) {
+    process.stderr.write(`${refusal}\n`);
+    process.exit(1);
+  }
+  logDatabaseHost(resolved);
+  return resolved;
+}
+function hostFromUrl(connectionString2) {
+  try {
+    const hostname = new URL(connectionString2).hostname;
+    if (!hostname) return null;
+    return hostname;
+  } catch {
+    return null;
+  }
+}
+function hostFromKeywordForm(connectionString2) {
+  const match = /(?:^|[\s])host\s*=\s*('[^']*'|"[^"]*"|[^\s]+)/i.exec(connectionString2);
+  if (!match) return null;
+  let value = match[1];
+  if (value.startsWith("'") && value.endsWith("'") || value.startsWith('"') && value.endsWith('"')) {
+    value = value.slice(1, -1);
+  }
+  if (!value) return null;
+  return stripHostPort(value);
+}
+function stripHostPort(host) {
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end !== -1) return host.slice(1, end);
+  }
+  const colon = host.lastIndexOf(":");
+  if (colon > -1 && /^\d+$/.test(host.slice(colon + 1))) {
+    return host.slice(0, colon);
+  }
+  return host;
+}
+
 // server/db.ts
-var connectionString = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
-var isNeonOrExternal = connectionString?.includes("neon.tech") || connectionString?.includes("amazonaws.com");
+var { connectionString } = requireDatabaseUrl();
+var isNeonOrExternal = connectionString.includes("neon.tech") || connectionString.includes("amazonaws.com");
 var poolConfig = {
   connectionString,
   ...isNeonOrExternal ? { ssl: { rejectUnauthorized: false } } : {},
