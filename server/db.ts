@@ -1,10 +1,12 @@
 import { Pool, PoolConfig } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
+import { requireDatabaseUrl } from "./databaseUrl";
 
-const connectionString = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
+const { connectionString } = requireDatabaseUrl();
 
-const isNeonOrExternal = connectionString?.includes('neon.tech') || connectionString?.includes('amazonaws.com');
+const isNeonOrExternal =
+  connectionString.includes("neon.tech") || connectionString.includes("amazonaws.com");
 
 const poolConfig: PoolConfig = {
   connectionString,
