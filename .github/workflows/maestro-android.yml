@@ -84,7 +84,12 @@ jobs:
         run: npx expo prebuild --platform android --no-install --non-interactive
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        # v3's default package list still asks sdkmanager for "tools".
+        # Google no longer serves that package, so the step fails before
+        # any flow runs. v4 installs platform-tools only.
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Install SDK packages this app needs
         run: |
@@ -140,9 +145,13 @@ jobs:
           emulator-boot-timeout: 600
           ram-size: 4096
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            set -euo pipefail
-            APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
-            echo "Installing $APK"
-            adb install -r "$APK"
-            "$HOME/.maestro/bin/maestro" test .maestro
+          # Each script line is a new /bin/sh, so the real steps live in one bash file.
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/run-maestro-android.sh"
+
+      - name: Upload Maestro screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-results
+          path: maestro-results
+          if-no-files-found: ignore

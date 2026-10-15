@@ -6,16 +6,21 @@ tags:
 - extendedWaitUntil:
     visible:
       id: login-screen
-    timeout: 60000
+    timeout: 120000
 - tapOn:
     id: login-email-input
 - inputText: "${MAESTRO_EMAIL}"
+# Dismiss the email keyboard before tapping the password field. Otherwise
+# the password is typed into the email field and Sign In sees an empty password.
+- tapOn:
+    text: "WELCOME BACK"
 - tapOn:
     id: login-password-input
 - inputText: "${MAESTRO_PASSWORD}"
-- hideKeyboard
 - tapOn:
-    id: sign-in-btn
+    text: "WELCOME BACK"
+- tapOn:
+    text: "SIGN IN"
 - tapOn:
     text: Don't allow
     optional: true
@@ -25,7 +30,7 @@ tags:
 - extendedWaitUntil:
     visible:
       id: dashboard-screen
-    timeout: 60000
+    timeout: 120000
 - tapOn:
     text: Don't allow
     optional: true

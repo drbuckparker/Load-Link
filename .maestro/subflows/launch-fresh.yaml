@@ -1,0 +1,15 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# clearState can kill the process it just started while Android removes the
+# old task. Launch once more so the login screen is actually on screen.
+- launchApp:
+    clearState: true
+    permissions:
+      location: deny
+      notifications: deny
+- launchApp:
+    permissions:
+      location: deny
+      notifications: deny
