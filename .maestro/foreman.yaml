@@ -1,11 +1,7 @@
 appId: com.loadlink.app
 name: foreman
 ---
-- launchApp:
-    clearState: true
-    permissions:
-      location: deny
-      notifications: deny
+- runFlow: subflows/launch-fresh.yaml
 - runFlow:
     file: subflows/login.yaml
     env:

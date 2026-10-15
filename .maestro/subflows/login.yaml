@@ -10,14 +10,15 @@ tags:
 - tapOn:
     id: login-email-input
 - inputText: "${MAESTRO_EMAIL}"
+# Dismiss the email keyboard before tapping the password field. Otherwise
+# the password is typed into the email field and Sign In sees an empty password.
+- tapOn:
+    text: "WELCOME BACK"
 - tapOn:
     id: login-password-input
 - inputText: "${MAESTRO_PASSWORD}"
-# Tapping the title dismisses the keyboard. hideKeyboard fails on the
-# emulator when the keyboard has no standard dismiss action.
 - tapOn:
     text: "WELCOME BACK"
-    optional: true
 - tapOn:
     text: "SIGN IN"
 - tapOn:

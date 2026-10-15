@@ -33,7 +33,11 @@ python3 - <<'PY'
 import os
 from pathlib import Path
 
-secrets = [v for k, v in os.environ.items() if k.startswith("MAESTRO_") and v]
+secrets = [
+    v
+    for k, v in os.environ.items()
+    if k.startswith("MAESTRO_") and k.endswith(("_EMAIL", "_PASSWORD")) and len(v) >= 4
+]
 root = Path(os.environ["GITHUB_WORKSPACE"]) / "maestro-results"
 text_suffixes = {".json", ".log", ".txt", ".html", ".xml", ".yaml", ".yml"}
 for path in root.rglob("*"):
