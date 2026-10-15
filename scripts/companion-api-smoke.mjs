@@ -126,33 +126,46 @@ for (const [role, emailKey, passwordKey] of ROLES) {
     privacyKeys.length ? `present: ${privacyKeys.join(",")}` : "login payload has no privacy fields; the app has no consent screen",
   );
 
-  let firstJobId = "";
+  function firstId(json) {
+    const list = Array.isArray(json) ? json : json?.jobs || [];
+    const job = list.find((item) => item && (item.id || item.job_id));
+    return job ? String(job.id || job.job_id) : "";
+  }
+
+  let browseJobId = "";
+  let ownedJobId = "";
   for (const path of READS) {
     const res = await request(path, { token });
     record(role, "GET", path, res.status, res.status >= 400 ? res.text : "");
     if (classify(res.status) === "fail") failed = true;
-    if (!firstJobId && path === "/api/jobs" && Array.isArray(res.json)) {
-      const job = res.json.find((item) => item && (item.id || item.job_id));
-      if (job) firstJobId = String(job.id || job.job_id);
-    }
-    if (!firstJobId && path === "/api/jobs" && res.json && Array.isArray(res.json.jobs)) {
-      const job = res.json.jobs.find((item) => item && (item.id || item.job_id));
-      if (job) firstJobId = String(job.id || job.job_id);
+    if (path === "/api/jobs" && !browseJobId) browseJobId = firstId(res.json);
+    if ((path === "/api/driver/jobs" || path === "/api/contractor/jobs") && !ownedJobId) {
+      ownedJobId = firstId(res.json);
     }
   }
 
-  if (firstJobId) {
+  if (browseJobId) {
+    const res = await request(`/api/jobs/${encodeURIComponent(browseJobId)}`, { token });
+    record(role, "GET", "/api/jobs/:id", res.status, res.status >= 400 ? res.text : "");
+    if (classify(res.status) === "fail") failed = true;
+  } else {
+    record(role, "GET", "/api/jobs/:id", 204, "no job in the browse list to open");
+  }
+
+  // Assignments and messages are only readable for a job this account posted or was assigned.
+  // A 403 on a public browse job is the server refusing someone else's conversation.
+  if (ownedJobId) {
     for (const path of [
-      `/api/jobs/${encodeURIComponent(firstJobId)}`,
-      `/api/jobs/${encodeURIComponent(firstJobId)}/assignments`,
-      `/api/messages/${encodeURIComponent(firstJobId)}`,
+      `/api/jobs/${encodeURIComponent(ownedJobId)}/assignments`,
+      `/api/messages/${encodeURIComponent(ownedJobId)}`,
     ]) {
       const res = await request(path, { token });
-      record(role, "GET", path.replace(firstJobId, ":id"), res.status, res.status >= 400 ? res.text : "");
+      record(role, "GET", path.replace(ownedJobId, ":id"), res.status, res.status >= 400 ? res.text : "");
       if (classify(res.status) === "fail") failed = true;
     }
   } else {
-    record(role, "GET", "/api/jobs/:id", 204, "no job in the list to open");
+    record(role, "GET", "/api/jobs/:id/assignments", 204, "no posted or assigned job to open");
+    record(role, "GET", "/api/messages/:id", 204, "no posted or assigned job to open");
   }
 
   const stamp = Date.now();
