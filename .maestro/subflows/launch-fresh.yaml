@@ -13,3 +13,10 @@ tags:
     permissions:
       location: deny
       notifications: deny
+- repeat:
+    times: 5
+    while:
+      notVisible:
+        id: login-screen
+    commands:
+      - runFlow: dismiss-permissions.yaml
