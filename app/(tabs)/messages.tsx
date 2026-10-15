@@ -247,7 +247,7 @@ export default function MessagesScreen() {
             />
           )}
           keyExtractor={item => item.id}
-          contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
+          contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(100, insets.bottom + 56) }]}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           ListEmptyComponent={
             archivedLoading ? (
@@ -291,7 +291,7 @@ export default function MessagesScreen() {
           />
         )}
         keyExtractor={item => item.id}
-        contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
+        contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(100, insets.bottom + 56) }]}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListFooterComponent={
           archivedConversations.length > 0 ? (

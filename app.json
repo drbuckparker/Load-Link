@@ -30,6 +30,7 @@
       }
     },
     "android": {
+      "edgeToEdgeEnabled": true,
       "versionCode": 18,
       "package": "com.loadlink.app",
       "googleServicesFile": "./google-services.json",
@@ -55,6 +56,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withAndroidPlayConsoleFixes",
       [
         "expo-router",
         {
@@ -78,6 +80,16 @@
             "./assets/sounds/truckhorn.wav",
             "./assets/sounds/cashregister.wav"
           ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "extraProguardRules": "-keep class com.swmansion.reanimated.** { *; }\n-keep class com.swmansion.worklets.** { *; }\n-keep class com.facebook.react.turbomodule.** { *; }\n-keep class com.facebook.react.fabric.** { *; }\n-keep class com.swmansion.gesturehandler.** { *; }\n-keep class com.swmansion.rnscreens.** { *; }\n-keep class com.rnmaps.** { *; }\n-keep public class com.horcrux.svg.** { *; }\n-keep class expo.modules.notifications.** { *; }\n-keep class com.reactnativekeyboardcontroller.** { *; }\n"
+          }
         }
       ]
     ],

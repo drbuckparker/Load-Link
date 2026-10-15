@@ -371,7 +371,7 @@ export default function MyJobsScreen() {
         data={filteredJobs}
         renderItem={renderJob}
         keyExtractor={item => item.assignmentId || item.id}
-        contentContainerStyle={[styles.listContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]}
+        contentContainerStyle={[styles.listContent, { paddingBottom: Platform.OS === 'web' ? 134 : Math.max(100, insets.bottom + 56) }]}
         ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/driver/jobs'] }); await queryClient.invalidateQueries({ queryKey: ['/api/vehicles'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}

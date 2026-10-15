@@ -231,7 +231,7 @@ export default function InvoicesScreen() {
         data={groups}
         renderItem={renderGroup}
         keyExtractor={item => item.partyId}
-        contentContainerStyle={[styles.listContent, { paddingBottom: 100 }]}
+        contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(100, insets.bottom + 56) }]}
         ListHeaderComponent={renderHeader}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith('/api/invoices') }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}
