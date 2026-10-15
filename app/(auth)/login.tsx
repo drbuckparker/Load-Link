@@ -81,6 +81,7 @@ export default function LoginScreen() {
   }
 
   const isAnyLoading = loading;
+  const passwordToggleLabel = showPassword ? 'Hide password' : 'Show password';
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 + insets.top : insets.top }]}>
@@ -177,7 +178,14 @@ export default function LoginScreen() {
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
               />
-              <Pressable onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
+              <Pressable
+                onPress={() => setShowPassword(!showPassword)}
+                style={styles.eyeBtn}
+                accessibilityRole="button"
+                accessibilityLabel={passwordToggleLabel}
+                aria-label={passwordToggleLabel}
+                hitSlop={12}
+              >
                 <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color={Colors.textMuted} />
               </Pressable>
             </View>
