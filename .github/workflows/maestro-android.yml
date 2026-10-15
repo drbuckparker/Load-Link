@@ -145,15 +145,13 @@ jobs:
           emulator-boot-timeout: 600
           ram-size: 4096
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          # This action runs each script line in its own /bin/sh, so a
-          # variable set on one line is empty on the next. Keep one line.
-          script: |
-            set -e; APK=$(find "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release" -name '*.apk' | head -n 1); test -n "$APK"; echo "Installing $APK"; adb install -r "$APK"; mkdir -p "$GITHUB_WORKSPACE/maestro-debug"; "$HOME/.maestro/bin/maestro" test --debug-output "$GITHUB_WORKSPACE/maestro-debug" "$GITHUB_WORKSPACE/.maestro"
+          # Each script line is a new /bin/sh, so the real steps live in one bash file.
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/run-maestro-android.sh"
 
       - name: Upload Maestro screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: maestro-debug
-          path: maestro-debug
+          name: maestro-results
+          path: maestro-results
           if-no-files-found: ignore

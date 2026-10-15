@@ -8,3 +8,13 @@ flows:
   - foreman.yaml
 excludeTags:
   - util
+# Default order is non-deterministic. These flows are independent, so keep
+# going after a failure and always run them in this order.
+executionOrder:
+  continueOnFailure: true
+  flowsOrder:
+    - show-hide-password
+    - driver
+    - contractor
+    - trucking-company
+    - foreman
