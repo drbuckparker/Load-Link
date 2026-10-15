@@ -8,7 +8,13 @@ tags:
     permissions:
       location: deny
       notifications: deny
-- runFlow: dismiss-permissions.yaml
+- repeat:
+    times: 4
+    while:
+      notVisible:
+        id: dashboard-screen
+    commands:
+      - runFlow: dismiss-permissions.yaml
 - runFlow:
     when:
       visible:
