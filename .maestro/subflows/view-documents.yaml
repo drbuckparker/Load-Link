@@ -1,0 +1,25 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Invoices is the document list. Contractor and trucking company see that tab.
+# Driver and foreman do not. Caller passes EXPECT_INVOICES as yes or no.
+- runFlow:
+    when:
+      true: ${EXPECT_INVOICES == 'yes'}
+    commands:
+      - assertVisible:
+          id: tab-invoices
+      - tapOn:
+          id: tab-invoices
+      - extendedWaitUntil:
+          visible:
+            id: invoices-screen
+          timeout: 20000
+      - assertVisible: INVOICES
+- runFlow:
+    when:
+      true: ${EXPECT_INVOICES != 'yes'}
+    commands:
+      - assertNotVisible:
+          id: tab-invoices

@@ -269,7 +269,7 @@ export default function MessagesScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View testID="messages-screen" style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <Text style={styles.headerTitle}>MESSAGES</Text>
       </View>

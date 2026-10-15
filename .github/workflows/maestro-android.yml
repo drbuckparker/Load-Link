@@ -1,0 +1,148 @@
+# Taps through the Android app on every pull request.
+# Builds the APK on this GitHub runner and runs the free Maestro CLI
+# on an Android emulator. It does not call EAS and it does not upload
+# anything to the Play Store.
+
+name: Maestro Android
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: maestro-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MAESTRO_DRIVER_EMAIL: ${{ secrets.MAESTRO_DRIVER_EMAIL }}
+      MAESTRO_DRIVER_PASSWORD: ${{ secrets.MAESTRO_DRIVER_PASSWORD }}
+      MAESTRO_CONTRACTOR_EMAIL: ${{ secrets.MAESTRO_CONTRACTOR_EMAIL }}
+      MAESTRO_CONTRACTOR_PASSWORD: ${{ secrets.MAESTRO_CONTRACTOR_PASSWORD }}
+      MAESTRO_TRUCKING_COMPANY_EMAIL: ${{ secrets.MAESTRO_TRUCKING_COMPANY_EMAIL }}
+      MAESTRO_TRUCKING_COMPANY_PASSWORD: ${{ secrets.MAESTRO_TRUCKING_COMPANY_PASSWORD }}
+      MAESTRO_FOREMAN_EMAIL: ${{ secrets.MAESTRO_FOREMAN_EMAIL }}
+      MAESTRO_FOREMAN_PASSWORD: ${{ secrets.MAESTRO_FOREMAN_PASSWORD }}
+    steps:
+      - name: Check demo account secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in \
+            MAESTRO_DRIVER_EMAIL \
+            MAESTRO_DRIVER_PASSWORD \
+            MAESTRO_CONTRACTOR_EMAIL \
+            MAESTRO_CONTRACTOR_PASSWORD \
+            MAESTRO_TRUCKING_COMPANY_EMAIL \
+            MAESTRO_TRUCKING_COMPANY_PASSWORD \
+            MAESTRO_FOREMAN_EMAIL \
+            MAESTRO_FOREMAN_PASSWORD
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "Add GitHub Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Maestro cannot log in until those secrets exist. The names are listed in TESTING.md."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Turn off over-the-air updates for this test APK
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const app = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+          app.expo.updates = app.expo.updates || {};
+          app.expo.updates.enabled = false;
+          fs.writeFileSync('app.json', JSON.stringify(app, null, 2) + '\n');
+          NODE
+
+      - name: Generate the Android project
+        run: npx expo prebuild --platform android --no-install --non-interactive
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages this app needs
+        run: |
+          set -euo pipefail
+          COMPILE=$(grep -E '^android.compileSdkVersion=' android/gradle.properties | head -1 | cut -d= -f2 | tr -d '[:space:]' || true)
+          BUILD_TOOLS=$(grep -E '^android.buildToolsVersion=' android/gradle.properties | head -1 | cut -d= -f2 | tr -d '[:space:]' || true)
+          NDK=$(grep -RhoE 'ndkVersion[[:space:]]*=[[:space:]]*"[0-9.]+"' android | head -1 | grep -Eo '[0-9.]+' || true)
+          if [ -z "$COMPILE" ]; then COMPILE=36; fi
+          if [ -z "$BUILD_TOOLS" ]; then BUILD_TOOLS=36.0.0; fi
+          echo "compileSdk=$COMPILE buildTools=$BUILD_TOOLS ndk=${NDK:-unset}"
+          timeout 90s yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platforms;android-${COMPILE}" "build-tools;${BUILD_TOOLS}" "platform-tools"
+          if [ -n "$NDK" ]; then
+            sdkmanager --install "ndk;${NDK}"
+          fi
+
+      - name: Build one emulator CPU only
+        run: |
+          set -euo pipefail
+          if grep -q '^org.gradle.jvmargs=' android/gradle.properties; then
+            sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8/' android/gradle.properties
+          else
+            echo 'org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8' >> android/gradle.properties
+          fi
+          echo 'reactNativeArchitectures=x86_64' >> android/gradle.properties
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Run Maestro on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-boot-timeout: 600
+          ram-size: 4096
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
+            echo "Installing $APK"
+            adb install -r "$APK"
+            "$HOME/.maestro/bin/maestro" test .maestro

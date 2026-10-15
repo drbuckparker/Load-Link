@@ -831,6 +831,7 @@ export default function JobsBrowseScreen() {
 
     return (
       <Pressable
+        testID={`job-card-${item.id}`}
         style={({ pressed }) => [
           styles.cardContainer,
           hasPending && { borderColor: Colors.warning, borderWidth: 1, borderStyle: 'dashed' as any, backgroundColor: Colors.warningBg },
@@ -1190,7 +1191,7 @@ export default function JobsBrowseScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: topPadding }]}>
+    <View testID="jobs-browse-screen" style={[styles.container, { paddingTop: topPadding }]}>
       <View style={styles.header}>
         <Pressable onPress={() => {
           if (selectedClient && selectedProjectFilter) {
@@ -1323,6 +1324,7 @@ export default function JobsBrowseScreen() {
                 return (
                   <Pressable
                     key={filter}
+                    testID={`jobs-filter-${filter.toLowerCase().replace(/\s+/g, '-')}`}
                     style={[styles.chip, isActive && styles.chipActive]}
                     onPress={() => setActiveFilter(filter)}
                   >

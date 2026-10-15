@@ -128,6 +128,7 @@ function ClassicTabLayout({ role }: { role: string }) {
         name="index"
         options={{
           title: "Home",
+          tabBarButtonTestID: "tab-home",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="home" size={size} color={color} />
           ),
@@ -137,6 +138,7 @@ function ClassicTabLayout({ role }: { role: string }) {
         name="calendar"
         options={{
           title: "Calendar",
+          tabBarButtonTestID: "tab-calendar",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="calendar" size={size} color={color} />
           ),
@@ -146,6 +148,7 @@ function ClassicTabLayout({ role }: { role: string }) {
         name="messages"
         options={{
           title: "Messages",
+          tabBarButtonTestID: "tab-messages",
           tabBarIcon: ({ color, size }) => (
             <View>
               <Ionicons name="chatbubbles" size={size} color={color} />
@@ -162,6 +165,7 @@ function ClassicTabLayout({ role }: { role: string }) {
         name="my-jobs"
         options={{
           title: "Jobs",
+          tabBarButtonTestID: "tab-jobs",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="briefcase" size={size} color={color} />
           ),
@@ -172,6 +176,7 @@ function ClassicTabLayout({ role }: { role: string }) {
         name="invoices"
         options={{
           title: "Invoices",
+          tabBarButtonTestID: "tab-invoices",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="document-text" size={size} color={color} />
           ),
@@ -182,6 +187,7 @@ function ClassicTabLayout({ role }: { role: string }) {
         name="profile"
         options={{
           title: "Profile",
+          tabBarButtonTestID: "tab-profile",
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="person" size={size} color={color} />
           ),

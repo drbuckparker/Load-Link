@@ -1,0 +1,21 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Already on Settings. Sign out and land back on the login screen.
+- tapOn:
+    id: settings-tab-profile
+- tapOn:
+    id: sign-out-btn
+- extendedWaitUntil:
+    visible: "Are you sure you want to sign out?"
+    timeout: 10000
+- tapOn:
+    text: Sign Out
+    below:
+      text: "Are you sure you want to sign out?"
+- extendedWaitUntil:
+    visible:
+      id: login-screen
+    timeout: 20000
+- assertVisible: "WELCOME BACK"

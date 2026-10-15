@@ -1,0 +1,29 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Already on a job. Open that job's chat and send one message.
+- tapOn:
+    id: job-message-btn
+- extendedWaitUntil:
+    visible:
+      id: message-input
+    timeout: 20000
+- evalScript: ${output.msg = 'Maestro ' + Date.now()}
+- tapOn:
+    id: message-input
+- inputText: ${output.msg}
+- tapOn:
+    id: message-send-btn
+- hideKeyboard
+- assertVisible: ${output.msg}
+- extendedWaitUntil:
+    visible:
+      id: quick-action-home
+    timeout: 15000
+- tapOn:
+    id: quick-action-home
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 20000

@@ -1,0 +1,38 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Already on a job. Pick the first truck that is allowed on this job and accept.
+- scrollUntilVisible:
+    element:
+      id: accept-job-btn
+    direction: DOWN
+    timeout: 50000
+    speed: 80
+    visibilityPercentage: 40
+    centerElement: true
+- tapOn:
+    id: accept-job-btn
+- extendedWaitUntil:
+    visible:
+      id: truck-option-.*
+    timeout: 25000
+- tapOn:
+    id: truck-option-.*
+    index: 0
+- tapOn:
+    id: confirm-accept-btn
+- extendedWaitUntil:
+    visible: "Application Sent|You're Assigned!|WEEKEND WORK INCLUDED"
+    timeout: 30000
+- runFlow:
+    when:
+      visible: WEEKEND WORK INCLUDED
+    commands:
+      - tapOn:
+          id: weekend-confirm-yes
+      - extendedWaitUntil:
+          visible: "Application Sent|You're Assigned!"
+          timeout: 30000
+- tapOn:
+    id: accept-banner-dismiss
