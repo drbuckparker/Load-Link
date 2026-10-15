@@ -4,9 +4,19 @@
 The LoadLink Mobile App is the **companion** to the main LoadLink website (`loadlink.replit.app` / `loadlinklive.com`). It extends the website's functionality to iOS/Android for all user roles in the short-haul trucking and construction industries: truck drivers, contractors, trucking companies, and foremen. The companion shares the website's PostgreSQL database directly (since July 2026: the website project's Replit-managed database, set via `NEON_DATABASE_URL` — the runtime-managed `DATABASE_URL` points at the legacy, retired Neon DB); an Express backend reads/writes that DB and proxies authentication to the website API.
 
 ## Demo Account
-A self-contained demo login for showing the app to prospects: **demo@loadlink.com / demo1234**. The account carries the compound role `driver_trucking_company_contractor`, so the same login can switch between driver / contractor / trucking_company views (via the profile role switcher) and see fully-populated data in each (jobs, schedules, invoices/earnings, fleet, projects, messages, reviews, notifications).
-- Re-runnable seed: `npx tsx scripts/seed-demo.ts` — idempotent (all ids prefixed `demo-`), transactional/fail-fast, dates relative to "today" so the demo stays current, asserts row counts after committing. Re-run after a DB reset/checkpoint rollback.
-- Role switching for this account is session-scoped and does NOT overwrite `users.role` (see role-switch note below), so the compound entitlement survives re-login.
+Demo logins for showing the app to prospects and for website end-to-end tests. The shared password lives in the `DEMO_PASSWORD` secret (it is not stored in the repo). Every demo login uses `login_provider = email_password` and a bcrypt hash, so website password login and the companion both accept it.
+
+| Email | Role |
+|---|---|
+| demo@loadlink.com | `driver_trucking_company_contractor` |
+| demo-driver@loadlink.com | `driver` |
+| demo-contractor@loadlink.com | `contractor` |
+| demo-trucking-company@loadlink.com | `trucking_company` |
+| demo-foreman@loadlink.com | `foreman` |
+
+`demo@loadlink.com` can switch between driver / contractor / trucking_company views (via the profile role switcher) and see fully-populated data in each (jobs, schedules, invoices/earnings, fleet, projects, messages, reviews, notifications). The other four accounts are single-role. The foreman is activated and affiliated with `demo-contractor@loadlink.com`.
+- Re-runnable seed: set the `DEMO_PASSWORD` secret, then `npx tsx scripts/seed-demo.ts`. Idempotent (deletes and recreates only ids prefixed `demo-`, in one transaction), fail-fast, dates relative to "today" so the demo stays current, asserts row counts after committing. Re-run after a DB reset/checkpoint rollback.
+- Role switching for `demo@loadlink.com` is session-scoped and does NOT overwrite `users.role` (see role-switch note below), so the compound entitlement survives re-login.
 
 ## User Preferences
 I want to prioritize a clean, maintainable, and well-structured codebase. I prefer clear and concise explanations for any proposed changes, focusing on the "why" as much as the "what." For development, I prefer an iterative approach, with small, testable changes. Please ask for confirmation before implementing major architectural changes or refactoring large portions of the codebase. When making changes, ensure that all existing features continue to function as expected, especially role-based access and UI elements.
@@ -48,7 +58,7 @@ I want to prioritize a clean, maintainable, and well-structured codebase. I pref
 - **Role switching & entitlement**: `PUT /api/profile/role` permits (a) the account's own entitlement views from `allowedRolesForUser(originalRole)` and (b) — for a self-serve company account — any of the three self-serve company roles (`trucking_company`, `contractor`, `trucking_company_contractor`), so a user who picked the wrong role at sign-up can correct it. `driver`/`foreman` are **never** valid switch targets (invite-only, linked to a parent). Persistence rule: a **genuine account-type change** (self-serve company role change) **is persisted** to `users.role` and updates in-session `originalRole`; a **compound account's view-switch** (target is one of its own component roles) is **session-only, never persisted** — persisting a single component would collapse a compound entitlement (e.g. `driver_trucking_company_contractor`) and trap the account. Dev-local sessions are never persisted. The frontend `selectableRoleKeys(user)` (in `profile.tsx`) mirrors this permission set so only valid role cards are shown. `GET /api/profile` and `GET /api/auth/me` return the in-memory session user, so switches stick.
 - **Response format**: JSON responses include both camelCase and snake_case keys via `addDualKeys()` (skips Date objects and arrays of primitives to prevent corruption).
 - **Database enums**: `job_status` (open, accepted, pending, in_progress, completed, cancelled), `invoice_status` (open, issued, payment_sent, payment_received, void), `job_assignment_status` (pending, approved, rejected, withdrawn). Use valid enum values in SQL — e.g. `status::text IN ('open','issued')` for unpaid invoices, `status::text = 'payment_received'` for paid (NOT 'paid'/'pending').
-- **Environment variables**: `WEBSITE_API_KEY` (website API auth), `WEBSITE_API_URL` (default `https://loadlinklive.com`), `GOOGLE_MAPS_API_KEY` (Maps/Places).
+- **Environment variables**: `WEBSITE_API_KEY` (website API auth), `WEBSITE_API_URL` (default `https://loadlinklive.com`), `GOOGLE_MAPS_API_KEY` (Maps/Places), `DEMO_PASSWORD` (shared demo-login password; required by `scripts/seed-demo.ts`, never committed).
 - **Google Maps note**: The Geocoding API is not enabled; `/api/places/geocode` uses Google's "Find Place from Text" API instead.
 
 ### Core Features
