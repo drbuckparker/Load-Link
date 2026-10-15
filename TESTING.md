@@ -103,3 +103,5 @@ You need Android Studio (so you have an emulator) and Maestro.
    ```
 
 The Android package these flows look for is `com.loadlink.app`.
+
+E2E run 2026-10-15
