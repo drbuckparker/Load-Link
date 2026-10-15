@@ -1,0 +1,10 @@
+# These are the flows Maestro runs. Helpers live in subflows/ and are tagged
+# "util" so they are not started on their own.
+flows:
+  - show-hide-password.yaml
+  - driver.yaml
+  - contractor.yaml
+  - trucking-company.yaml
+  - foreman.yaml
+excludeTags:
+  - util

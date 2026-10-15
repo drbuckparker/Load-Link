@@ -57,6 +57,7 @@ export default function JobCard({ job, onPress, showStatus = false, isOwnPosting
 
   return (
     <Pressable
+      testID={`job-card-${job.id}`}
       style={({ pressed }) => [styles.container, pressed && styles.pressed]}
       onPress={handlePress}
     >

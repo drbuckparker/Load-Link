@@ -1646,7 +1646,7 @@ export default function JobDetailScreen() {
   const billedMinutes = getBilledMinutes(actualMinutes);
 
   return (
-    <View style={styles.container}>
+    <View testID="job-detail-screen" style={styles.container}>
       <View style={[styles.topBar, { paddingTop: Platform.OS === 'web' ? 67 : insets.top }]}>
         <Pressable onPress={() => {
           if (router.canGoBack()) {
@@ -1658,7 +1658,7 @@ export default function JobDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={Colors.text} />
         </Pressable>
         <Text style={styles.topBarTitle}>JOB DETAILS</Text>
-        <Pressable style={styles.msgBtn} onPress={() => router.push({ pathname: '/chat/[jobId]', params: { jobId: job.id } })}>
+        <Pressable testID="job-message-btn" style={styles.msgBtn} onPress={() => router.push({ pathname: '/chat/[jobId]', params: { jobId: job.id } })}>
           <Ionicons name="chatbubble-outline" size={20} color={Colors.text} />
         </Pressable>
       </View>
@@ -3284,6 +3284,7 @@ export default function JobDetailScreen() {
               </Pressable>
             )}
             <Pressable
+              testID="accept-job-btn"
               style={({ pressed }) => [styles.acceptBtn, { flex: 1 }, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
               onPress={handleAccept}
             >
@@ -3840,6 +3841,7 @@ export default function JobDetailScreen() {
                   return (
                     <Pressable
                       key={vId}
+                      testID={isBlocked ? `truck-option-unavailable-${vId}` : `truck-option-${vId}`}
                       style={[
                         styles.truckOption,
                         isSelected && styles.truckOptionSelected,
@@ -3945,6 +3947,7 @@ export default function JobDetailScreen() {
             
             {vehiclesData && vehiclesData.length > 0 && (
               <Pressable
+                testID="confirm-accept-btn"
                 style={({ pressed }) => [
                   styles.confirmAcceptBtn,
                   selectedVehicleIds.length === 0 && { opacity: 0.5 },
@@ -4117,6 +4120,7 @@ export default function JobDetailScreen() {
               </View>
             )}
             <Pressable
+              testID="accept-banner-dismiss"
               style={({ pressed }) => [
                 styles.acceptBannerDismiss,
                 { backgroundColor: acceptBannerData?.isFavorite ? Colors.success : Colors.primary },

@@ -200,6 +200,7 @@ export default function ChatScreen() {
       <View style={[styles.inputBar, { paddingBottom: Platform.OS === 'web' ? 34 : Math.max(insets.bottom, 8) }]}>
         <View style={styles.inputWrapper}>
           <TextInput
+            testID="message-input"
             style={styles.textInput}
             placeholder="Type a message..."
             placeholderTextColor={Colors.textMuted}
@@ -209,6 +210,7 @@ export default function ChatScreen() {
             maxLength={500}
           />
           <Pressable
+            testID="message-send-btn"
             style={[styles.sendBtn, !messageText.trim() && styles.sendBtnDisabled]}
             onPress={handleSend}
             disabled={!messageText.trim()}

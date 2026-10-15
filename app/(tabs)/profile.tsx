@@ -311,7 +311,7 @@ export default function ProfileScreen() {
             <Ionicons name="pencil" size={14} color={Colors.textMuted} />
           </Pressable>
           <View style={styles.roleBadge}>
-            <Text style={styles.roleBadgeText}>{formatRoleLabel(user.role)}</Text>
+            <Text testID="profile-role-badge" style={styles.roleBadgeText}>{formatRoleLabel(user.role)}</Text>
           </View>
 
           <View style={styles.statsRow}>
@@ -522,7 +522,7 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        <Pressable style={styles.logoutBtn} onPress={handleLogout}>
+        <Pressable testID="sign-out-btn" style={styles.logoutBtn} onPress={handleLogout}>
           <Ionicons name="log-out-outline" size={20} color={Colors.destructive} />
           <Text style={styles.logoutText}>Sign Out</Text>
         </Pressable>
@@ -806,7 +806,7 @@ export default function ProfileScreen() {
   function renderBillingTab() {
     return (
       <>
-        <View style={styles.comingSoonCard}>
+        <View testID="billing-panel" style={styles.comingSoonCard}>
           <View style={styles.comingSoonIcon}>
             <Ionicons name="card-outline" size={40} color={Colors.textMuted} />
           </View>
@@ -841,7 +841,7 @@ export default function ProfileScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View testID="settings-screen" style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <Text style={styles.headerTitle}>SETTINGS</Text>
         <Text style={styles.headerSubtitle}>Manage your account and preferences</Text>
@@ -852,6 +852,7 @@ export default function ProfileScreen() {
           {TABS.map(tab => (
             <Pressable
               key={tab.key}
+              testID={`settings-tab-${tab.key}`}
               style={[styles.tabItem, activeTab === tab.key && styles.tabItemActive]}
               onPress={() => {
                 if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

@@ -1,0 +1,34 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Caller passes MAESTRO_EMAIL and MAESTRO_PASSWORD. Nothing here is a real password.
+- extendedWaitUntil:
+    visible:
+      id: login-screen
+    timeout: 60000
+- tapOn:
+    id: login-email-input
+- inputText: "${MAESTRO_EMAIL}"
+- tapOn:
+    id: login-password-input
+- inputText: "${MAESTRO_PASSWORD}"
+- hideKeyboard
+- tapOn:
+    id: sign-in-btn
+- tapOn:
+    text: Don't allow
+    optional: true
+- tapOn:
+    text: While using the app
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 60000
+- tapOn:
+    text: Don't allow
+    optional: true
+- tapOn:
+    text: While using the app
+    optional: true

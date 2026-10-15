@@ -222,7 +222,7 @@ export default function InvoicesScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View testID="invoices-screen" style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <Text style={styles.headerTitle}>INVOICES</Text>
       </View>

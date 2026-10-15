@@ -84,7 +84,7 @@ export default function LoginScreen() {
   const passwordToggleLabel = showPassword ? 'Hide password' : 'Show password';
 
   return (
-    <View style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 + insets.top : insets.top }]}>
+    <View testID="login-screen" style={[styles.container, { paddingTop: Platform.OS === 'web' ? 67 + insets.top : insets.top }]}>
       <LinearGradient
         colors={['rgba(255, 153, 0, 0.08)', 'transparent']}
         style={styles.gradientBg}
@@ -144,6 +144,7 @@ export default function LoginScreen() {
             <View style={styles.inputWrapper}>
               <Ionicons name="mail-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
               <TextInput
+                testID="login-email-input"
                 style={styles.input}
                 placeholder="you@example.com"
                 placeholderTextColor={Colors.textMuted}
@@ -171,6 +172,7 @@ export default function LoginScreen() {
             <View style={styles.inputWrapper}>
               <Ionicons name="lock-closed-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
               <TextInput
+                testID="login-password-input"
                 style={styles.input}
                 placeholder={needsPassword ? 'Create a password (min 6 chars)' : 'Enter your password'}
                 placeholderTextColor={Colors.textMuted}
@@ -179,6 +181,7 @@ export default function LoginScreen() {
                 secureTextEntry={!showPassword}
               />
               <Pressable
+                testID={showPassword ? 'login-password-visible' : 'login-password-hidden'}
                 onPress={() => setShowPassword(!showPassword)}
                 style={styles.eyeBtn}
                 accessibilityRole="button"

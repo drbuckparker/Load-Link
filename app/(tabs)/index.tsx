@@ -349,7 +349,7 @@ export default function DashboardScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View testID="dashboard-screen" style={styles.container}>
       <View style={[styles.header, { paddingTop: Platform.OS === 'web' ? 67 : insets.top + 8 }]}>
         <View style={styles.headerLeft}>
           <Image
@@ -364,12 +364,13 @@ export default function DashboardScreen() {
         </View>
         <View style={styles.headerRight}>
           <Pressable
+            testID="find-loads-btn"
             style={styles.findLoadsBtn}
             onPress={() => router.push('/jobs-browse' as any)}
           >
             <Text style={styles.findLoadsBtnText}>{role === 'trucking_company' ? 'FIND JOBS' : contractor ? 'MY JOBS' : 'FIND LOADS'}</Text>
           </Pressable>
-          <Pressable style={styles.notifBtn} onPress={() => router.push('/notifications')}>
+          <Pressable testID="notifications-btn" style={styles.notifBtn} onPress={() => router.push('/notifications')}>
             <Ionicons name="notifications-outline" size={22} color={Colors.text} />
             {unreadCount > 0 && (
               <View style={styles.notifBadge}>
