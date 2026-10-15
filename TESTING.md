@@ -107,3 +107,5 @@ The Android package these flows look for is `com.loadlink.app`.
 E2E run 2026-10-15
 
 Rerun after the demo accounts were re-seeded with DEMO_PASSWORD.
+
+Rerun after the demo accounts were seeded into the shared database.
