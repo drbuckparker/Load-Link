@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Dimensions, Linking, Image, RefreshControl, Switch } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Platform, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Linking, Image, RefreshControl, Switch, useWindowDimensions } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -249,6 +249,7 @@ function mapJob(j: any): Job {
 export default function JobDetailScreen() {
   const { id, date: calendarDate, action } = useLocalSearchParams<{ id: string; date?: string; action?: string }>();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const { user } = useAuth();
 
   const isContractor = isContractorRole(user?.role || '');
@@ -2898,11 +2899,11 @@ export default function JobDetailScreen() {
 
         <Modal visible={!!previewUri} transparent animationType="fade" onRequestClose={() => { setPreviewUri(null); setPreviewBase64(null); }}>
           <View style={styles.wtModalOverlay}>
-            <View style={styles.previewModalContent}>
+            <View style={[styles.previewModalContent, { width: Math.min(windowWidth - 48, 480), maxHeight: windowHeight * 0.8 }]}>
               <Text style={styles.wtModalTitle}>Review Photo</Text>
               <Text style={styles.wtModalSubtitle}>Is this photo clear and readable?</Text>
               {previewUri && (
-                <Image source={{ uri: previewUri }} style={styles.previewImage} resizeMode="contain" />
+                <Image source={{ uri: previewUri }} style={[styles.previewImage, { height: Math.min(300, Math.max(120, windowHeight * 0.4)) }]} resizeMode="contain" />
               )}
               {uploadingTicket ? (
                 <View style={{ alignItems: 'center', paddingVertical: 16 }}>
@@ -2930,7 +2931,7 @@ export default function JobDetailScreen() {
             {viewTicketUri && (
               <Image source={{ uri: viewTicketUri }} style={styles.ticketViewerImage} resizeMode="contain" />
             )}
-            <Pressable style={styles.ticketViewerClose} onPress={() => setViewTicketUri(null)}>
+            <Pressable style={[styles.ticketViewerClose, { top: Platform.OS === 'web' ? 60 : insets.top + 12 }]} onPress={() => setViewTicketUri(null)}>
               <Ionicons name="close" size={28} color="#fff" />
             </Pressable>
           </Pressable>
@@ -5873,8 +5874,6 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 20,
     marginHorizontal: 24,
-    width: Dimensions.get('window').width - 48,
-    maxHeight: Dimensions.get('window').height * 0.8,
     alignItems: 'center' as const,
   },
   previewImage: {

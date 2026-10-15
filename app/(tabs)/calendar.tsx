@@ -704,7 +704,7 @@ export default function CalendarScreen() {
         <Text style={styles.headerTitle}>{isContractor ? 'MY POSTED JOBS' : 'FLEET MANAGER'}</Text>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : 100 }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/availability'] }); await queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] }); await queryClient.invalidateQueries({ queryKey: ['/api/contractor/calendar-capacity'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Platform.OS === 'web' ? 134 : Math.max(100, insets.bottom + 56) }]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await queryClient.invalidateQueries({ queryKey: ['/api/availability'] }); await queryClient.invalidateQueries({ queryKey: ['/api/calendar/jobs'] }); await queryClient.invalidateQueries({ queryKey: ['/api/contractor/calendar-capacity'] }); setRefreshing(false); }} tintColor={Colors.primary} colors={[Colors.primary]} />}>
         <View style={styles.monthNav}>
           <Pressable onPress={() => navigateMonth(-1)} style={styles.navBtn}>
             <Ionicons name="chevron-back" size={20} color={Colors.text} />
@@ -1276,7 +1276,7 @@ export default function CalendarScreen() {
         onRequestClose={() => setShowTruckPicker(null)}
       >
         <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.85)' }}>
-          <View style={{ backgroundColor: '#0a0a0f', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 34 }}>
+          <View style={{ backgroundColor: '#0a0a0f', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: Platform.OS === 'android' ? insets.bottom + 16 : 34 }}>
             <Text style={{ fontFamily: 'Inter_700Bold', fontSize: 18, color: Colors.text, marginBottom: 4 }}>
               {showTruckPicker === 'available' ? 'Mark Trucks Available' : 'Mark Trucks Unavailable'}
             </Text>
