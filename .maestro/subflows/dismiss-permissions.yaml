@@ -6,11 +6,10 @@ tags:
 # (U+2019). A straight-apostrophe match never taps it, and the dialog then
 # covers the dashboard. The permission-controller id is stable.
 # The emulator also puts "Pixel Launcher isn't responding" over the app.
-- runFlow:
-    when:
-      visible: "isn't responding"
-    commands:
-      - tapOn: "Close app"
+# Match the button text exactly. A partial title does not match the alert.
+- tapOn:
+    text: "Close app"
+    optional: true
 - tapOn:
     id: "com.android.permissioncontroller:id/permission_deny_button"
     optional: true
