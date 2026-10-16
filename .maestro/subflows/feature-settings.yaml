@@ -62,6 +62,17 @@ tags:
       id: billing-panel
     timeout: 15000
 - assertVisible: "BILLING & SUBSCRIPTIONS"
+- repeat:
+    times: 3
+    while:
+      notVisible:
+        id: settings-tab-profile
+    commands:
+      - swipe:
+          from:
+            id: settings-tab-account
+          direction: RIGHT
+          duration: 500
 - tapOn:
     id: settings-tab-profile
 - tapOn:
