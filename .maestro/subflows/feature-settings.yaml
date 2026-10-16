@@ -75,6 +75,14 @@ tags:
           duration: 500
 - tapOn:
     id: settings-tab-profile
+- scrollUntilVisible:
+    element:
+      id: sign-out-btn
+    direction: DOWN
+    timeout: 20000
+    speed: 55
+    visibilityPercentage: 60
+    centerElement: true
 - tapOn:
     id: sign-out-btn
 - extendedWaitUntil:
