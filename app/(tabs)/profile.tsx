@@ -612,8 +612,8 @@ export default function ProfileScreen() {
 
   function renderHelpTab() {
     return (
-      <>
-        <Pressable style={styles.helpCard} onPress={() => Linking.openURL('mailto:support@loadlinklive.com')}>
+      <View testID="help-panel">
+        <Pressable style={styles.helpCard} onPress={() => Linking.openURL('mailto:support@loadlinklive.com')} testID="help-contact">
           <View style={[styles.helpIconBox, { backgroundColor: Colors.primaryLight }]}>
             <Ionicons name="chatbubble-outline" size={22} color={Colors.primary} />
           </View>
@@ -624,7 +624,7 @@ export default function ProfileScreen() {
           <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
         </Pressable>
 
-        <Pressable style={styles.helpCard} onPress={() => Linking.openURL('https://loadlinklive.com')}>
+        <Pressable style={styles.helpCard} onPress={() => Linking.openURL('https://loadlinklive.com')} testID="help-tutorials">
           <View style={[styles.helpIconBox, { backgroundColor: Colors.warningBg }]}>
             <Ionicons name="bulb-outline" size={22} color={Colors.warning} />
           </View>
@@ -649,13 +649,13 @@ export default function ProfileScreen() {
         <View style={styles.appVersion}>
           <Text style={styles.appVersionText}>LoadLink Mobile v1.0.0</Text>
         </View>
-      </>
+      </View>
     );
   }
 
   function renderAccountTab() {
     return (
-      <>
+      <View testID="account-panel">
         <View style={styles.accountCard}>
           <View style={styles.accountCardIcon}>
             <Ionicons name="lock-closed-outline" size={20} color={Colors.textMuted} />
@@ -684,7 +684,7 @@ export default function ProfileScreen() {
             <Text style={styles.deleteBtnText}>Delete My Account</Text>
           </Pressable>
         </View>
-      </>
+      </View>
     );
   }
 
@@ -701,7 +701,7 @@ export default function ProfileScreen() {
     const totalHours = items.reduce((sum: number, e: any) => sum + (Number(e.billed_hours ?? e.billedHours) || 0), 0);
 
     return (
-      <>
+      <View testID="earnings-panel">
         <View style={styles.earningsStatsCard}>
           <View style={{ alignItems: 'center', marginBottom: 16 }}>
             <Text style={styles.earningsLabel}>TOTAL EARNINGS</Text>
@@ -799,7 +799,7 @@ export default function ProfileScreen() {
             })}
           </View>
         )}
-      </>
+      </View>
     );
   }
 

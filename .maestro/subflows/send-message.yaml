@@ -15,7 +15,6 @@ tags:
 - inputText: ${output.msg}
 - tapOn:
     id: message-send-btn
-- hideKeyboard
 - assertVisible: ${output.msg}
 - extendedWaitUntil:
     visible:

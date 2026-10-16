@@ -1,11 +1,7 @@
 appId: com.loadlink.app
 name: driver
 ---
-- launchApp:
-    clearState: true
-    permissions:
-      location: deny
-      notifications: deny
+- runFlow: subflows/launch-fresh.yaml
 - runFlow:
     file: subflows/login.yaml
     env:
@@ -14,17 +10,4 @@ name: driver
 - runFlow:
     file: subflows/assert-role.yaml
     env:
-      ROLE_LABEL: DRIVER
-- runFlow: subflows/open-messages.yaml
-- runFlow:
-    file: subflows/open-first-job.yaml
-    env:
-      LOADS_LABEL: FIND LOADS
-- runFlow: subflows/accept-open-job.yaml
-- runFlow: subflows/send-message.yaml
-- runFlow:
-    file: subflows/view-documents.yaml
-    env:
-      EXPECT_INVOICES: "no"
-- runFlow: subflows/view-activity-billing.yaml
-- runFlow: subflows/logout.yaml
+      ROLE_LABEL: "DRIVER"

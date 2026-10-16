@@ -1,0 +1,12 @@
+appId: com.loadlink.app
+name: trucking-company-money
+---
+- runFlow:
+    file: subflows/ensure-session.yaml
+    env:
+      MAESTRO_EMAIL: ${MAESTRO_TRUCKING_COMPANY_EMAIL}
+      MAESTRO_PASSWORD: ${MAESTRO_TRUCKING_COMPANY_PASSWORD}
+- runFlow:
+    file: subflows/feature-money.yaml
+    env:
+      EXPECT_INVOICES: "yes"

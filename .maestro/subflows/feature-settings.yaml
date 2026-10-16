@@ -1,0 +1,99 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Profile, role, help, tutorials, account, and billing.
+# Do not open mail or the website, and do not delete the account.
+# There is no separate privacy-consent screen; Account is where consent would live.
+- tapOn:
+    id: tab-profile
+- extendedWaitUntil:
+    visible:
+      id: settings-screen
+    timeout: 20000
+- tapOn:
+    id: settings-tab-profile
+- extendedWaitUntil:
+    visible:
+      id: profile-role-badge
+    timeout: 20000
+- tapOn:
+    id: settings-tab-role
+- assertVisible: "SWITCH ROLE"
+- tapOn:
+    id: settings-tab-help
+- extendedWaitUntil:
+    visible:
+      id: help-panel
+    timeout: 15000
+- assertVisible:
+    id: help-tutorials
+- assertVisible: TUTORIALS
+- assertVisible: "CONTACT LOADLINK"
+- tapOn:
+    id: settings-tab-account
+- extendedWaitUntil:
+    visible:
+      id: account-panel
+    timeout: 15000
+- assertVisible: "SECURITY SETTINGS"
+- assertVisible:
+    id: delete-account-button
+# Billing is the last tab. It sits past the right edge, and the vertical page
+# scroll does not move that row. Swipe the tab row itself.
+- swipe:
+    from:
+      id: settings-tab-help
+    direction: LEFT
+    duration: 500
+- swipe:
+    from:
+      id: settings-tab-account
+    direction: LEFT
+    duration: 500
+- extendedWaitUntil:
+    visible:
+      id: settings-tab-billing
+    timeout: 10000
+- tapOn:
+    id: settings-tab-billing
+- extendedWaitUntil:
+    visible:
+      id: billing-panel
+    timeout: 15000
+- assertVisible: "BILLING & SUBSCRIPTIONS"
+- repeat:
+    times: 3
+    while:
+      notVisible:
+        id: settings-tab-profile
+    commands:
+      - swipe:
+          from:
+            id: settings-tab-account
+          direction: RIGHT
+          duration: 500
+- tapOn:
+    id: settings-tab-profile
+- scrollUntilVisible:
+    element:
+      id: sign-out-btn
+    direction: DOWN
+    timeout: 20000
+    speed: 55
+    visibilityPercentage: 60
+    centerElement: true
+- tapOn:
+    id: sign-out-btn
+- extendedWaitUntil:
+    visible: "Are you sure you want to sign out?"
+    timeout: 10000
+- tapOn:
+    text: Sign Out
+    below:
+      text: "Are you sure you want to sign out?"
+- extendedWaitUntil:
+    visible:
+      id: login-screen
+    timeout: 20000
+- assertVisible: "WELCOME BACK"

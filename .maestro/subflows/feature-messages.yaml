@@ -1,0 +1,31 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Messages list and the notification bell. Do not send a message or accept an invite.
+- tapOn:
+    id: tab-messages
+- extendedWaitUntil:
+    visible:
+      id: messages-screen
+    timeout: 20000
+- assertVisible: MESSAGES
+- tapOn:
+    id: tab-home
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 20000
+- tapOn:
+    id: notifications-btn
+- extendedWaitUntil:
+    visible:
+      id: notifications-screen
+    timeout: 20000
+- assertVisible: NOTIFICATIONS
+- tapOn:
+    id: notifications-back
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 20000

@@ -1,0 +1,51 @@
+appId: com.loadlink.app
+tags:
+  - util
+---
+# Caller passes EXPECT_INVOICES yes or no.
+# Contractor and trucking company have an Invoices tab. Driver and foreman have Jobs.
+- runFlow:
+    when:
+      true: ${EXPECT_INVOICES == 'yes'}
+    commands:
+      - assertVisible:
+          id: tab-invoices
+      - tapOn:
+          id: tab-invoices
+      - extendedWaitUntil:
+          visible:
+            id: invoices-screen
+          timeout: 20000
+      - assertVisible: INVOICES
+- runFlow:
+    when:
+      true: ${EXPECT_INVOICES != 'yes'}
+    commands:
+      - assertNotVisible:
+          id: tab-invoices
+      - tapOn:
+          id: tab-jobs
+      - extendedWaitUntil:
+          visible:
+            id: my-jobs-screen
+          timeout: 20000
+      - assertVisible: "MY JOBS"
+- tapOn:
+    id: tab-profile
+- extendedWaitUntil:
+    visible:
+      id: settings-screen
+    timeout: 20000
+- tapOn:
+    id: settings-tab-earnings
+- extendedWaitUntil:
+    visible:
+      id: earnings-panel
+    timeout: 20000
+- assertVisible: "TOTAL EARNINGS"
+- tapOn:
+    id: tab-home
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 20000
