@@ -10,4 +10,4 @@ name: trucking-company-home
     file: subflows/feature-home.yaml
     env:
       LOADS_LABEL: "FIND JOBS"
-      CALENDAR_TITLE: "MY POSTED JOBS"
+      CALENDAR_TITLE: "FLEET MANAGER"

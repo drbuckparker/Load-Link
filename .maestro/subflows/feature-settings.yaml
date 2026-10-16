@@ -39,6 +39,14 @@ tags:
 - assertVisible: "SECURITY SETTINGS"
 - assertVisible:
     id: delete-account-button
+# Billing is the last tab and sits off the right edge of the phone until the tab row scrolls.
+- scrollUntilVisible:
+    element:
+      id: settings-tab-billing
+    direction: RIGHT
+    timeout: 15000
+    visibilityPercentage: 80
+    speed: 40
 - tapOn:
     id: settings-tab-billing
 - extendedWaitUntil:
